@@ -18,6 +18,7 @@ from gorm_ai.database.models import (  # noqa: F401
     OutletGroup,
     OutletGroupMember,
     OutletInfo,
+    PredictionEngine,
     Sales,
 )
 

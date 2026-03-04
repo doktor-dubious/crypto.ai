@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from gorm_ai.database.models.configuration import Configuration
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
@@ -80,24 +81,26 @@ class PredictionService:
 
         # 2. Customer-level default
         result = await self.session.execute(
-            select(CustomerConfiguration).where(
+            select(CustomerConfiguration)
+            .where(
                 CustomerConfiguration.customer_id == customer_id,
                 CustomerConfiguration.active.is_(True),
             )
+            .options(selectinload(CustomerConfiguration.prediction_engine))
         )
         customer_config = result.scalar_one_or_none()
-        if customer_config and customer_config.default_prediction_engine:
-            return PredictionEngine(customer_config.default_prediction_engine)
+        if customer_config and customer_config.prediction_engine:
+            return PredictionEngine(customer_config.prediction_engine.slug)
 
         # 3. Global application default
         result = await self.session.execute(
-            select(Configuration).where(
-                Configuration.id == _CONFIGURATION_SINGLETON_ID
-            )
+            select(Configuration)
+            .where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
+            .options(selectinload(Configuration.prediction_engine))
         )
         global_config = result.scalar_one_or_none()
-        if global_config and global_config.default_prediction_engine:
-            return PredictionEngine(global_config.default_prediction_engine)
+        if global_config and global_config.prediction_engine:
+            return PredictionEngine(global_config.prediction_engine.slug)
 
         # 4. Hardcoded fallback
         return PredictionEngine.STATISTICAL

@@ -10,6 +10,7 @@ from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_delivery import OutletDelivery
 from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
 from gorm_ai.database.models.outlet_info import OutletInfo
+from gorm_ai.database.models.prediction_engine import PredictionEngine
 
 __all__ = [
     "Configuration",
@@ -21,5 +22,6 @@ __all__ = [
     "OutletGroup",
     "OutletGroupMember",
     "OutletInfo",
+    "PredictionEngine",
     "Sales",
 ]

@@ -10,7 +10,9 @@ class ConfigurationUpdate(BaseModel):
 
     peak_period: bool | None = None
     minimum_delivery: int | None = None
-    default_prediction_engine: str | None = None
+    cost_per_unit: float | None = None
+    profit_per_unit: float | None = None
+    prediction_engine_id: str | None = None
 
 
 class ConfigurationResponse(BaseModel):
@@ -24,4 +26,6 @@ class ConfigurationResponse(BaseModel):
     updated_at: datetime
     peak_period: bool
     minimum_delivery: int
-    default_prediction_engine: str | None = None
+    cost_per_unit: float | None = None
+    profit_per_unit: float | None = None
+    prediction_engine_id: str | None = None

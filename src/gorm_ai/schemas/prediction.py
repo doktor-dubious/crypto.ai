@@ -28,6 +28,7 @@ class PredictionRequest(BaseModel):
 
     customer_id: str
     outlet_id: str | None = None
+    outlet_group_id: str | None = None
     prediction_from: date
     prediction_to: date
     engine: PredictionEngine | None = None  # falls back to customer/global config then STATISTICAL

@@ -1,57 +1,36 @@
 """Sales model."""
 
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, PrimaryKeyConstraint
+from sqlalchemy import Date, ForeignKey, Integer, text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-def utcnow() -> datetime:
-    """Return current UTC datetime."""
-    return datetime.now(UTC)
-
+from gorm_ai.database.base import Base
 
 if TYPE_CHECKING:
     from gorm_ai.database.models.customer import Customer
     from gorm_ai.database.models.outlet import Outlet
 
 
-class SalesBase(DeclarativeBase):
-    """Separate base for Sales to support composite primary key."""
-
-    pass
-
-
-class Sales(SalesBase):
+class Sales(Base):
     """Sales data - configured as TimescaleDB hypertable.
 
     Uses composite primary key (id, date) as required by TimescaleDB.
     """
 
     __tablename__ = "sales"
-    __table_args__ = (PrimaryKeyConstraint("id", "date"),)
 
-    # Composite primary key columns
+    # Override base id — composite PK with date required by TimescaleDB
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
         default=lambda: str(uuid4()),
     )
-    date: Mapped[date] = mapped_column(Date, index=True)
-
-    # Common columns (duplicated from Base since we use different base)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utcnow,
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utcnow,
-        onupdate=utcnow,
-    )
+    date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
 
     # Foreign keys
     customer_id: Mapped[str] = mapped_column(
