@@ -1,0 +1,39 @@
+"""Configuration management using pydantic-settings."""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # Application
+    app_name: str = "Gorm AI"
+    debug: bool = False
+
+    # Database
+    database_url: str = "postgresql+asyncpg://gorm:gorm@localhost:5433/gorm_ai"
+    database_echo: bool = False
+
+    # Redis
+    redis_url: str = "redis://localhost:6380/0"
+
+    # Celery
+    celery_broker_url: str = "redis://localhost:6380/1"
+    celery_result_backend: str = "redis://localhost:6380/2"
+
+    # API
+    api_v1_prefix: str = "/api/v1"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
