@@ -9,8 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from gorm_ai.api.routes import api_router
 from gorm_ai.config import get_settings
 from gorm_ai.database.connection import engine
+from gorm_ai.logging import configure_logging
 
 settings = get_settings()
+configure_logging()
 
 
 @asynccontextmanager

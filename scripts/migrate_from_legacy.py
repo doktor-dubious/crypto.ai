@@ -56,13 +56,15 @@ class LegacyMigrator:
         self.dry_run = dry_run
 
         # Validate table parameter
-        valid_tables = ["all", "customers", "outlets", "sales"]
+        valid_tables = ["all", "customers", "outlets", "sales", "financials", "financial_dates", "pads", "groups", "sales_filters"]
         if self.table not in valid_tables:
             raise ValueError(f"Invalid table '{self.table}'. Must be one of: {', '.join(valid_tables)}")
 
         # ID mappings: legacy_id -> new_uuid
         self.customer_uuid: str | None = None
         self.outlet_mapping: dict[int, str] = {}  # outlet_id -> uuid
+        self.outlet_group_mapping: dict[int, str] = {}  # outlet_group_id -> uuid
+        self.financial_date_mapping: dict[int, str] = {}  # tarif_outlet_date_header_id -> uuid  # outlet_group_id -> uuid
 
         # Statistics
         self.stats = {
@@ -70,7 +72,15 @@ class LegacyMigrator:
             "outlets": 0,
             "outlet_info": 0,
             "outlet_deliveries": 0,
+            "outlet_financials": 0,
+            "outlet_groups": 0,
+            "outlet_group_members": 0,
+            "pads": 0,
+            "pad_dates": 0,
             "sales": 0,
+            "sales_filters": 0,
+            "financial_dates": 0,
+            "outlet_financial_dates": 0,
         }
 
     def generate_uuid(self) -> str:
@@ -102,7 +112,10 @@ class LegacyMigrator:
                     # Migrate everything in order
                     await self.migrate_publication(mysql_conn, pg_conn)
                     await self.migrate_outlets(mysql_conn, pg_conn)
+                    await self.migrate_outlet_groups(mysql_conn, pg_conn)
                     await self.migrate_sales(mysql_conn, pg_conn)
+                    await self.migrate_sales_filters(mysql_conn, pg_conn)
+                    await self.migrate_financial_dates(mysql_conn, pg_conn)
 
                 elif self.table == "customers":
                     # Only migrate publication -> customer
@@ -113,11 +126,39 @@ class LegacyMigrator:
                     await self.load_customer_uuid(pg_conn)
                     await self.migrate_outlets(mysql_conn, pg_conn)
 
+                elif self.table == "financials":
+                    # Migrate outlet_financials only (requires outlets to exist)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.load_outlet_mappings(pg_conn)
+                    await self.migrate_financials(mysql_conn, pg_conn)
+
+                elif self.table == "groups":
+                    # Migrate outlet_group + outlet_group_members (requires customer and outlets)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.load_outlet_mappings(pg_conn)
+                    await self.migrate_outlet_groups(mysql_conn, pg_conn)
+
+                elif self.table == "pads":
+                    # Migrate peak_period -> pads + pad_dates (requires customer to exist)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.migrate_pads(mysql_conn, pg_conn)
+
                 elif self.table == "sales":
                     # Migrate sales (requires customer and outlets to exist)
                     await self.load_customer_uuid(pg_conn)
                     await self.load_outlet_mappings(pg_conn)
                     await self.migrate_sales(mysql_conn, pg_conn)
+
+                elif self.table == "sales_filters":
+                    # Migrate sales_filter date ranges (requires customer to exist)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.migrate_sales_filters(mysql_conn, pg_conn)
+
+                elif self.table == "financial_dates":
+                    # Migrate tarif_outlet_date_header + tarif_outlet_date (requires customer and outlets)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.load_outlet_mappings(pg_conn)
+                    await self.migrate_financial_dates(mysql_conn, pg_conn)
 
                 if self.dry_run:
                     logger.info("DRY RUN - Rolling back transaction")
@@ -246,12 +287,12 @@ class LegacyMigrator:
                 (self.publication_id,),
             )
             for outlet in cursor:
-                await self.migrate_single_outlet(outlet, pg_conn)
+                await self.migrate_single_outlet(mysql_conn, outlet, pg_conn)
                 count += 1
 
         logger.info(f"✓ Migrated {count} outlets")
 
-    async def migrate_single_outlet(self, outlet: dict, pg_conn):
+    async def migrate_single_outlet(self, mysql_conn, outlet: dict, pg_conn):
         """Migrate a single outlet with all related data."""
         outlet_uuid = self.generate_uuid()
         legacy_outlet_id = outlet["outlet_id"]
@@ -310,6 +351,9 @@ class LegacyMigrator:
 
         # Insert outlet_deliveries records (draw days)
         await self.migrate_outlet_deliveries(outlet, outlet_uuid, pg_conn)
+
+        # Insert outlet_financials records (cost/profit per weekday)
+        await self.migrate_outlet_financials(mysql_conn, outlet["outlet_id"], outlet_uuid, pg_conn)
 
     async def migrate_outlet_info(self, outlet: dict, outlet_uuid: str, pg_conn):
         """Migrate outlet extra fields to outlet_info table."""
@@ -403,6 +447,406 @@ class LegacyMigrator:
                 datetime.now(),
             )
             self.stats["outlet_deliveries"] += 1
+
+    async def migrate_outlet_financials(
+        self, mysql_conn, legacy_outlet_id: int, outlet_uuid: str, pg_conn
+    ):
+        """Migrate tarif_outlet to outlet_financials table.
+
+        MySQL tarif_outlet.day_of_week uses 0=Monday, 6=Sunday.
+        outlet_financials.weekday uses 1=Monday, 7=Sunday.
+
+        NOTE: Verify MySQL column names match your tarif_outlet schema:
+          - cost_per_unit  (may be named 'cost', 'unit_cost', etc.)
+          - profit_per_unit (may be named 'price', 'unit_price', 'net_price', etc.)
+        """
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM tarif_outlet WHERE outlet_id = %s",
+                (legacy_outlet_id,),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            # Convert day_of_week: MySQL 0-6 → PostgreSQL 1-7
+            weekday = row["day_of_week"] + 1
+
+            await pg_conn.execute(
+                """
+                INSERT INTO outlet_financials (
+                    id, outlet_id, weekday, cost_per_unit, profit_per_unit,
+                    active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                self.generate_uuid(),
+                outlet_uuid,
+                weekday,
+                row.get("cost_per_unit"),
+                row.get("profit_per_unit"),
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["outlet_financials"] += 1
+
+    async def migrate_financials(self, mysql_conn, pg_conn):
+        """Migrate outlet_financials for all outlets (standalone run)."""
+        logger.info("Migrating outlet financials...")
+
+        count = 0
+        for legacy_outlet_id, outlet_uuid in self.outlet_mapping.items():
+            await self.migrate_outlet_financials(
+                mysql_conn, legacy_outlet_id, outlet_uuid, pg_conn
+            )
+            count += 1
+            if count % 500 == 0:
+                logger.info(f"  Processed {count} outlets for financials...")
+
+        logger.info(f"✓ Migrated {self.stats['outlet_financials']} financial records for {count} outlets")
+
+    async def migrate_outlet_groups(self, mysql_conn, pg_conn):
+        """Migrate outlet_group and outlet_group_members tables.
+
+        MySQL outlet_group has publication_id for filtering.
+        MySQL outlet_group_member links outlet_group_id -> outlet_id.
+        Only rows with active=1 are migrated.
+        """
+        logger.info("Migrating outlet_group + outlet_group_members...")
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT outlet_class_id, name, description
+                FROM outlet_class
+                WHERE publication_id = %s AND active = 1
+                ORDER BY outlet_class_id
+                """,
+                (self.publication_id,),
+            )
+            groups = cursor.fetchall()
+
+        for group in groups:
+            legacy_group_id = group["outlet_class_id"]
+            group_uuid = self.generate_uuid()
+            self.outlet_group_mapping[legacy_group_id] = group_uuid
+
+            await pg_conn.execute(
+                """
+                INSERT INTO outlet_group (
+                    id, customer_id, name, description, active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                group_uuid,
+                self.customer_uuid,
+                group["name"],
+                group["description"] or None,
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["outlet_groups"] += 1
+
+        logger.info(f"✓ Migrated {self.stats['outlet_groups']} outlet groups")
+
+        # Migrate members for all migrated groups
+        if not self.outlet_group_mapping:
+            logger.info("No outlet groups to migrate members for")
+            return
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT outlet_class_id, outlet_id
+                FROM outlet_class_member
+                WHERE publication_id = %s AND active = 1
+                ORDER BY outlet_class_id, outlet_id
+                """,
+                (self.publication_id,),
+            )
+            members = cursor.fetchall()
+
+        skipped = 0
+        for member in members:
+            legacy_group_id = member["outlet_class_id"]
+            legacy_outlet_id = member["outlet_id"]
+
+            group_uuid = self.outlet_group_mapping.get(legacy_group_id)
+            outlet_uuid = self.outlet_mapping.get(legacy_outlet_id)
+
+            if not group_uuid:
+                logger.warning(f"Skipping member: unmapped group_id={legacy_group_id}")
+                skipped += 1
+                continue
+            if not outlet_uuid:
+                logger.warning(f"Skipping member: unmapped outlet_id={legacy_outlet_id}")
+                skipped += 1
+                continue
+
+            await pg_conn.execute(
+                """
+                INSERT INTO outlet_group_members (
+                    id, group_id, outlet_id, active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                self.generate_uuid(),
+                group_uuid,
+                outlet_uuid,
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["outlet_group_members"] += 1
+
+        logger.info(
+            f"✓ Migrated {self.stats['outlet_group_members']} outlet group members"
+            + (f" ({skipped} skipped)" if skipped else "")
+        )
+
+    async def migrate_pads(self, mysql_conn, pg_conn):
+        """Migrate peak_period -> pads + pad_dates.
+
+        Each unique peak_period_group_id becomes one pad row.
+        Each individual row (date_start) becomes one pad_date row.
+
+        Fields used:
+          - peak_period_group_id  → grouping key
+          - comment               → pad.name (fallback: "Group <id>" if empty)
+          - allow_negative        → pad.allow_negative (taken from first row of group)
+          - date_start            → pad_date.date
+        All other fields are ignored (boost/boost_pct default to 0).
+        """
+        logger.info("Migrating peak_period -> pads + pad_dates...")
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT peak_period_group_id, date_start, comment, allow_negative
+                FROM peak_period
+                WHERE publication_id = %s AND active = 1
+                ORDER BY peak_period_group_id, date_start
+                """,
+                (self.publication_id,),
+            )
+            rows = cursor.fetchall()
+
+        # Group rows by peak_period_group_id
+        groups: dict[int, list[dict]] = {}
+        for row in rows:
+            gid = row["peak_period_group_id"]
+            groups.setdefault(gid, []).append(row)
+
+        for gid, group_rows in groups.items():
+            first = group_rows[0]
+            name = first["comment"].strip() or f"Group {gid}"
+            allow_negative = bool(first["allow_negative"])
+
+            pad_uuid = self.generate_uuid()
+            await pg_conn.execute(
+                """
+                INSERT INTO pads (
+                    id, customer_id, name, historic_days, allow_negative,
+                    boost, boost_pct, active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                """,
+                pad_uuid,
+                self.customer_uuid,
+                name,
+                0,              # historic_days default
+                allow_negative,
+                0.0,            # boost default
+                0.0,            # boost_pct default
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["pads"] += 1
+
+            for row in group_rows:
+                await pg_conn.execute(
+                    """
+                    INSERT INTO pad_dates (
+                        id, pad_id, date, active, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    self.generate_uuid(),
+                    pad_uuid,
+                    row["date_start"],
+                    True,
+                    datetime.now(),
+                    datetime.now(),
+                )
+                self.stats["pad_dates"] += 1
+
+        logger.info(
+            f"✓ Migrated {self.stats['pads']} pads and "
+            f"{self.stats['pad_dates']} pad_dates from {len(groups)} groups"
+        )
+
+    async def migrate_financial_dates(self, mysql_conn, pg_conn):
+        """Migrate tarif_outlet_date_header + tarif_outlet_date -> financial_dates + outlet_financial_dates.
+
+        tarif_outlet_date_header:
+          tarif_date_start    -> start_date
+          tarif_date_end      -> end_date
+          day_of_week (0-6)   -> weekday (1-7, Monday=1)
+          name                -> name
+          description         -> description
+          method              -> method (default 0 if absent)
+          copy_from_weekday   -> copy_from_weekday (nullable, 0-6 -> 1-7 if present)
+
+        tarif_outlet_date:
+          tarif_outlet_date_header_id -> financial_date_id
+          outlet_id                   -> outlet_id (via outlet_mapping)
+          cost_per_unit               -> cost_per_unit
+          profit_per_unit             -> profit_per_unit
+          (ignored: publication_id, tarif_date_start, tarif_date_end, day_of_week,
+                    additional, profit_per_outlet, cost_per_outlet)
+        """
+        logger.info("Migrating tarif_outlet_date_header -> financial_dates...")
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT *
+                FROM tarif_outlet_date_header
+                WHERE publication_id = %s AND active = 1
+                ORDER BY tarif_outlet_date_header_id
+                """,
+                (self.publication_id,),
+            )
+            headers = cursor.fetchall()
+
+        for header in headers:
+            legacy_header_id = header["tarif_outlet_date_header_id"]
+            financial_date_uuid = self.generate_uuid()
+            self.financial_date_mapping[legacy_header_id] = financial_date_uuid
+
+            # day_of_week: MySQL 0-6 -> PostgreSQL 1-7
+            weekday = header["day_of_week"] + 1
+
+            # copy_from_weekday is optional; convert if present
+            raw_copy = header.get("copy_from_weekday")
+            copy_from_weekday = (raw_copy + 1) if raw_copy is not None else None
+
+            await pg_conn.execute(
+                """
+                INSERT INTO financial_dates (
+                    id, customer_id, name, description,
+                    start_date, end_date, weekday, method, copy_from_weekday,
+                    active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                """,
+                financial_date_uuid,
+                self.customer_uuid,
+                header["name"],
+                header.get("description") or None,
+                header["tarif_date_start"],
+                header["tarif_date_end"],
+                weekday,
+                header.get("method") or 0,
+                copy_from_weekday,
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["financial_dates"] += 1
+
+        logger.info(f"✓ Migrated {self.stats['financial_dates']} financial_dates")
+        logger.info("Migrating tarif_outlet_date -> outlet_financial_dates...")
+
+        if not self.financial_date_mapping:
+            logger.info("No financial_dates migrated; skipping outlet_financial_dates")
+            return
+
+        header_ids = list(self.financial_date_mapping.keys())
+        placeholders = ", ".join(["%s"] * len(header_ids))
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT tarif_outlet_date_header_id, outlet_id, cost_per_unit, profit_per_unit
+                FROM tarif_outlet_date
+                WHERE tarif_outlet_date_header_id IN ({placeholders}) AND active = 1
+                ORDER BY tarif_outlet_date_header_id, outlet_id
+                """,
+                header_ids,
+            )
+            rows = cursor.fetchall()
+
+        skipped = 0
+        for row in rows:
+            financial_date_uuid = self.financial_date_mapping.get(row["tarif_outlet_date_header_id"])
+            outlet_uuid = self.outlet_mapping.get(row["outlet_id"])
+
+            if not outlet_uuid:
+                logger.warning(f"Skipping outlet_financial_date: unmapped outlet_id={row['outlet_id']}")
+                skipped += 1
+                continue
+
+            await pg_conn.execute(
+                """
+                INSERT INTO outlet_financial_dates (
+                    id, financial_date_id, outlet_id, cost_per_unit, profit_per_unit,
+                    active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                self.generate_uuid(),
+                financial_date_uuid,
+                outlet_uuid,
+                row.get("cost_per_unit"),
+                row.get("profit_per_unit"),
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["outlet_financial_dates"] += 1
+
+        logger.info(
+            f"✓ Migrated {self.stats['outlet_financial_dates']} outlet_financial_dates"
+            + (f" ({skipped} skipped)" if skipped else "")
+        )
+
+    async def migrate_sales_filters(self, mysql_conn, pg_conn):
+        """Migrate sales_filter -> sales_filters table.
+
+        Legacy sales_filter.filter_date (single DATE) is mapped to both
+        from_date and to_date, treating each row as a single-day exclusion.
+        """
+        logger.info("Migrating sales_filter -> sales_filters...")
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT name, description, filter_date
+                FROM sales_filter
+                WHERE publication_id = %s AND active = 1
+                ORDER BY filter_date
+                """,
+                (self.publication_id,),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            await pg_conn.execute(
+                """
+                INSERT INTO sales_filters (
+                    id, customer_id, name, description, from_date, to_date,
+                    active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                self.generate_uuid(),
+                self.customer_uuid,
+                row["name"],
+                row.get("description") or None,
+                row["filter_date"],
+                row["filter_date"],
+                True,
+                datetime.now(),
+                datetime.now(),
+            )
+            self.stats["sales_filters"] += 1
+
+        logger.info(f"✓ Migrated {self.stats['sales_filters']} sales filters")
 
     async def migrate_sales(self, mysql_conn, pg_conn):
         """Migrate sales_data to sales table."""
@@ -512,8 +956,8 @@ async def main():
         "--table",
         type=str,
         default="all",
-        choices=["all", "customers", "outlets", "sales"],
-        help="Table to migrate: all, customers, outlets, or sales (default: all)",
+        choices=["all", "customers", "outlets", "financials", "financial_dates", "groups", "pads", "sales", "sales_filters"],
+        help="Table to migrate: all, customers, outlets, financials, financial_dates, groups, pads, sales, or sales_filters (default: all)",
     )
     parser.add_argument(
         "--mysql-host",

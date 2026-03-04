@@ -13,6 +13,7 @@ from gorm_ai.services.customer_configuration import CustomerConfigurationService
 from gorm_ai.services.draw_adjustment import DrawAdjustmentService
 from gorm_ai.services.outlet import OutletService
 from gorm_ai.services.outlet_group import OutletGroupService
+from gorm_ai.services.pad import PadService
 from gorm_ai.services.prediction import PredictionService
 from gorm_ai.services.sales import SalesService
 
@@ -67,6 +68,11 @@ def get_draw_adjustment_service(session: DbSession) -> DrawAdjustmentService:
     return DrawAdjustmentService(session)
 
 
+def get_pad_service(session: DbSession) -> PadService:
+    """Get pad service."""
+    return PadService(session)
+
+
 # Type aliases for service injection
 ConfigurationServiceDep = Annotated[ConfigurationService, Depends(get_configuration_service)]
 CustomerConfigurationServiceDep = Annotated[
@@ -74,6 +80,7 @@ CustomerConfigurationServiceDep = Annotated[
 ]
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 DrawAdjustmentServiceDep = Annotated[DrawAdjustmentService, Depends(get_draw_adjustment_service)]
+PadServiceDep = Annotated[PadService, Depends(get_pad_service)]
 OutletGroupServiceDep = Annotated[OutletGroupService, Depends(get_outlet_group_service)]
 OutletServiceDep = Annotated[OutletService, Depends(get_outlet_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]

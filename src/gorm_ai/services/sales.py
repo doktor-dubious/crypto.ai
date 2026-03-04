@@ -2,10 +2,11 @@
 
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.models import Sales
+from gorm_ai.database.models.sales_filter import SalesFilter
 from gorm_ai.schemas.sales import SalesBulkImport, SalesCreate, SalesQuery, SalesUpdate
 
 
@@ -64,19 +65,40 @@ class SalesService:
         self,
         customer_id: str,
         outlet_id: str | None,
-        start_date: date,
         end_date: date,
+        start_date: date | None = None,
+        apply_sales_filter: bool = False,
     ) -> list[Sales]:
-        """Get sales data for a specific date range."""
+        """Get sales data up to end_date. start_date is optional; omit to fetch all history.
+
+        When apply_sales_filter=True, dates covered by any active SalesFilter record for
+        the customer are excluded. Use this for prediction training data; leave False when
+        fetching actuals for comparison.
+        """
         query = select(Sales).where(
             Sales.customer_id == customer_id,
-            Sales.date >= start_date,
             Sales.date <= end_date,
             Sales.active.is_(True),
         )
+        if start_date is not None:
+            query = query.where(Sales.date >= start_date)
 
         if outlet_id:
             query = query.where(Sales.outlet_id == outlet_id)
+
+        if apply_sales_filter:
+            filtered_out = (
+                select(SalesFilter.id)
+                .where(
+                    SalesFilter.customer_id == customer_id,
+                    SalesFilter.active.is_(True),
+                    SalesFilter.from_date <= Sales.date,
+                    SalesFilter.to_date >= Sales.date,
+                )
+                .correlate(Sales)
+                .exists()
+            )
+            query = query.where(not_(filtered_out))
 
         query = query.order_by(Sales.date)
 

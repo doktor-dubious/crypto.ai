@@ -9,8 +9,12 @@ from gorm_ai.database.base import Base
 
 if TYPE_CHECKING:
     from gorm_ai.database.models.customer_configuration import CustomerConfiguration
+    from gorm_ai.database.models.financial_date import FinancialDate
+    from gorm_ai.database.models.prediction_strategy import PredictionStrategy
+    from gorm_ai.database.models.sales_filter import SalesFilter
     from gorm_ai.database.models.outlet import Outlet
     from gorm_ai.database.models.outlet_group import OutletGroup
+    from gorm_ai.database.models.pad import Pad
     from gorm_ai.database.models.sales import Sales
 
 
@@ -46,4 +50,28 @@ class Customer(Base):
         lazy="selectin",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    pads: Mapped[list["Pad"]] = relationship(
+        "Pad",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    financial_dates: Mapped[list["FinancialDate"]] = relationship(
+        "FinancialDate",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    sales_filters: Mapped[list["SalesFilter"]] = relationship(
+        "SalesFilter",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    prediction_strategies: Mapped[list["PredictionStrategy"]] = relationship(
+        "PredictionStrategy",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
     )

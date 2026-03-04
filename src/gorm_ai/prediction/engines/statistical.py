@@ -1,5 +1,7 @@
 """Statistical prediction engine using ARIMA and simple methods."""
 
+from datetime import date
+
 import numpy as np
 
 from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine
@@ -37,6 +39,9 @@ class StatisticalEngine(PredictionEngine):
         self,
         historical_data: list[dict],
         horizon: int,
+        prediction_from: date,
+        covariates: dict[str, dict[int, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
         method: str = "exponential_smoothing",
         **kwargs,
     ) -> list[PredictionResult]:
@@ -57,7 +62,6 @@ class StatisticalEngine(PredictionEngine):
         # Preprocess data
         df = self.preprocessor.preprocess(historical_data)
         values = df["value"].values
-        last_date = df["date"].iloc[-1].date()
 
         # Generate predictions based on method
         if method == "moving_average":
@@ -67,8 +71,7 @@ class StatisticalEngine(PredictionEngine):
         else:  # Default to exponential smoothing
             predictions, std_error = self._exponential_smoothing(values, horizon, **kwargs)
 
-        # Generate future dates
-        future_dates = DataPreprocessor.generate_future_dates(last_date, horizon)
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
         # Calculate confidence intervals
         lower_bounds, upper_bounds = DataPreprocessor.calculate_confidence_interval(

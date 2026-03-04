@@ -1,23 +1,29 @@
-"""Google TimesFM prediction engine stub."""
+"""Google TimesFM 2.5 prediction engine."""
+
+import asyncio
+import logging
+from datetime import date
 
 import numpy as np
+import pandas as pd
 
 from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
+logger = logging.getLogger(__name__)
+
+
+_QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+
 
 class TimesFMEngine(PredictionEngine):
-    """
-    Google TimesFM prediction engine.
-
-    This is a stub implementation - full implementation requires
-    the transformers library and model weights.
-    """
+    """Google TimesFM 2.5 (200M, PyTorch) prediction engine."""
 
     def __init__(self):
         self.preprocessor = DataPreprocessor(fill_missing=True, normalize=True)
         self._model = None
+        self._model_loaded = False
 
     def get_capabilities(self) -> EngineCapabilities:
         """Return engine capabilities."""
@@ -28,6 +34,7 @@ class TimesFMEngine(PredictionEngine):
             supports_exogenous=True,
             supports_uncertainty=True,
             min_history_length=32,
+            max_history_length=1024,
             max_horizon=128,
             supported_frequencies=["daily", "weekly", "monthly", "hourly"],
         )
@@ -36,6 +43,11 @@ class TimesFMEngine(PredictionEngine):
         self,
         historical_data: list[dict],
         horizon: int,
+        prediction_from: date,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
+        holding_rate: float = 0.25,
+        protection_days: int = 7,
         **kwargs,
     ) -> list[PredictionResult]:
         """
@@ -44,40 +56,59 @@ class TimesFMEngine(PredictionEngine):
         Args:
             historical_data: List of dicts with 'date' and 'value' keys
             horizon: Number of periods to predict
+            prediction_from: First date of the prediction window
+            covariates: Optional dict mapping feature name to {weekday: value}
+                        (weekday 1=Monday, 7=Sunday). Used as dynamic numerical
+                        covariates spanning both historical context and future horizon.
+            holding_rate: Annual holding cost as a fraction of cost_per_unit (default 0.25).
+                          Used to compute the Newsvendor overage cost Co over the protection period.
+            protection_days: Days until next replenishment (default 7 = weekly).
+                             Determines Co = cost_per_unit * (holding_rate / 365) * protection_days.
             **kwargs: Engine-specific parameters
 
         Returns:
-            List of PredictionResult objects
+            List of PredictionResult objects. Each result includes an `economic_optimal`
+            field when outlet financials (profit_per_unit + cost_per_unit) are available,
+            representing the Newsvendor-optimal draw: the quantile corresponding to
+            τ = profit / (profit + Co), where higher margins yield higher quantiles.
         """
         self.validate_input(historical_data, horizon)
 
         # Preprocess data
         df = self.preprocessor.preprocess(historical_data)
         values = df["value"].values
-        last_date = df["date"].iloc[-1].date()
 
         # Load model if not loaded
-        if self._model is None:
+        if not self._model_loaded:
             self._load_model()
 
         if self._model is not None:
-            # Run inference with actual model
-            predictions, lower, upper = await self._run_inference(values, horizon)
+            # Always build covariate arrays — weekday dummies are always included,
+            # financial covariates and pad event indicators are added when available.
+            cov_arrays = self._build_covariate_arrays(df, prediction_from, horizon, covariates, pad_dates)
+            predictions, lower, upper, all_quantiles = await self._run_inference_with_covariates(
+                values, horizon, cov_arrays
+            )
         else:
             # Stub: return simple forecast when model not available
             predictions, lower, upper = self._stub_forecast(values, horizon)
+            all_quantiles = None
 
         # Denormalize predictions
         predictions = self.preprocessor.denormalize(predictions)
         lower = self.preprocessor.denormalize(lower)
         upper = self.preprocessor.denormalize(upper)
+        if all_quantiles is not None:
+            all_quantiles = self.preprocessor.denormalize(all_quantiles)  # (horizon, n_quantiles)
 
-        # Generate future dates
-        future_dates = DataPreprocessor.generate_future_dates(last_date, horizon)
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
         # Build results
         results = []
         for i, pred_date in enumerate(future_dates):
+            economic_optimal = self._compute_economic_optimal(
+                pred_date, i, all_quantiles, covariates, holding_rate, protection_days
+            )
             results.append(
                 PredictionResult(
                     date=pred_date,
@@ -85,40 +116,207 @@ class TimesFMEngine(PredictionEngine):
                     lower_bound=float(lower[i]),
                     upper_bound=float(upper[i]),
                     confidence=0.95,
+                    economic_optimal=economic_optimal,
                 )
             )
 
         return results
 
+    def _compute_economic_optimal(
+        self,
+        pred_date: date,
+        day_index: int,
+        all_quantiles: np.ndarray | None,
+        covariates: dict[str, dict[date, float]] | None,
+        holding_rate: float,
+        protection_days: int,
+    ) -> float | None:
+        """Compute the Newsvendor-optimal draw for a single forecast day.
+
+        Uses the critical fractile τ = Cu / (Cu + Co) to select the appropriate
+        quantile from the full forecast distribution, where:
+          - Cu (underage/stockout cost) = profit_per_unit for that date
+          - Co (overage/holding cost)   = cost_per_unit × (holding_rate / 365) × protection_days
+
+        Returns None when quantile data or financial data is unavailable.
+        """
+        if all_quantiles is None or covariates is None:
+            return None
+
+        profit = covariates.get("profit_per_unit", {}).get(pred_date, 0.0)
+        cost = covariates.get("cost_per_unit", {}).get(pred_date, 0.0)
+        if profit <= 0 or cost <= 0:
+            return None
+
+        co_period = cost * (holding_rate / 365) * protection_days
+        tau = profit / (profit + co_period)
+        nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
+        return float(all_quantiles[day_index, nearest_idx])
+
     def _load_model(self) -> None:
-        """Load the TimesFM model."""
+        """Load TimesFM 2.5 (200M PyTorch) from HuggingFace."""
+        if self._model_loaded:
+            return
         try:
-            # Placeholder for actual model loading
-            # In production, this would load from HuggingFace or local weights
-            # from transformers import AutoModelForCausalLM
-            # self._model = AutoModelForCausalLM.from_pretrained("google/timesfm")
-            pass
-        except Exception:
+            import timesfm
+
+            self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+                "google/timesfm-2.5-200m-pytorch",
+                torch_compile=True,
+            )
+            self._model.compile(
+                timesfm.ForecastConfig(
+                    max_context=1024,
+                    max_horizon=128,
+                    normalize_inputs=True,
+                    use_continuous_quantile_head=True,
+                    force_flip_invariance=True,
+                    infer_is_positive=True,
+                    fix_quantile_crossing=True,
+                    return_backcast=True,  # required for forecast_with_covariates
+                )
+            )
+            logger.info("TimesFM 2.5 model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load TimesFM model, falling back to stub: {e}")
             self._model = None
+        finally:
+            self._model_loaded = True
+
+    def _build_covariate_arrays(
+        self,
+        df: pd.DataFrame,
+        prediction_from: date,
+        horizon: int,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
+    ) -> dict[str, list[float]]:
+        """Build full covariate sequences covering historical context + future horizon.
+
+        Always includes weekday one-hot features (dow_1..dow_6; Sunday is the reference
+        category and is omitted). Financial covariates (date-keyed) and pad event
+        indicators (date-keyed binary) are added when provided.
+
+        Args:
+            df: Preprocessed historical DataFrame with 'date' column (pd.Timestamps)
+            prediction_from: First date of the prediction window
+            horizon: Number of future periods
+            covariates: Optional feature name → {date: value} (fully resolved per date)
+            pad_dates: Optional pad name → set of specific event dates (binary indicator)
+
+        Returns:
+            Feature name → flat list of floats, length = len(df) + horizon
+        """
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+
+        # Build parallel date lists (as date objects) for all positions
+        historical_dates = [ts.date() for ts in df["date"]]
+        all_dates = historical_dates + list(future_dates)
+
+        # weekday() returns 0=Monday, 6=Sunday → +1 gives 1=Monday, 7=Sunday
+        all_weekdays = [d.weekday() + 1 for d in all_dates]
+
+        result: dict[str, list[float]] = {}
+
+        # Weekday one-hot encoding (1=Mon … 6=Sat; 7=Sun is the reference category)
+        for dow in range(1, 7):
+            result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+
+        # Financial covariates (cost_per_unit, profit_per_unit) keyed by date
+        if covariates:
+            for feature, date_map in covariates.items():
+                result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
+
+        # Pad event indicators — binary 1.0 on event dates, 0.0 otherwise
+        # Ridge learns the per-outlet effect magnitude from historical occurrences
+        if pad_dates:
+            for pad_name, event_dates in pad_dates.items():
+                result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
+
+        return result
 
     async def _run_inference(
         self,
         values: np.ndarray,
         horizon: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Run inference with the TimesFM model.
+        """Run plain inference (no covariates). Offloaded to thread pool."""
+        loop = asyncio.get_event_loop()
+        point_forecast, quantile_forecast = await loop.run_in_executor(
+            None,
+            lambda: self._model.forecast(horizon=horizon, inputs=[values]),
+        )
+        # With return_backcast=True the output includes context + horizon;
+        # take the last `horizon` elements which are the actual forecast.
+        predictions = point_forecast[0, -horizon:]
+        lower = quantile_forecast[0, -horizon:, 1]   # P10 (index 0 is mean)
+        upper = quantile_forecast[0, -horizon:, -1]  # P90
+        return predictions, lower, upper
 
-        Args:
-            values: Preprocessed historical values
-            horizon: Number of periods to predict
+    async def _run_inference_with_covariates(
+        self,
+        values: np.ndarray,
+        horizon: int,
+        cov_arrays: dict[str, list[float]],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Run inference with dynamic numerical covariates. Offloaded to thread pool.
+
+        Uses a Ridge regression (xreg) on top of the base TimesFM forecast:
+        1. Run base forecast — with return_backcast=True the output contains both
+           the historical reconstruction (backcast) and the future forecast.
+        2. Compute residuals = actual_values - backcast (what TimesFM missed)
+        3. Fit Ridge on residuals: residuals ~ historical_covariates
+           Ridge's intercept absorbs any systematic bias (e.g. consistent underestimation).
+        4. xreg_adjustment = ridge.predict(future_covariates)
+        5. Add adjustment to base forecast, confidence intervals, and all quantiles.
 
         Returns:
-            Tuple of (predictions, lower_bounds, upper_bounds)
+            Tuple of (predictions, lower, upper, all_quantiles) where all_quantiles has
+            shape (horizon, n_quantiles) with quantile levels P10..P90 (see _QUANTILE_LEVELS).
         """
-        # Placeholder for actual inference
-        # In production, this would run the model forward pass
-        return self._stub_forecast(values, horizon)
+        loop = asyncio.get_event_loop()
+
+        def _infer():
+            from sklearn.linear_model import Ridge
+
+            n_hist = len(values)
+            feature_names = sorted(cov_arrays.keys())
+            hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+            fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+
+            # Get base TimesFM forecast (includes backcast due to return_backcast=True)
+            point_forecast, quantile_forecast = self._model.forecast(
+                horizon=horizon, inputs=[values]
+            )
+            base_pred = point_forecast[0, -horizon:]
+            # Index 0 in quantile_forecast is the mean/point head; P10–P90 start at index 1.
+            base_lower = quantile_forecast[0, -horizon:, 1]   # P10
+            base_upper = quantile_forecast[0, -horizon:, -1]  # P90
+            base_all_quantiles = quantile_forecast[0, -horizon:, 1:]  # (horizon, 9) P10–P90
+
+            # Extract backcast and align with actual values.
+            # The backcast covers up to the model's context length (may differ from n_hist).
+            n_backcast = point_forecast.shape[1] - horizon
+            backcast = point_forecast[0, :n_backcast]
+            align_len = min(n_hist, n_backcast)
+            residuals = values[-align_len:] - backcast[-align_len:]
+            hist_X_aligned = hist_X[-align_len:]
+
+            # Fit Ridge on residuals — learns only what TimesFM couldn't explain.
+            # The intercept captures systematic bias (consistent over/underestimation).
+            ridge = Ridge(alpha=1.0, fit_intercept=True)
+            ridge.fit(hist_X_aligned, residuals)
+
+            xreg_adjustment = ridge.predict(fut_X)
+
+            return (
+                base_pred + xreg_adjustment,
+                base_lower + xreg_adjustment,
+                base_upper + xreg_adjustment,
+                base_all_quantiles + xreg_adjustment[:, np.newaxis],
+            )
+
+        return await loop.run_in_executor(None, _infer)
 
     def _stub_forecast(
         self,

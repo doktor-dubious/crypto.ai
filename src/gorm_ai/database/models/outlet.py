@@ -12,6 +12,7 @@ from gorm_ai.database.base import Base
 if TYPE_CHECKING:
     from gorm_ai.database.models.customer import Customer
     from gorm_ai.database.models.outlet_delivery import OutletDelivery
+    from gorm_ai.database.models.outlet_financials import OutletFinancials
     from gorm_ai.database.models.outlet_info import OutletInfo
     from gorm_ai.database.models.sales import Sales
 
@@ -61,6 +62,12 @@ class Outlet(Base):
     )
     deliveries: Mapped[list["OutletDelivery"]] = relationship(
         "OutletDelivery",
+        back_populates="outlet",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+    financials: Mapped[list["OutletFinancials"]] = relationship(
+        "OutletFinancials",
         back_populates="outlet",
         lazy="selectin",
         cascade="all, delete-orphan",

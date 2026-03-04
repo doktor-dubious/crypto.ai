@@ -52,6 +52,9 @@ class DataPreprocessor:
         if len(df) < 2:
             return df
 
+        # Aggregate duplicate dates by summing before reindexing
+        df = df.groupby("date", as_index=False)["value"].sum()
+
         date_range = pd.date_range(start=df["date"].min(), end=df["date"].max(), freq="D")
         df = df.set_index("date").reindex(date_range)
         df["value"] = df["value"].interpolate(method="linear")
@@ -87,18 +90,9 @@ class DataPreprocessor:
         return values * (self._max_value - self._min_value) + self._min_value
 
     @staticmethod
-    def generate_future_dates(last_date: date, horizon: int) -> list[date]:
-        """
-        Generate future dates for predictions.
-
-        Args:
-            last_date: Last date in historical data
-            horizon: Number of future dates to generate
-
-        Returns:
-            List of future dates
-        """
-        return [last_date + timedelta(days=i + 1) for i in range(horizon)]
+    def generate_future_dates(start_date: date, horizon: int) -> list[date]:
+        """Generate prediction dates starting from start_date (inclusive)."""
+        return [start_date + timedelta(days=i) for i in range(horizon)]
 
     @staticmethod
     def calculate_confidence_interval(

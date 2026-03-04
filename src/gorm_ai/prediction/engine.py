@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date
 
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -16,6 +17,7 @@ class EngineCapabilities:
     supports_exogenous: bool = False
     supports_uncertainty: bool = False
     min_history_length: int = 7
+    max_history_length: int | None = None  # None = no limit
     max_horizon: int = 365
     supported_frequencies: list[str] | None = None
 
@@ -32,6 +34,9 @@ class PredictionEngine(ABC):
         self,
         historical_data: list[dict],
         horizon: int,
+        prediction_from: date,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
         **kwargs,
     ) -> list[PredictionResult]:
         """

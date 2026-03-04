@@ -1,6 +1,7 @@
 """Celery application configuration."""
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 from gorm_ai.config import get_settings
 
@@ -10,10 +11,17 @@ celery_app = Celery(
     "gorm_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["gorm_ai.tasks.predictions"],
+    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations"],
 )
 
 # Celery configuration
+@worker_process_init.connect
+def init_worker_logging(**kwargs):
+    """Configure logging in each Celery worker process."""
+    from gorm_ai.logging import configure_logging
+    configure_logging()
+
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
