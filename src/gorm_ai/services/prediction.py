@@ -57,7 +57,9 @@ class PredictionService:
         # Pad event dates are customer-level (same for all outlets; effect learned per outlet by Ridge)
         pad_covariates = await self._build_pad_covariates(request.customer_id) if request.use_pad else None
 
-        outlets: list[OutletPrediction] = []
+        # Collect per-outlet inputs
+        batch_items: list[dict] = []
+        valid_outlet_ids: list[str] = []
         for outlet_id in outlet_ids:
             sales_data = await self.sales_service.get_by_date_range(
                 customer_id=request.customer_id,
@@ -68,7 +70,6 @@ class PredictionService:
 
             historical_data = self._prepare_historical_data(sales_data)
 
-            # Trim to engine's max context if needed (keep the most recent records)
             if capabilities.max_history_length and len(historical_data) > capabilities.max_history_length:
                 historical_data = historical_data[-capabilities.max_history_length:]
 
@@ -81,16 +82,25 @@ class PredictionService:
             else:
                 covariates = None
 
-            results = await engine.predict(
-                historical_data=historical_data,
-                horizon=horizon,
-                prediction_from=request.prediction_from,
-                covariates=covariates,
-                pad_dates=pad_covariates,
+            batch_items.append({
+                "historical_data": historical_data,
+                "covariates": covariates,
+                "pad_dates": pad_covariates,
                 **(request.engine_params or {}),
-            )
+            })
+            valid_outlet_ids.append(outlet_id)
 
-            outlets.append(OutletPrediction(outlet_id=outlet_id, results=results))
+        all_results = await engine.predict_batch(
+            batch_items,
+            horizon=horizon,
+            prediction_from=request.prediction_from,
+            batch_size=request.batch_size,
+        )
+
+        outlets: list[OutletPrediction] = [
+            OutletPrediction(outlet_id=outlet_id, results=results)
+            for outlet_id, results in zip(valid_outlet_ids, all_results)
+        ]
 
         return PredictionResponse(
             id=str(uuid4()),

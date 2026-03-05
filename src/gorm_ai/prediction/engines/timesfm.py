@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
 
+# Number of outlets packed into a single TimesFM forward pass.
+# Increase if GPU VRAM allows; decrease if you hit OOM errors.
+BATCH_SIZE = 32
+
 
 class TimesFMEngine(PredictionEngine):
     """Google TimesFM 2.5 (200M, PyTorch) prediction engine."""
@@ -119,6 +123,145 @@ class TimesFMEngine(PredictionEngine):
                     economic_optimal=economic_optimal,
                 )
             )
+
+        return results
+
+    async def predict_batch(
+        self,
+        items: list[dict],
+        horizon: int,
+        prediction_from: date,
+        batch_size: int = BATCH_SIZE,
+        holding_rate: float = 0.25,
+        protection_days: int = 7,
+    ) -> list[list[PredictionResult]]:
+        """Predict for multiple outlets with a single GPU forward pass per batch.
+
+        Outlets are sorted by history length before batching to minimise padding
+        waste within each batch. Per-outlet Ridge regression runs after the GPU
+        step and is cheap enough to keep sequential.
+
+        Falls back to sequential predict() calls when the model is unavailable.
+        """
+        if not items:
+            return []
+
+        if not self._model_loaded:
+            self._load_model()
+
+        if self._model is None:
+            return await super().predict_batch(items, horizon, prediction_from)
+
+        # Preprocess each outlet with its own DataPreprocessor (stateful min/max).
+        prepared: list[dict] = []
+        for item in items:
+            pp = DataPreprocessor(fill_missing=True, normalize=True)
+            df = pp.preprocess(item["historical_data"])
+            values = df["value"].values
+            cov_arrays = self._build_covariate_arrays(
+                df, prediction_from, horizon,
+                item.get("covariates"), item.get("pad_dates"),
+            )
+            n_hist = len(values)
+            feature_names = sorted(cov_arrays.keys())
+            hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+            fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            prepared.append({
+                "values": values,
+                "hist_X": hist_X,
+                "fut_X": fut_X,
+                "preprocessor": pp,
+                "covariates": item.get("covariates"),
+            })
+
+        # Sort by history length to minimise intra-batch padding.
+        order = sorted(range(len(prepared)), key=lambda i: len(prepared[i]["values"]))
+        sorted_prepared = [prepared[i] for i in order]
+
+        # Run GPU batches and collect raw (normalised) results.
+        raw_results: list[tuple] = [None] * len(prepared)  # type: ignore[list-item]
+        loop = asyncio.get_event_loop()
+        for batch_start in range(0, len(sorted_prepared), batch_size):
+            batch = sorted_prepared[batch_start : batch_start + batch_size]
+            batch_raw = await loop.run_in_executor(
+                None, self._run_batch_inference, batch, horizon
+            )
+            for j, raw in enumerate(batch_raw):
+                raw_results[order[batch_start + j]] = raw
+
+        # Build PredictionResult lists in original item order.
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+        output: list[list[PredictionResult]] = []
+        for i, item in enumerate(items):
+            preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
+            pp = prepared[i]["preprocessor"]
+            preds = pp.denormalize(preds_norm)
+            lower = pp.denormalize(lower_norm)
+            upper = pp.denormalize(upper_norm)
+            quantiles = pp.denormalize(quantiles_norm)
+
+            day_results = []
+            for idx, pred_date in enumerate(future_dates):
+                economic_optimal = self._compute_economic_optimal(
+                    pred_date, idx, quantiles,
+                    item.get("covariates"), holding_rate, protection_days,
+                )
+                day_results.append(PredictionResult(
+                    date=pred_date,
+                    predicted_value=float(preds[idx]),
+                    lower_bound=float(lower[idx]),
+                    upper_bound=float(upper[idx]),
+                    confidence=0.95,
+                    economic_optimal=economic_optimal,
+                ))
+            output.append(day_results)
+
+        return output
+
+    def _run_batch_inference(
+        self,
+        batch: list[dict],
+        horizon: int,
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        """Sync: single TimesFM forward pass for a batch + per-outlet Ridge.
+
+        Returns a list of (predictions, lower, upper, all_quantiles) tuples,
+        all still in normalised scale.
+        """
+        from sklearn.linear_model import Ridge
+
+        inputs = [item["values"] for item in batch]
+        point_forecast, quantile_forecast = self._model.forecast(
+            horizon=horizon, inputs=inputs
+        )
+        n_backcast = point_forecast.shape[1] - horizon
+
+        results = []
+        for i, item in enumerate(batch):
+            values = item["values"]
+            hist_X = item["hist_X"]
+            fut_X = item["fut_X"]
+
+            base_pred = point_forecast[i, -horizon:]
+            base_lower = quantile_forecast[i, -horizon:, 1]
+            base_upper = quantile_forecast[i, -horizon:, -1]
+            base_all_q = quantile_forecast[i, -horizon:, 1:]
+
+            backcast = point_forecast[i, :n_backcast]
+            align_len = min(len(values), n_backcast)
+            residuals = values[-align_len:] - backcast[-align_len:]
+            hist_X_aligned = hist_X[-align_len:]
+
+            ridge = Ridge(alpha=1.0, fit_intercept=True)
+            ridge.fit(hist_X_aligned, residuals)
+            adj = ridge.predict(fut_X)
+
+            results.append((
+                base_pred + adj,
+                base_lower + adj,
+                base_upper + adj,
+                base_all_q + adj[:, np.newaxis],
+            ))
 
         return results
 

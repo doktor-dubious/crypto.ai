@@ -62,6 +62,35 @@ class PredictionEngine(ABC):
         """
         pass
 
+    async def predict_batch(
+        self,
+        items: list[dict],
+        horizon: int,
+        prediction_from: date,
+        batch_size: int = 64,
+    ) -> list[list[PredictionResult]]:
+        """Run predictions for multiple outlets.
+
+        Each item is a dict with keys:
+          - historical_data: list[dict] with 'date' and 'value'
+          - covariates: dict | None
+          - pad_dates: dict | None
+
+        Default implementation calls predict() sequentially. Override in engines
+        that support GPU batching for a significant throughput improvement.
+        """
+        results = []
+        for item in items:
+            result = await self.predict(
+                historical_data=item["historical_data"],
+                horizon=horizon,
+                prediction_from=prediction_from,
+                covariates=item.get("covariates"),
+                pad_dates=item.get("pad_dates"),
+            )
+            results.append(result)
+        return results
+
     def validate_input(self, historical_data: list[dict], horizon: int) -> None:
         """
         Validate input data before prediction.

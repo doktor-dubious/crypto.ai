@@ -36,6 +36,7 @@ class PredictionRequest(BaseModel):
     use_pad: bool = True                      # include pad event date covariates
     engine: PredictionEngine | None = None    # falls back to customer/global config then STATISTICAL
     engine_params: dict | None = None
+    batch_size: int = 32                      # outlets per forward pass (increase for GPU, decrease if OOM)
 
 
 class PredictionResult(BaseModel):

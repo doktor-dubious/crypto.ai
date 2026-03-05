@@ -27,6 +27,7 @@ class SimulationRequest(BaseModel):
     engine: str | None = None              # engine slug; falls back to customer → system config
     outlet_ids: list[str] | None = None    # None = all active outlets for customer
     outlet_group_id: str | None = None     # filter to a specific outlet group
+    batch_size: int = 32                   # outlets per forward pass (increase for GPU, decrease if OOM)
 
 
 class SimulationDayResult(BaseModel):

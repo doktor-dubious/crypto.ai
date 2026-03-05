@@ -105,6 +105,9 @@ class SimulationService:
             horizon = (chunk_end - chunk_start).days + 1
             history_cutoff = chunk_start - timedelta(days=request.delay)
 
+            # --- Collect per-outlet inputs for this chunk ---
+            batch_items: list[dict] = []
+            batch_outlet_ids: list[str] = []
             for outlet_id in outlet_ids:
                 historical_sales = await self.sales_service.get_by_date_range(
                     customer_id=request.customer_id,
@@ -117,7 +120,7 @@ class SimulationService:
                 ]
 
                 if len(historical_data) < capabilities.min_history_length:
-                    continue  # not enough history for this outlet yet
+                    continue
 
                 if (
                     capabilities.max_history_length
@@ -125,17 +128,20 @@ class SimulationService:
                 ):
                     historical_data = historical_data[-capabilities.max_history_length :]
 
-                covariates = covariates_cache[outlet_id]
+                batch_items.append({
+                    "historical_data": historical_data,
+                    "covariates": covariates_cache[outlet_id],
+                    "pad_dates": pad_covariates,
+                })
+                batch_outlet_ids.append(outlet_id)
 
-                predictions = await engine.predict(
-                    historical_data=historical_data,
-                    horizon=horizon,
-                    prediction_from=chunk_start,
-                    covariates=covariates,
-                    pad_dates=pad_covariates,
-                )
+            # --- Single batched prediction call for all outlets in this chunk ---
+            all_predictions = await engine.predict_batch(
+                batch_items, horizon, chunk_start, batch_size=request.batch_size
+            )
 
-                # Fetch actual data for the chunk window
+            # --- Fetch actuals and process results per outlet ---
+            for outlet_id, predictions in zip(batch_outlet_ids, all_predictions):
                 actual_sales = await self.sales_service.get_by_date_range(
                     customer_id=request.customer_id,
                     outlet_id=outlet_id,
@@ -143,6 +149,7 @@ class SimulationService:
                     end_date=chunk_end,
                 )
                 actual_by_date = {s.date: s for s in actual_sales}
+                covariates = covariates_cache[outlet_id]
 
                 for pred in predictions:
                     actual = actual_by_date.get(pred.date)
@@ -162,7 +169,6 @@ class SimulationService:
                         pred.predicted_value, actual_draw, actual_sale, cost, profit_unit
                     )
 
-                    # Parallel classification using the Newsvendor-adjusted draw
                     eco_group, eco_profit_impact, eco_potential_profit = (
                         self._classify(pred.economic_optimal, actual_draw, actual_sale, cost, profit_unit)
                         if pred.economic_optimal is not None
@@ -208,6 +214,7 @@ class SimulationService:
                 total_chunks=n_chunks,
                 chunk_start=str(chunk_start),
                 chunk_end=str(chunk_end),
+                outlets_in_chunk=len(batch_outlet_ids),
             )
 
             chunk_start += timedelta(days=7)
