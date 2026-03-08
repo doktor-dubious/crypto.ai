@@ -22,8 +22,12 @@ class OutletDelivery(Base):
         ForeignKey("outlets.id", ondelete="CASCADE"),
         index=True,
     )
-    weekday: Mapped[int] = mapped_column(SmallInteger)  # 0-6, Monday=0
-    quantity: Mapped[int] = mapped_column(SmallInteger, default=0)
+    weekday: Mapped[int] = mapped_column(SmallInteger)  # 1-7, Monday=1, Sunday=7
+    fixed: Mapped[float | None] = mapped_column(default=None)
+    minimum: Mapped[float | None] = mapped_column(default=None)
+    maximum: Mapped[float | None] = mapped_column(default=None)
+    add: Mapped[float | None] = mapped_column(default=None)
+    add_pct: Mapped[float | None] = mapped_column(default=None)
 
     # Relationships
     outlet: Mapped["Outlet"] = relationship(

@@ -2,6 +2,8 @@
 
 from datetime import date
 
+from collections import defaultdict
+
 from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,6 +106,52 @@ class SalesService:
 
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+    async def get_by_date_range_bulk(
+        self,
+        customer_id: str,
+        outlet_ids: list[str],
+        end_date: date,
+        start_date: date | None = None,
+        apply_sales_filter: bool = False,
+    ) -> dict[str, list[Sales]]:
+        """Fetch sales for multiple outlets in a single query.
+
+        Returns a dict mapping outlet_id → list[Sales], sorted by date ascending.
+        Outlets with no data will be absent from the result.
+        """
+        query = select(Sales).where(
+            Sales.customer_id == customer_id,
+            Sales.outlet_id.in_(outlet_ids),
+            Sales.date <= end_date,
+            Sales.active.is_(True),
+        )
+        if start_date is not None:
+            query = query.where(Sales.date >= start_date)
+
+        if apply_sales_filter:
+            filtered_out = (
+                select(SalesFilter.id)
+                .where(
+                    SalesFilter.customer_id == customer_id,
+                    SalesFilter.active.is_(True),
+                    SalesFilter.from_date <= Sales.date,
+                    SalesFilter.to_date >= Sales.date,
+                )
+                .correlate(Sales)
+                .exists()
+            )
+            query = query.where(not_(filtered_out))
+
+        query = query.order_by(Sales.outlet_id, Sales.date)
+
+        result = await self.session.execute(query)
+        rows = result.scalars().all()
+
+        grouped: dict[str, list[Sales]] = defaultdict(list)
+        for row in rows:
+            grouped[row.outlet_id].append(row)
+        return dict(grouped)
 
     async def update(self, sales_id: str, data: SalesUpdate) -> Sales | None:
         """Update a sales record."""

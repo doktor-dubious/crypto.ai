@@ -1,7 +1,7 @@
 """Prediction Celery tasks."""
 
 import asyncio
-from datetime import date
+from datetime import UTC, date, datetime
 
 from gorm_ai.tasks.celery_app import celery_app
 
@@ -18,34 +18,60 @@ def run_prediction_task(self, request_data: dict) -> dict:
         Prediction response as dict
     """
     # Run async code in sync context
-    return asyncio.run(_run_prediction_async(request_data))
+    return asyncio.run(_run_prediction_async(self.request.id, request_data))
 
 
-async def _run_prediction_async(request_data: dict) -> dict:
+async def _run_prediction_async(task_id: str, request_data: dict) -> dict:
     """
     Run prediction asynchronously.
 
     Args:
+        task_id: Celery task ID
         request_data: Prediction request data
 
     Returns:
         Prediction response as dict
     """
-    from gorm_ai.database.connection import async_session_factory
+    from gorm_ai.database.connection import task_session
     from gorm_ai.schemas.prediction import PredictionRequest
     from gorm_ai.services.prediction import PredictionService
+    from gorm_ai.services.task import TaskService
 
-    # Convert date strings back to date objects
-    if isinstance(request_data.get("prediction_from"), str):
-        request_data["prediction_from"] = date.fromisoformat(request_data["prediction_from"])
-    if isinstance(request_data.get("prediction_to"), str):
-        request_data["prediction_to"] = date.fromisoformat(request_data["prediction_to"])
-
-    request = PredictionRequest(**request_data)
-
-    async with async_session_factory() as session:
-        service = PredictionService(session)
-        result = await service.create_prediction(request)
+    async with task_session() as session:
+        await TaskService(session).update_status(task_id, "started", started_at=datetime.now(UTC))
         await session.commit()
 
-    return result.model_dump(mode="json")
+    async def _on_progress(progress: int, message: str | None = None) -> None:
+        async with task_session() as session:
+            await TaskService(session).update_progress(task_id, progress, message)
+            await session.commit()
+
+    try:
+        # Convert date strings back to date objects
+        if isinstance(request_data.get("prediction_from"), str):
+            request_data["prediction_from"] = date.fromisoformat(request_data["prediction_from"])
+        if isinstance(request_data.get("prediction_to"), str):
+            request_data["prediction_to"] = date.fromisoformat(request_data["prediction_to"])
+
+        request = PredictionRequest(**request_data)
+
+        async with task_session() as session:
+            service = PredictionService(session)
+            result = await service.create_prediction(request, on_progress=_on_progress, task_id=task_id)
+            await session.commit()
+
+        async with task_session() as session:
+            await TaskService(session).update_status(
+                task_id, "success", completed_at=datetime.now(UTC)
+            )
+            await session.commit()
+
+        return result.model_dump(mode="json")
+
+    except Exception as e:
+        async with task_session() as session:
+            await TaskService(session).update_status(
+                task_id, "failure", completed_at=datetime.now(UTC), error=str(e)
+            )
+            await session.commit()
+        raise

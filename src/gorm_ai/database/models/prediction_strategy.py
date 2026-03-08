@@ -25,7 +25,7 @@ class PredictionStrategy(Base):
     )
     prediction_engine_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("prediction_engines.id", ondelete="SET NULL"),
+        ForeignKey("prediction_engine.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -43,9 +43,9 @@ class PredictionStrategy(Base):
     outlet_return_percentage: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Constraint overrides
-    ignore_fixed_draw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    ignore_minimum_draw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    ignore_maximum_draw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ignore_fixed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ignore_minimum: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ignore_maximum: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
     customer: Mapped["Customer"] = relationship("Customer", back_populates="prediction_strategies")

@@ -25,6 +25,14 @@ class EngineRegistry:
         except ImportError:
             pass  # TimesFM not available
 
+        # Register fine-tuned TimesFM engine
+        try:
+            from gorm_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
+
+            self.register(PredictionEngineEnum.TIMESFM_FINETUNED, TimesFMFinetunedEngine)
+        except ImportError:
+            pass  # TimesFM not available
+
         # Register custom engine
         try:
             from gorm_ai.prediction.engines.custom import CustomEngine

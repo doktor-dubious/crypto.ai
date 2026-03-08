@@ -30,8 +30,12 @@ class OutletInfoResponse(OutletInfoBase):
 class OutletDeliveryBase(BaseModel):
     """Base schema for outlet delivery."""
 
-    weekday: int  # 0-6, Monday=0
-    quantity: int = 0
+    weekday: int  # 1-7, Monday=1, Sunday=7
+    fixed: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    add: float | None = None
+    add_pct: float | None = None
 
 
 class OutletDeliveryCreate(OutletDeliveryBase):

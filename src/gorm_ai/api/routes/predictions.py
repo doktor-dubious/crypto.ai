@@ -2,8 +2,13 @@
 
 from fastapi import APIRouter, HTTPException
 
-from gorm_ai.api.deps import PredictionServiceDep
+from gorm_ai.api.deps import PredictionServiceDep, TaskServiceDep
 from gorm_ai.schemas.prediction import (
+    CompletedPredictionListResponse,
+    CompletedPredictionResponse,
+    MarginalValueRequest,
+    MarginalValueResponse,
+    PredictionAnalyticsSummary,
     PredictionEngine,
     PredictionRequest,
     PredictionResponse,
@@ -13,6 +18,42 @@ from gorm_ai.schemas.prediction import (
 from gorm_ai.tasks.predictions import run_prediction_task
 
 router = APIRouter()
+
+
+@router.get("", response_model=CompletedPredictionListResponse)
+async def list_predictions(
+    customer_id: str,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    service: PredictionServiceDep = ...,
+) -> CompletedPredictionListResponse:
+    """List completed predictions for a customer."""
+    items, total = await service.list_completed(customer_id, search=search, limit=limit, offset=offset)
+    return CompletedPredictionListResponse(
+        items=[CompletedPredictionResponse(**item) for item in items],
+        total=total,
+    )
+
+
+@router.get("/{prediction_id}/analytics", response_model=PredictionAnalyticsSummary)
+async def get_prediction_analytics(
+    prediction_id: str,
+    service: PredictionServiceDep,
+) -> PredictionAnalyticsSummary:
+    """Get aggregate analytics for a completed prediction."""
+    data = await service.get_analytics(prediction_id)
+    return PredictionAnalyticsSummary(**data)
+
+
+@router.delete("/{prediction_id}", status_code=204)
+async def delete_prediction(
+    prediction_id: str,
+    service: PredictionServiceDep,
+) -> None:
+    """Soft-delete a prediction."""
+    if not await service.delete_prediction(prediction_id):
+        raise HTTPException(status_code=404, detail="Prediction not found")
 
 
 @router.post("", response_model=PredictionResponse, status_code=201)
@@ -31,11 +72,13 @@ async def create_prediction(
 @router.post("/async", response_model=PredictionTaskStatus, status_code=202)
 async def create_prediction_async(
     data: PredictionRequest,
+    task_service: TaskServiceDep,
 ) -> PredictionTaskStatus:
     """Create a prediction asynchronously using Celery."""
     from datetime import UTC, datetime
 
     task = run_prediction_task.delay(data.model_dump(mode="json"))
+    await task_service.create(task.id, "prediction", data.customer_id)
 
     return PredictionTaskStatus(
         task_id=task.id,
@@ -94,6 +137,19 @@ async def get_prediction_task_status(
         created_at=datetime.now(UTC),
         completed_at=completed_at,
     )
+
+
+@router.post("/marginal-value", response_model=MarginalValueResponse)
+async def get_marginal_value(
+    data: MarginalValueRequest,
+    service: PredictionServiceDep,
+) -> MarginalValueResponse:
+    """Rank outlets by P(demand > delivered) — which outlet benefits most from one extra copy.
+
+    Requires existing prediction_outlet rows for the given date. Outlets with no
+    prediction are listed in `missing_outlets`.
+    """
+    return await service.get_marginal_value(data)
 
 
 @router.get("/engines", response_model=list[PredictionEngine])

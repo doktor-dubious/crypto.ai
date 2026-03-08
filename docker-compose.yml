@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    command: uvicorn gorm_ai.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     environment:
@@ -10,6 +11,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+      - ./log:/app/log
     depends_on:
       db:
         condition: service_healthy
@@ -21,18 +26,32 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: celery -A gorm_ai.tasks.celery_app worker --loglevel=info
+    # --concurrency=1 --pool=solo: one prediction at a time, no forked sub-processes.
+    # Multiple concurrent predictions would each load the full model and saturate RAM/CPU.
+    command: celery -A gorm_ai.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
     environment:
       - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # Limit PyTorch/NumPy/OpenBLAS thread pools so they don't consume all cores.
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
+      - OPENBLAS_NUM_THREADS=4
+    volumes:
+      - ./src:/app/src
+      - ./log:/app/log
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 12G
 
   db:
     image: timescale/timescaledb:latest-pg16
@@ -64,6 +83,40 @@ services:
       retries: 5
     restart: unless-stopped
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://gorm:gorm@db:5432/gorm_ai
+      - BACKEND_INTERNAL_URL=http://app:8000
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      - BETTER_AUTH_URL=http://localhost:3000
+      - BETTER_AUTH_SECRET=a9cf5f42678745af6c721227d3b9d37d981fa9fed6d01053b8123ff81f8da58c
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+      - LOG_LEVEL=info
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./frontend:/app               # entire source tree — changes hot-reload instantly
+      - frontend_nm:/app/node_modules # named volume keeps installed packages off the host
+      - frontend_next:/app/.next      # named volume keeps build cache off the host
+      - ./log:/app/../log             # shared log dir with backend
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
+  frontend_nm:
+  frontend_next:

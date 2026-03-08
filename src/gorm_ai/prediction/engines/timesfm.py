@@ -29,6 +29,11 @@ class TimesFMEngine(PredictionEngine):
         self._model = None
         self._model_loaded = False
 
+    def get_actual_slug(self) -> str | None:
+        if self._model_loaded and self._model is None:
+            return "statistical"
+        return None
+
     def get_capabilities(self) -> EngineCapabilities:
         """Return engine capabilities."""
         return EngineCapabilities(
@@ -119,7 +124,7 @@ class TimesFMEngine(PredictionEngine):
                     predicted_value=float(predictions[i]),
                     lower_bound=float(lower[i]),
                     upper_bound=float(upper[i]),
-                    confidence=0.95,
+                    confidence=0.80,
                     economic_optimal=economic_optimal,
                 )
             )
@@ -211,7 +216,7 @@ class TimesFMEngine(PredictionEngine):
                     predicted_value=float(preds[idx]),
                     lower_bound=float(lower[idx]),
                     upper_bound=float(upper[idx]),
-                    confidence=0.95,
+                    confidence=0.80,
                     economic_optimal=economic_optimal,
                 ))
             output.append(day_results)
@@ -296,16 +301,36 @@ class TimesFMEngine(PredictionEngine):
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(all_quantiles[day_index, nearest_idx])
 
+    def _apply_hf_env(self) -> None:
+        """Push HF_TOKEN and HF_HUB_CACHE from settings into os.environ.
+
+        huggingface_hub reads these directly from the process environment, not
+        from pydantic-settings. Call this before any from_pretrained() invocation.
+        Relative HF_HUB_CACHE paths are resolved to absolute so they work
+        regardless of the process working directory.
+        """
+        import os
+
+        from gorm_ai.config import get_settings
+
+        s = get_settings()
+        if s.hf_token:
+            os.environ.setdefault("HF_TOKEN", s.hf_token)
+        if s.hf_hub_cache:
+            abs_cache = os.path.abspath(s.hf_hub_cache)
+            os.environ.setdefault("HF_HUB_CACHE", abs_cache)
+            logger.debug("HF_HUB_CACHE set to '%s'", abs_cache)
+
     def _load_model(self) -> None:
         """Load TimesFM 2.5 (200M PyTorch) from HuggingFace."""
         if self._model_loaded:
             return
+        self._apply_hf_env()
         try:
             import timesfm
 
             self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
                 "google/timesfm-2.5-200m-pytorch",
-                torch_compile=True,
             )
             self._model.compile(
                 timesfm.ForecastConfig(

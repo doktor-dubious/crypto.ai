@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Application
@@ -31,6 +32,16 @@ class Settings(BaseSettings):
 
     # API
     api_v1_prefix: str = "/api/v1"
+
+    # Fine-tuned model
+    finetuned_model_path: str = "models/timesfm_finetuned"
+
+    # HuggingFace Hub
+    hf_token: str | None = None
+    hf_hub_cache: str | None = None
+
+    # Frontend
+    frontend_url: str = "http://localhost:3000"
 
 
 @lru_cache

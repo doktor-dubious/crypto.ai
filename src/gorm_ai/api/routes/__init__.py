@@ -9,9 +9,13 @@ from gorm_ai.api.routes import (
     outlet_groups,
     outlets,
     pads,
+    prediction_engines,
+    prediction_strategies,
     predictions,
     sales,
+    simulation_strategies,
     simulations,
+    tasks,
 )
 
 api_router = APIRouter()
@@ -24,8 +28,16 @@ api_router.include_router(
     draw_adjustments.router, prefix="/draw-adjustments", tags=["draw-adjustments"]
 )
 api_router.include_router(pads.router, prefix="/pads", tags=["pads"])
+api_router.include_router(prediction_engines.router, prefix="/prediction-engines", tags=["prediction-engines"])
 api_router.include_router(sales.router, prefix="/sales", tags=["sales"])
+api_router.include_router(
+    prediction_strategies.router, prefix="/prediction-strategies", tags=["prediction-strategies"]
+)
 api_router.include_router(predictions.router, prefix="/predictions", tags=["predictions"])
+api_router.include_router(
+    simulation_strategies.router, prefix="/simulation-strategies", tags=["simulation-strategies"]
+)
 api_router.include_router(simulations.router, prefix="/simulations", tags=["simulations"])
+api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 
 __all__ = ["api_router"]

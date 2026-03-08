@@ -1,8 +1,10 @@
 """Async database connection and session management."""
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from gorm_ai.config import get_settings
 
@@ -30,3 +32,26 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+@asynccontextmanager
+async def task_session() -> AsyncGenerator[AsyncSession, None]:
+    """Provide a DB session safe for use inside Celery tasks.
+
+    Celery prefork workers call asyncio.run() which creates a new event loop
+    per task. asyncpg connections from the shared pool are bound to the loop
+    that created them, causing 'Future attached to a different loop' errors.
+    NullPool disables pooling so every task_session() call gets a fresh
+    connection on the current event loop.
+    """
+    task_engine = create_async_engine(
+        get_settings().database_url,
+        echo=get_settings().database_echo,
+        poolclass=NullPool,
+    )
+    factory = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            yield session
+    finally:
+        await task_engine.dispose()

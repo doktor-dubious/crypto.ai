@@ -1,6 +1,7 @@
 """Database models."""
 
-# Import Sales first since it uses a different base class
+# isort:skip_file
+# Import Sales first since it uses a different base class (TimescaleDB hypertable)
 from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.configuration import Configuration
 from gorm_ai.database.models.customer import Customer
@@ -13,9 +14,15 @@ from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
 from gorm_ai.database.models.outlet_info import OutletInfo
 from gorm_ai.database.models.pad import Pad, PadDate
+from gorm_ai.database.models.prediction import Prediction
+from gorm_ai.database.models.prediction_engine import PredictionEngine
+from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
 from gorm_ai.database.models.sales_filter import SalesFilter
-from gorm_ai.database.models.prediction_engine import PredictionEngine
+from gorm_ai.database.models.simulation import Simulation
+from gorm_ai.database.models.simulation_date import SimulationDate
+from gorm_ai.database.models.simulation_strategy import SimulationStrategy
+from gorm_ai.database.models.task_record import TaskRecord
 
 __all__ = [
     "Configuration",
@@ -32,8 +39,14 @@ __all__ = [
     "OutletInfo",
     "Pad",
     "PadDate",
+    "Prediction",
     "PredictionEngine",
+    "PredictionOutlet",
     "PredictionStrategy",
     "Sales",
     "SalesFilter",
+    "Simulation",
+    "SimulationDate",
+    "SimulationStrategy",
+    "TaskRecord",
 ]

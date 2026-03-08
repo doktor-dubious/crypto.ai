@@ -35,14 +35,14 @@ def upgrade() -> None:
         sa.Column("fixed_total_draw", sa.Float(), nullable=True),
         sa.Column("total_return_percentage", sa.Float(), nullable=True),
         sa.Column("outlet_return_percentage", sa.Float(), nullable=True),
-        sa.Column("ignore_fixed_draw", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("ignore_minimum_draw", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("ignore_maximum_draw", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("ignore_fixed", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("ignore_minimum", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("ignore_maximum", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("active", sa.Boolean(), nullable=False, server_default="true"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.ForeignKeyConstraint(["customer_id"], ["customers.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["prediction_engine_id"], ["prediction_engines.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["prediction_engine_id"], ["prediction_engine.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_prediction_strategies_customer_id", "prediction_strategies", ["customer_id"])

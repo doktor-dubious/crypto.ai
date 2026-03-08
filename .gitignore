@@ -62,3 +62,13 @@ Thumbs.db
 *.db
 *.sqlite
 log/*.json
+log/*.log
+
+# Models (HF cache + fine-tuned checkpoints)
+models/
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
+frontend/.env.*.local

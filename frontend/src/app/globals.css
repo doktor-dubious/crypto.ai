@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Sidebar */
+  --sidebar-width: 16rem;
+  --sidebar-width-icon: 3.5rem;
+
+  /* Topbar height matches sidebar header */
+  --topbar-height: 3.5rem;
+
+  /* Semantic color tokens — bridges CSS vars to Tailwind utilities */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-destructive: var(--destructive);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+}
+
+/* Light theme */
+:root {
+  --primary: #4A5759;
+  --primary-foreground: white;
+  --secondary-border: #bbb;
+  --background: #fafafa;
+  --foreground: #262626;
+  --foreground-inverse: #fafafa;
+  --muted-foreground: #303030;
+  --sidebar-background: #f9fafb;
+  --table-row-hover: rgb(220 220 220 / 0.7);
+  --input-background: #262626;
+  --input-border: #404040;
+
+  --ORG__background: oklch(1 0 0);
+  --ORG__foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --ORG__primary: oklch(0.205 0 0);
+  --ORG__primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --ORG__muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --ORG__sidebar-background: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+
+  --calendar-selected-background: #335c8c;
+}
+
+/* Dark theme */
+.dark {
+  --primary: #4A5759;
+  --primary-foreground: white;
+  --secondary-border: #bbb;
+  --background: #171717;
+  --foreground-inverse: #171717;
+  --sidebar-background: #171717;
+  --table-row-hover: #404040;
+  --input-background: #262626;
+  --input-border: #404040;
+
+  --ORG__background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --ORG__primary: oklch(0.922 0 0);
+  --ORG__primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --ORG__sidebar-background: oklch(0.185 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  --calendar-selected-background: #335c8c;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+}
+
+/*  ── Default Button ───────────────────────────────────────*/
+button[data-variant="default"],
+[role="button"][data-variant="default"] {
+  border-color: white;
+  text-transform: capitalize;
+  line-height: 1.75;
+  letter-spacing: 0.02857em;
+  min-width: 64px;
+  cursor: pointer;
+  box-shadow: rgba(0, 0, 0, 0.2);
+  border-radius: 3px !important;
+  font-weight: 500;
+  justify-content: center;
+  letter-spacing: 0.39998px;
+  line-height: 24.5px;
+  outline-color: rgb(255, 255, 255);
+  outline-style: none;
+  outline-width: 0px;
+  padding-block: 6px;
+  padding-inline: 16px;
+  padding: 6px 16px;
+}
+
+button[data-variant="default"]:hover,
+[role="button"][data-variant="default"]:hover {
+  border-radius: 8px !important;
+  cursor: pointer;
+}
+
+/*  ── Secondary Button ───────────────────────────────────────*/
+button[data-variant="secondary"],
+[role="button"][data-variant="secondary"] {
+  text-transform: capitalize;
+  line-height: 1.75;
+  letter-spacing: 0.02857em;
+  min-width: 64px;
+  cursor: pointer;
+  box-shadow: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--secondary-border) !important;
+  border-radius: 3px !important;
+  font-weight: 500;
+  justify-content: center;
+  letter-spacing: 0.39998px;
+  line-height: 24.5px;
+  outline-color: rgb(255, 255, 255);
+  outline-style: none;
+  outline-width: 0px;
+  padding-block: 6px;
+  padding-inline: 16px;
+  padding: 6px 16px;
+}
+
+button[data-variant="secondary"]:hover,
+[role="button"][data-variant="secondary"]:hover {
+  border-radius: 8px !important;
+  background-color: var(--secondary-hover) !important;
+  cursor: pointer;
+}
+
+/*  ── Outline Button ───────────────────────────────────────*/
+button[data-variant="outline"],
+[data-slot="button"][data-variant="outline"] {
+  color: var(--foreground);
+  border-color: rgba(0, 0, 0, 0.23);
+  text-transform: capitalize;
+  line-height: 1.75;
+  letter-spacing: 0.02857em;
+  min-width: 64px;
+  cursor: pointer;
+  box-shadow: rgba(0, 0, 0, 0.2);
+}
+
+button[data-variant="outline"]:hover,
+[data-slot="button"][data-variant="outline"]:hover {
+  border-color: rgba(0, 0, 0, 0.33);
+  background-color: rgba(38, 38, 38, 0.04);
+}
+
+/*  ── Table ───────────────────────────────────────*/
+tbody>[data-slot="table-row"]:hover {
+  background-color: var(--table-row-hover) !important;
+}
+
+thead>[data-slot="table-row"]:hover {
+  background-color: transparent !important;
+}
+
+/*  ── Calendar Pad Badge ───────────────────────────────────────*/
+.calendar-pad-badge {
+  color: var(--color-white-muted) !important;
+  border-radius: 4px !important;
+  padding-top: 5px !important;
+}

@@ -21,6 +21,7 @@ class Configuration(Base):
     minimum_delivery: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eo_to_delivery_rounding: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 1=round, 2=ceil, 3=floor
     prediction_engine_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("prediction_engine.id", ondelete="SET NULL"),

@@ -11,6 +11,7 @@ class PredictionEngine(StrEnum):
 
     STATISTICAL = "statistical"
     TIMESFM = "timesfm"
+    TIMESFM_FINETUNED = "timesfm_finetuned"
     CUSTOM = "custom"
 
 
@@ -37,6 +38,18 @@ class PredictionRequest(BaseModel):
     engine: PredictionEngine | None = None    # falls back to customer/global config then STATISTICAL
     engine_params: dict | None = None
     batch_size: int = 32                      # outlets per forward pass (increase for GPU, decrease if OOM)
+    prediction_strategy_id: str | None = None  # FK to prediction_strategies
+    increase_total_by: int | None = None      # extra copies to distribute greedily per date
+    increase_total_by_pct: float | None = None  # extra copies as % of total base delivered per date
+    increase_outlets_by: int | None = None    # flat copies added to every outlet before delivery constraints
+    increase_outlets_by_pct: float | None = None  # % of each outlet's base added before delivery constraints
+    fixed_total_delivery: int | None = None   # distribute exactly this many copies per date via greedy heap (bypasses base + delivery constraints)
+    total_return_pct: float | None = None     # target overall return % across all outlets; profit-optimal per-outlet allocation via Lagrange multiplier
+    target_return_pct: float | None = None    # uniform per-outlet return target: deliver at the (100-R)th demand percentile per outlet
+    outlet_return_percentage: dict[str, float] | None = None  # per-outlet target return %; overrides target_return_pct for matched outlets
+    ignore_fixed: bool = False       # ignore outlet delivery fixed constraint
+    ignore_minimum: bool = False     # ignore outlet delivery minimum constraint
+    ignore_maximum: bool = False     # ignore outlet delivery maximum constraint
 
 
 class PredictionResult(BaseModel):
@@ -70,6 +83,35 @@ class PredictionResponse(BaseModel):
     created_at: datetime
 
 
+class MarginalValueRequest(BaseModel):
+    """Request to rank outlets by their probability of selling one more copy."""
+
+    customer_id: str
+    date: date
+    outlet_ids: list[str] | None = None      # None = resolve from outlet_group_id or all active
+    outlet_group_id: str | None = None
+
+
+class MarginalValueOutlet(BaseModel):
+    """Marginal sale probability result for a single outlet."""
+
+    outlet_id: str
+    predicted: float                          # P50 point forecast
+    lower_bound: float | None                 # P10
+    upper_bound: float | None                 # P90
+    eo: float | None                          # economic optimal
+    delivered: float | None                   # recommended delivery
+    marginal_sale_probability: float          # P(demand > delivered)
+
+
+class MarginalValueResponse(BaseModel):
+    """Outlets ranked by probability of selling one more copy, highest first."""
+
+    date: date
+    outlets: list[MarginalValueOutlet]        # sorted descending by marginal_sale_probability
+    missing_outlets: list[str]                # outlet_ids with no prediction for this date
+
+
 class PredictionTaskStatus(BaseModel):
     """Schema for prediction task status."""
 
@@ -80,3 +122,118 @@ class PredictionTaskStatus(BaseModel):
     result: PredictionResponse | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+# ── Prediction Strategy schemas ───────────────────────────────────────────────
+
+class PredictionStrategyCreate(BaseModel):
+    """Schema for creating a prediction strategy."""
+
+    customer_id: str
+    name: str
+    description: str | None = None
+    type: int = 1
+
+
+class PredictionStrategyUpdate(BaseModel):
+    """Schema for updating a prediction strategy (all fields optional)."""
+
+    name: str | None = None
+    description: str | None = None
+    type: int | None = None
+    prediction_engine_id: str | None = None
+    increase_total_by_number: float | None = None
+    increase_total_by_percentage: float | None = None
+    increase_outlets_by_number: float | None = None
+    increase_outlets_by_percentage: float | None = None
+    fixed_total_draw: float | None = None
+    total_return_percentage: float | None = None
+    outlet_return_percentage: float | None = None
+    ignore_fixed: bool | None = None
+    ignore_minimum: bool | None = None
+    ignore_maximum: bool | None = None
+
+
+class CompletedPredictionResponse(BaseModel):
+    """Schema for a completed prediction list item."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    customer_id: str
+    status: str  # success | failure | revoked
+    outlet_group_id: str | None
+    outlet_group_name: str | None
+    prediction_strategy_id: str | None
+    strategy_name: str | None
+    date: date | None
+    engine: str | None
+    engine_params: dict | None
+    batch_size: int | None
+    delay: int | None
+    use_financials: bool | None
+    use_pad: bool | None
+    outlet_count: int
+    error: str | None
+    created_at: datetime
+
+
+class PredictionAnalyticsSummary(BaseModel):
+    """Aggregate analytics for a completed prediction."""
+
+    outlet_count: int
+    avg_predicted: float | None
+    avg_confidence: float | None
+    avg_eo: float | None
+    total_delivered: float | None
+    total_eo: float | None
+    total_predicted: float | None
+    total_lower_bound: float | None
+    total_upper_bound: float | None
+    min_predicted: float | None
+    max_predicted: float | None
+
+
+class CompletedPredictionListResponse(BaseModel):
+    """Paginated list of completed predictions."""
+
+    items: list[CompletedPredictionResponse]
+    total: int
+
+
+class PredictionEngineResponse(BaseModel):
+    """Schema for prediction engine response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    slug: str
+    name: str
+    description: str | None
+    notes: str | None
+
+
+class PredictionStrategyResponse(BaseModel):
+    """Schema for prediction strategy response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    customer_id: str
+    name: str
+    description: str | None
+    type: int
+    prediction_engine_id: str | None
+    increase_total_by_number: float | None
+    increase_total_by_percentage: float | None
+    increase_outlets_by_number: float | None
+    increase_outlets_by_percentage: float | None
+    fixed_total_draw: float | None
+    total_return_percentage: float | None
+    outlet_return_percentage: float | None
+    ignore_fixed: bool
+    ignore_minimum: bool
+    ignore_maximum: bool
+    active: bool
+    created_at: datetime
+    updated_at: datetime

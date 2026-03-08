@@ -91,6 +91,14 @@ class PredictionEngine(ABC):
             results.append(result)
         return results
 
+    def get_actual_slug(self) -> str | None:
+        """Return the slug of the algorithm actually used, or None to use the registered type.
+
+        Override in engines that may degrade to a different algorithm at runtime
+        (e.g. TimesFM falling back to exponential smoothing when the model isn't loaded).
+        """
+        return None
+
     def validate_input(self, historical_data: list[dict], horizon: int) -> None:
         """
         Validate input data before prediction.

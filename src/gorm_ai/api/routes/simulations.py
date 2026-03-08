@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gorm_ai.api.deps import get_db
+from gorm_ai.api.deps import TaskServiceDep, get_db
 from gorm_ai.schemas.simulation import (
     SimulationRequest,
     SimulationResponse,
@@ -34,7 +34,10 @@ async def run_simulation(
 
 
 @router.post("/async", response_model=SimulationTaskStatus, status_code=202)
-async def run_simulation_async(data: SimulationRequest) -> SimulationTaskStatus:
+async def run_simulation_async(
+    data: SimulationRequest,
+    task_service: TaskServiceDep,
+) -> SimulationTaskStatus:
     """Queue a simulation as a background Celery task.
 
     Returns a task ID immediately. Poll GET /simulations/tasks/{task_id} for status.
@@ -44,6 +47,7 @@ async def run_simulation_async(data: SimulationRequest) -> SimulationTaskStatus:
     from gorm_ai.tasks.simulations import run_simulation_task
 
     task = run_simulation_task.delay(data.model_dump(mode="json"))
+    await task_service.create(task.id, "simulation", data.customer_id)
 
     return SimulationTaskStatus(
         task_id=task.id,
@@ -70,7 +74,8 @@ async def get_simulation_task_status(task_id: str) -> SimulationTaskStatus:
     elif result.state == "SUCCESS":
         status, progress, message = "completed", 1.0, "Simulation completed"
     elif result.state == "FAILURE":
-        status, progress, message = "failed", 0.0, str(result.result) if result.result else "Task failed"
+        error_msg = str(result.result) if result.result else "Task failed"
+        status, progress, message = "failed", 0.0, error_msg
     else:
         status, progress, message = "running", 0.5, f"Task state: {result.state}"
 

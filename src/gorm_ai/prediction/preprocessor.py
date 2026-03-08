@@ -37,6 +37,7 @@ class DataPreprocessor:
 
         df = pd.DataFrame(data)
         df["date"] = pd.to_datetime(df["date"])
+        df["value"] = pd.to_numeric(df["value"], errors="coerce").astype(float)
         df = df.sort_values("date").reset_index(drop=True)
 
         if self.fill_missing:
@@ -57,7 +58,7 @@ class DataPreprocessor:
 
         date_range = pd.date_range(start=df["date"].min(), end=df["date"].max(), freq="D")
         df = df.set_index("date").reindex(date_range)
-        df["value"] = df["value"].interpolate(method="linear")
+        df["value"] = df["value"].interpolate(method="linear").ffill().bfill()
         df = df.reset_index().rename(columns={"index": "date"})
         return df
 
