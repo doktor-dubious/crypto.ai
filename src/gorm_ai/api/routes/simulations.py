@@ -1,13 +1,20 @@
 """Simulation API routes."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.api.deps import TaskServiceDep, get_db
 from gorm_ai.schemas.simulation import (
+    CompletedSimulationListResponse,
+    CompletedSimulationResponse,
+    FilteredOverviewResponse,
+    ModelFitResponse,
     SimulationRequest,
     SimulationResponse,
     SimulationTaskStatus,
+    ZeroShotResponse,
 )
 from gorm_ai.services.simulation import SimulationService
 
@@ -16,6 +23,85 @@ router = APIRouter()
 
 def get_simulation_service(session: AsyncSession = Depends(get_db)) -> SimulationService:
     return SimulationService(session)
+
+
+@router.get("", response_model=CompletedSimulationListResponse)
+async def list_simulations(
+    customer_id: str,
+    limit: int = 500,
+    offset: int = 0,
+    service: SimulationService = Depends(get_simulation_service),
+) -> CompletedSimulationListResponse:
+    """List completed simulations for a customer."""
+    items, total = await service.list_completed(customer_id, limit=limit, offset=offset)
+    return CompletedSimulationListResponse(
+        items=[CompletedSimulationResponse(**item) for item in items],
+        total=total,
+    )
+
+
+@router.get("/{simulation_id}/zero-shot", response_model=ZeroShotResponse)
+async def get_simulation_zero_shot(
+    simulation_id: str,
+    column: str = "delivered",
+    weekdays: list[int] | None = Query(default=None),
+    service: SimulationService = Depends(get_simulation_service),
+) -> ZeroShotResponse:
+    """Get zero-shot accuracy counts for a simulation."""
+    result = await service.get_zero_shot(simulation_id, column=column, weekdays=weekdays)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return ZeroShotResponse(**result)
+
+
+@router.get("/{simulation_id}/model-fit", response_model=ModelFitResponse)
+async def get_simulation_model_fit(
+    simulation_id: str,
+    outlet_ids: list[str] | None = Query(default=None),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    weekdays: list[int] | None = Query(default=None),
+    service: SimulationService = Depends(get_simulation_service),
+) -> ModelFitResponse:
+    """Get per-date aggregated actual_sale and delivered for a simulation."""
+    result = await service.get_model_fit(simulation_id, outlet_ids=outlet_ids, from_date=from_date, to_date=to_date, weekdays=weekdays)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return ModelFitResponse(**result)
+
+
+@router.get("/{simulation_id}/overview", response_model=FilteredOverviewResponse)
+async def get_simulation_overview_filtered(
+    simulation_id: str,
+    column: str = "delivered",
+    weekdays: list[int] | None = Query(default=None),
+    service: SimulationService = Depends(get_simulation_service),
+) -> FilteredOverviewResponse:
+    """Get re-aggregated overview stats for a simulation, optionally filtered by weekday."""
+    result = await service.get_overview_filtered(simulation_id, column=column, weekdays=weekdays)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return FilteredOverviewResponse(**result)
+
+
+@router.delete("/records/{record_id}", status_code=204)
+async def delete_simulation_by_record(
+    record_id: str,
+    service: SimulationService = Depends(get_simulation_service),
+) -> None:
+    """Soft-delete a simulation by its TaskRecord id."""
+    if not await service.delete_by_record_id(record_id):
+        raise HTTPException(status_code=404, detail="Simulation record not found")
+
+
+@router.delete("/{simulation_id}", status_code=204)
+async def delete_simulation(
+    simulation_id: str,
+    service: SimulationService = Depends(get_simulation_service),
+) -> None:
+    """Soft-delete a simulation record."""
+    if not await service.delete_simulation(simulation_id):
+        raise HTTPException(status_code=404, detail="Simulation not found")
 
 
 @router.post("", response_model=SimulationResponse, status_code=201)
@@ -47,7 +133,8 @@ async def run_simulation_async(
     from gorm_ai.tasks.simulations import run_simulation_task
 
     task = run_simulation_task.delay(data.model_dump(mode="json"))
-    await task_service.create(task.id, "simulation", data.customer_id)
+    name = data.name or f"Simulation {data.simulation_from} – {data.simulation_to}"
+    await task_service.create(task.id, "simulation", data.customer_id, name=name)
 
     return SimulationTaskStatus(
         task_id=task.id,

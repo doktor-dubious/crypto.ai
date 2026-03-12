@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.models import OutletGroup, OutletGroupMember
+from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.schemas.outlet_group import OutletGroupCreate, OutletGroupUpdate
 
 
@@ -80,6 +81,20 @@ class OutletGroupService:
         await self.session.flush()
         await self.session.refresh(member)
         return member
+
+    async def get_outlets(self, group_id: str) -> list[Outlet]:
+        """Get all active outlets in a group."""
+        result = await self.session.execute(
+            select(Outlet)
+            .join(OutletGroupMember, OutletGroupMember.outlet_id == Outlet.id)
+            .where(
+                OutletGroupMember.group_id == group_id,
+                OutletGroupMember.active.is_(True),
+                Outlet.active.is_(True),
+            )
+            .order_by(Outlet.name)
+        )
+        return list(result.scalars().all())
 
     async def remove_outlet(self, group_id: str, outlet_id: str) -> bool:
         """Remove an outlet from a group."""

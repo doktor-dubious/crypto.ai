@@ -38,6 +38,7 @@ class TaskRecordResponse(BaseModel):
     error: str | None
     progress: int = 0
     progress_message: str | None = None
+    name: str | None = None
     created_at: datetime
     updated_at: datetime
 

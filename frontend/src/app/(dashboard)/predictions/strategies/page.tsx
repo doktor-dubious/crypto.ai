@@ -35,6 +35,7 @@ import {
   type PredictionStrategyResponse, type PredictionStrategyUpdate,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -196,7 +197,9 @@ export default function PredictionStrategiesPage() {
       setNewDescription("")
       setNewType(1)
       setSelectedStrategy(created)
+      toast.success(t("toastCreated", { name: created.name }))
     },
+    onError: () => { toast.error(t("toastCreateError")) },
   })
 
   const updateMutation = useMutation({
@@ -205,7 +208,9 @@ export default function PredictionStrategiesPage() {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ["prediction-strategies"] })
       setSelectedStrategy(updated)
+      toast.success(t("toastUpdated", { name: updated.name }))
     },
+    onError: () => { toast.error(t("toastUpdateError")) },
   })
 
   const deleteMutation = useMutation({
@@ -214,7 +219,9 @@ export default function PredictionStrategiesPage() {
       queryClient.invalidateQueries({ queryKey: ["prediction-strategies"] })
       if (selectedStrategy?.id === id) setSelectedStrategy(null)
       setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+      toast.success(t("toastDeleted"))
     },
+    onError: () => { toast.error(t("toastDeleteError")) },
   })
 
   // ── Sync draft when selected strategy changes ──────────────────────────────
@@ -636,14 +643,14 @@ export default function PredictionStrategiesPage() {
             >
               <div className="relative w-full">
 
-                <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex" xxclassName="w-full rounded-none border-b h-9 px-2 justify-start bg-transparent shrink-0 gap-0.5">
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab1">{t("tabDetails")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab2">{t("tabAdjustments")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab3">{t("tabConstraints")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab4">{t("tabOutletConstraints")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab5">{t("tabTechSpecs")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab6">{t("tabActions")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab7">{t("tabNotes")}</TabsTrigger>
+                <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabAdjustments")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabConstraints")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabOutletConstraints")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabTechSpecs")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabActions")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab7">{t("tabNotes")}</TabsTrigger>
                 </TabsList>
 
                 {/* <div className="flex-1 overflow-y-auto"> */}
@@ -810,6 +817,47 @@ export default function PredictionStrategiesPage() {
 
               {/* ─ Notes ─ */}
               <TabsContent value="tab7" className="mt-6 pl-[2px] max-w-3xl space-y-6">
+
+                {/* ── Strategy descriptions ── */}
+                <div className="space-y-4">
+                  {[
+                    {
+                      title: "Increase Total By Number",
+                      body: "Adds a fixed number of extra copies to the total predicted delivery for the day. The additional copies are distributed greedily across outlets in order of highest expected return — outlets most likely to sell additional copies receive them first. Use this when you need to push a known absolute volume increase (e.g. a promotional print run of 500 extra copies).",
+                    },
+                    {
+                      title: "Increase Total By Percentage",
+                      body: "Increases the total predicted delivery by a percentage of the base predicted total. Like Increase Total By Number, the extra copies are distributed greedily by expected return. Use this for proportional uplifts — e.g. a 5% increase across the board during a high-demand period — where the uplift should scale with the size of the run.",
+                    },
+                    {
+                      title: "Increase Outlets By Number",
+                      body: "Adds a flat number of copies to every outlet individually, before delivery constraints are applied. Unlike the total-based adjustments, this affects all outlets equally regardless of their predicted demand. Use this when every outlet needs a guaranteed minimum uplift — for example, including a supplement or promotional insert that all outlets must carry.",
+                    },
+                    {
+                      title: "Increase Outlets By Percentage",
+                      body: "Increases each outlet's predicted delivery by a percentage of that outlet's own base prediction, before constraints are applied. Larger outlets receive more additional copies in absolute terms, but the relative uplift is equal across all outlets. Suitable for proportional outlet-level adjustments, such as accounting for a systematic under-prediction bias.",
+                    },
+                    {
+                      title: "Fixed Total Delivery",
+                      body: "Overrides the model's prediction entirely and delivers exactly this many copies in total, distributed across outlets via greedy allocation. Delivery constraints (minimum, maximum, fixed) are bypassed. Use this when the total print run is predetermined and must be fully distributed — for example, a fixed print-run contract where every copy must be placed.",
+                    },
+                    {
+                      title: "Total Return Percentage",
+                      body: "Targets a specific overall return rate across all outlets combined, using a Lagrange multiplier to find the profit-optimal per-outlet allocation. Outlets with better sell-through rates receive proportionally more copies. For example, a target of 15% means the strategy aims for roughly 85% of all delivered copies to be sold. Use this to balance distribution risk against revenue at the network level.",
+                    },
+                    {
+                      title: "Outlet Return Percentage",
+                      body: "Applies a uniform per-outlet return target: each outlet is delivered at the (100 − R)th percentile of its own historical demand distribution. For example, a 10% target delivers at the 90th percentile for each outlet individually — meaning each outlet is expected to sell out 90% of the time. This is more conservative than the total return approach as it protects every outlet equally, rather than concentrating risk on low-performers.",
+                    },
+                  ].map((item) => (
+                    <div key={item.title}>
+                      <p className="text-xs font-semibold mb-1">{item.title}</p>
+                      <p className="text-xs text-[var(--muted-foreground)] leading-relaxed">{item.body}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t border-border pt-6 space-y-4">
                 <div className="overflow-x-auto rounded-md border border-border">
                   <table className="w-full text-sm">
                     <thead>
@@ -838,18 +886,18 @@ export default function PredictionStrategiesPage() {
                         },
                         {
                           priority: "+after base",
-                          param: "Increase Outlets by / %",
+                          param: "increase_outlets_by / _pct",
                           effect: "Applied to base before delivery constraints",
                         },
                         {
                           priority: "+after constraints",
-                          param: "Increase Total by / %",
+                          param: "increase_total_by / _pct",
                           effect: "Distributed across outlets via heap after everything else",
                         },
                       ].map((row) => (
                         <tr key={row.priority} className="hover:bg-muted/20">
                           <td className="px-4 py-2.5 text-xs text-[var(--muted-foreground)] whitespace-nowrap align-top">{row.priority}</td>
-                          <td className="px-4 py-2.5 text-xs font-medium whitespace-nowrap align-top">{row.param}</td>
+                          <td className={`px-4 py-2.5 text-xs whitespace-nowrap align-top ${row.param.startsWith("increase_") ? "font-mono opacity-70" : "font-medium"}`}>{row.param}</td>
                           <td className="px-4 py-2.5 text-xs text-[var(--muted-foreground)] align-top">{row.effect}</td>
                         </tr>
                       ))}
@@ -862,6 +910,7 @@ export default function PredictionStrategiesPage() {
                   <li>Fixed Total Delivery will return a fixed total delivery quantity, but only if it does not conflict with fixed/minimum/maximum delivery constraints set at the outlet level.</li>
                   <li>Combining multiple strategies may have unpredictable results.</li>
                 </ul>
+                </div>
               </TabsContent>
             </Tabs>
           </div >

@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from gorm_ai.api.deps import DrawAdjustmentServiceDep, OutletGroupServiceDep
 from gorm_ai.schemas.draw_adjustment import DrawAdjustmentResponse
+from gorm_ai.schemas.outlet import OutletResponse
 from gorm_ai.schemas.outlet_group import (
     OutletGroupCreate,
     OutletGroupMemberCreate,
@@ -74,6 +75,16 @@ async def delete_outlet_group(
 
 
 # Outlet group membership endpoints
+
+
+@router.get("/{group_id}/outlets", response_model=list[OutletResponse])
+async def list_group_outlets(
+    group_id: str,
+    service: OutletGroupServiceDep,
+) -> list[OutletResponse]:
+    """Get all active outlets in a group."""
+    outlets = await service.get_outlets(group_id)
+    return [OutletResponse.model_validate(o) for o in outlets]
 
 
 @router.post("/{group_id}/outlets", status_code=201)

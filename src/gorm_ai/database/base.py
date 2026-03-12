@@ -22,7 +22,7 @@ class Base(DeclarativeBase):
         server_default=text("gen_random_uuid()"),
         default=lambda: str(uuid4()),
     )
-    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utcnow,

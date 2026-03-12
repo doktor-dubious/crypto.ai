@@ -34,6 +34,7 @@ class OutletGroupResponse(OutletGroupBase):
     id: str
     customer_id: str
     active: bool
+    outlet_count: int = 0
     created_at: datetime
     updated_at: datetime
 

@@ -27,6 +27,15 @@ ml = [
     "torch>=2.0.0",
     "timesfm @ git+https://github.com/google-research/timesfm.git",
 ]
+autogluon = [
+    "autogluon.timeseries>=1.2.0",
+]
+# MOIRAI-2 (Salesforce/moirai-2.0-R-small via uni2ts) is implemented in
+# src/gorm_ai/prediction/engines/moirai2_engine.py and registered as "moirai2",
+# but cannot be installed alongside autogluon-timeseries:
+#   uni2ts requires gluonts~=0.14.3  (<0.15)
+#   autogluon-timeseries>=1.2 requires gluonts>=0.15,<0.17
+# Re-enable once Salesforce updates their gluonts dependency in uni2ts.
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

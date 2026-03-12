@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from gorm_ai.api.deps import OutletServiceDep
 from gorm_ai.schemas.outlet import (
+    DeliveryAnalyticsResponse,
     OutletCreate,
     OutletDeliveryCreate,
     OutletDeliveryResponse,
@@ -106,6 +107,31 @@ async def add_outlet_info(
     if not info:
         raise HTTPException(status_code=404, detail="Outlet not found")
     return OutletInfoResponse.model_validate(info)
+
+
+@router.delete("/{outlet_id}/info/{info_id}", status_code=204)
+async def delete_outlet_info(
+    outlet_id: str,
+    info_id: str,
+    service: OutletServiceDep,
+) -> None:
+    """Delete an outlet info record (soft delete)."""
+    deleted = await service.delete_info(outlet_id, info_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Outlet info not found")
+
+
+# Delivery analytics
+@router.get("/{outlet_id}/delivery-analytics", response_model=DeliveryAnalyticsResponse)
+async def get_outlet_delivery_analytics(
+    outlet_id: str,
+    service: OutletServiceDep,
+) -> DeliveryAnalyticsResponse:
+    """Get delivery analytics per weekday for an outlet."""
+    result = await service.get_delivery_analytics(outlet_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return result
 
 
 # Delivery routes

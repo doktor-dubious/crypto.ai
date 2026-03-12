@@ -19,8 +19,11 @@ class SimulationRequest(BaseModel):
     """Request schema for a historic simulation run."""
 
     customer_id: str
+    name: str | None = None
+    description: str | None = None
     simulation_from: date
     simulation_to: date
+    simulation_type: int = 1                # 1=prediction strategy, 3=same draw, 4=same sale
     delay: int = 14                         # days before chunk start to cut off history
     use_financials: bool = True             # include per-outlet weekday cost/profit covariates
     use_pad: bool = True                    # include pad event date covariates
@@ -205,6 +208,73 @@ class SimulationRecordResponse(BaseModel):
     updated_at: datetime
 
 
+class CompletedSimulationResponse(BaseModel):
+    """Flattened view of a simulation task row for the Completed Simulations list."""
+
+    id: str                                   # task_record.id (stable row key)
+    task_id: str | None = None
+    simulation_id: str | None = None          # null for failure / revoked rows
+    status: str                               # success / failure / revoked
+    customer_id: str
+    name: str | None = None
+    description: str | None = None
+    simulation_from: date | None = None
+    simulation_to: date | None = None
+    engine: str | None = None
+    delay: int | None = None
+    outlet_count: int = 0
+    outlet_group_id: str | None = None
+    outlet_group_name: str | None = None
+    prediction_strategy_name: str | None = None
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    # Actual (historical) totals
+    actual_total_delivered: float | None = None
+    actual_total_sale: float | None = None
+    actual_total_returned: float | None = None
+    # Summary stats (null for non-success rows)
+    d_total_delivered: int | None = None
+    d_total_sold: int | None = None
+    d_total_returned: int | None = None
+    d_diff_delivered: int | None = None
+    d_diff_return: int | None = None
+    d_lost_sale: int | None = None
+    d_more_sale: int | None = None
+    d_g1: float | None = None
+    d_g2: float | None = None
+    d_g3: float | None = None
+    d_g4: float | None = None
+    p_total_delivered: float | None = None
+    p_total_sold: float | None = None
+    p_total_returned: float | None = None
+    p_diff_delivered: int | None = None
+    p_diff_return: int | None = None
+    p_lost_sale: int | None = None
+    p_more_sale: int | None = None
+    p_g1: float | None = None
+    p_g2: float | None = None
+    p_g3: float | None = None
+    p_g4: float | None = None
+    eo_total_delivered: float | None = None
+    eo_total_sold: float | None = None
+    eo_total_returned: float | None = None
+    eo_diff_delivered: int | None = None
+    eo_diff_return: int | None = None
+    eo_lost_sale: int | None = None
+    eo_more_sale: int | None = None
+    eo_g1: float | None = None
+    eo_g2: float | None = None
+    eo_g3: float | None = None
+    eo_g4: float | None = None
+
+
+class CompletedSimulationListResponse(BaseModel):
+    items: list[CompletedSimulationResponse]
+    total: int
+
+
 class SimulationDateResponse(BaseModel):
     """DB row response for a SimulationDate record."""
 
@@ -216,3 +286,56 @@ class SimulationDateResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ZeroShotResponse(BaseModel):
+    """Zero-shot accuracy counts for a simulation."""
+
+    zero_shot: int
+    zero_shot_plus_1: int
+    zero_shot_minus_1: int
+    zero_shot_plus_2: int
+    zero_shot_minus_2: int
+    zero_shot_plus_mul: int
+    zero_shot_minus_mul: int
+    no_actual_data: int
+    total: int
+
+
+class ModelFitOutlet(BaseModel):
+    id: str
+    name: str
+
+
+class ModelFitDataPoint(BaseModel):
+    date: date
+    actual_sale: float | None
+    delivered: float | None
+    eo: float | None
+    predicted: float | None
+    lower_bound: float | None
+    upper_bound: float | None
+
+
+class ModelFitResponse(BaseModel):
+    outlets: list[ModelFitOutlet]
+    data: list[ModelFitDataPoint]
+
+
+class FilteredOverviewResponse(BaseModel):
+    """Aggregated overview stats for a filtered (e.g. weekday) subset of simulation dates."""
+
+    total_delivered: float | None
+    total_sold: float | None
+    total_returned: float | None
+    actual_total_delivered: float | None = None
+    actual_total_sale: float | None = None
+    actual_total_returned: float | None = None
+    diff_delivered: float | None = None
+    lost_sale: float | None = None
+    diff_return: float | None = None
+    more_sale: float | None = None
+    g1: float | None = None
+    g2: float | None = None
+    g3: float | None = None
+    g4: float | None = None

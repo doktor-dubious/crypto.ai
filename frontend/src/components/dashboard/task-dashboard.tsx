@@ -1,13 +1,21 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Activity, BarChart3, X, Loader2 } from "lucide-react"
+import { X, Loader2 } from "lucide-react"
+import { AnimatedActivity, AnimatedFlask } from "@/components/icons/animated-icons"
+import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, customersApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 type BadgeVariant = "muted" | "info" | "success" | "destructive" | "warning"
@@ -23,15 +31,36 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
 function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerName?: string }) {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
+  const router = useRouter()
+
+  // Tick every 30s so relative time strings recalculate even when task data is unchanged
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
+  const completedRoute = task.type === "prediction"
+    ? `/predictions/completed?task_id=${task.task_id}`
+    : `/simulations/completed?task_id=${task.task_id}`
+
+  function handleClick() {
+    if (isFinished) router.push(completedRoute)
+  }
+
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const cancelMutation = useMutation({
     mutationFn: () => tasksApi.cancel(task.task_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      setConfirmOpen(false)
     },
   })
 
-  const Icon = task.type === "prediction" ? Activity : BarChart3
+  const iconControls = useAnimation()
+  const Icon = task.type === "prediction" ? AnimatedActivity : AnimatedFlask
 
   const timeRef = task.completed_at ?? task.started_at ?? task.created_at
   const timeStr = timeRef
@@ -39,7 +68,15 @@ function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerNa
     : null
 
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors">
+    <div
+      className={cn(
+        "flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors",
+        isFinished && "cursor-pointer"
+      )}
+      onClick={handleClick}
+      onMouseEnter={() => iconControls.start("animate")}
+      onMouseLeave={() => iconControls.start("normal")}
+    >
       <div
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
@@ -55,7 +92,7 @@ function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerNa
         {task.status === "started" ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
-          <Icon className="h-4 w-4" />
+          <Icon className="h-4 w-4" controls={iconControls} />
         )}
       </div>
 
@@ -71,6 +108,11 @@ function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerNa
         {customerName && (
           <p className="text-xs text-[var(--muted-foreground)] mt-0.5 truncate">
             {customerName}
+          </p>
+        )}
+        {task.name && (
+          <p className="text-xs text-[var(--muted-foreground)] mt-0.5 truncate">
+            {task.name}
           </p>
         )}
         {timeStr && (
@@ -101,8 +143,8 @@ function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerNa
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 text-[var(--muted-foreground)] hover:text-[var(--destructive)]"
-          onClick={() => cancelMutation.mutate()}
+          className="h-7 w-7 shrink-0 cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--destructive)]"
+          onClick={(e) => { e.stopPropagation(); setConfirmOpen(true) }}
           disabled={cancelMutation.isPending}
           aria-label={t("cancel")}
         >
@@ -113,6 +155,25 @@ function TaskCard({ task, customerName }: { task: TaskRecordResponse; customerNa
           )}
         </Button>
       )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("cancelConfirmTitle")}</DialogTitle>
+            <DialogDescription>{t("cancelConfirmDescription")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(false)}>{t("cancelConfirmNo")}</Button>
+            <Button
+              variant="destructive" size="sm"
+              onClick={() => cancelMutation.mutate()}
+              disabled={cancelMutation.isPending}
+            >
+              {cancelMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("cancelConfirmYes")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -165,6 +226,7 @@ export function TaskDashboard() {
   const { data: tasksData, isLoading } = useQuery({
     queryKey: ["tasks"],
     queryFn: () => tasksApi.list({ limit: 100 }),
+    staleTime: 0,
     refetchInterval: (query) => {
       const items = query.state.data?.items ?? []
       const hasActive = items.some((t) => t.status === "started" || t.status === "pending")
@@ -183,20 +245,25 @@ export function TaskDashboard() {
     customerMap[c.id] = c.name
   })
 
+  const COLUMN_LIMIT = 10
+
   const tasks = tasksData?.items ?? []
   const pending = tasks
     .filter((t) => t.status === "pending")
     .sort((a, b) => (b.created_at < a.created_at ? -1 : 1))
+    .slice(0, COLUMN_LIMIT)
   const running = tasks
     .filter((t) => t.status === "started")
     .sort((a, b) =>
       (b.started_at ?? b.created_at) < (a.started_at ?? a.created_at) ? -1 : 1
     )
+    .slice(0, COLUMN_LIMIT)
   const finished = tasks
     .filter((t) => ["success", "failure", "revoked"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )
+    .slice(0, COLUMN_LIMIT)
 
   if (isLoading) {
     return (

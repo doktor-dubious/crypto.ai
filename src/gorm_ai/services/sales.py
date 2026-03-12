@@ -4,7 +4,7 @@ from datetime import date
 
 from collections import defaultdict
 
-from sqlalchemy import not_, select
+from sqlalchemy import func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.models import Sales
@@ -114,13 +114,15 @@ class SalesService:
         end_date: date,
         start_date: date | None = None,
         apply_sales_filter: bool = False,
-    ) -> dict[str, list[Sales]]:
+    ) -> dict[str, list[tuple[date, int]]]:
         """Fetch sales for multiple outlets in a single query.
 
-        Returns a dict mapping outlet_id → list[Sales], sorted by date ascending.
-        Outlets with no data will be absent from the result.
+        Returns a dict mapping outlet_id → list of (date, sold) tuples,
+        sorted by date ascending. Outlets with no data will be absent from
+        the result. Only the columns needed for prediction are fetched to
+        avoid the overhead of instantiating full ORM objects.
         """
-        query = select(Sales).where(
+        query = select(Sales.outlet_id, Sales.date, Sales.sold).where(
             Sales.customer_id == customer_id,
             Sales.outlet_id.in_(outlet_ids),
             Sales.date <= end_date,
@@ -146,11 +148,11 @@ class SalesService:
         query = query.order_by(Sales.outlet_id, Sales.date)
 
         result = await self.session.execute(query)
-        rows = result.scalars().all()
+        rows = result.all()
 
-        grouped: dict[str, list[Sales]] = defaultdict(list)
-        for row in rows:
-            grouped[row.outlet_id].append(row)
+        grouped: dict[str, list[tuple[date, int]]] = defaultdict(list)
+        for outlet_id, row_date, sold in rows:
+            grouped[outlet_id].append((row_date, sold))
         return dict(grouped)
 
     async def update(self, sales_id: str, data: SalesUpdate) -> Sales | None:
@@ -166,6 +168,17 @@ class SalesService:
         await self.session.flush()
         await self.session.refresh(sales)
         return sales
+
+    async def get_date_range(self, customer_id: str) -> tuple[date | None, date | None]:
+        """Return (min_date, max_date) of sales records for a customer."""
+        result = await self.session.execute(
+            select(func.min(Sales.date), func.max(Sales.date)).where(
+                Sales.customer_id == customer_id,
+                Sales.active.is_(True),
+            )
+        )
+        row = result.one()
+        return row[0], row[1]
 
     async def delete(self, sales_id: str, hard_delete: bool = False) -> bool:
         """Delete a sales record (soft delete by default)."""

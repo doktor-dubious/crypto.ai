@@ -1,12 +1,20 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Activity, BarChart3, X } from "lucide-react"
+import { X } from "lucide-react"
+import { AnimatedActivity, AnimatedFlask } from "@/components/icons/animated-icons"
+import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
+} from "@/components/ui/dialog"
 import { useSidebar } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 
@@ -23,17 +31,38 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
 function TaskItem({ task }: { task: TaskRecordResponse }) {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
+  const router = useRouter()
   const { state } = useSidebar()
   const isExpanded = state === "expanded"
+
+  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
+  const completedRoute = task.type === "prediction"
+    ? `/predictions/completed?task_id=${task.task_id}`
+    : `/simulations/completed?task_id=${task.task_id}`
+
+  function handleClick() {
+    if (isFinished) router.push(completedRoute)
+  }
+
+  // Tick every 30s so relative time strings recalculate even when task data is unchanged
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const cancelMutation = useMutation({
     mutationFn: () => tasksApi.cancel(task.task_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      setConfirmOpen(false)
     },
   })
 
-  const Icon = task.type === "prediction" ? Activity : BarChart3
+  const iconControls = useAnimation()
+  const Icon = task.type === "prediction" ? AnimatedActivity : AnimatedFlask
   const timeStr = (task.started_at ?? task.created_at)
     ? formatDistanceToNow(new Date(task.started_at ?? task.created_at), {
         addSuffix: true,
@@ -42,9 +71,14 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
 
   if (!isExpanded) {
     return (
-      <li className="flex items-center justify-center py-1">
+      <li
+        className={cn("flex items-center justify-center py-1", isFinished && "cursor-pointer")}
+        onClick={handleClick}
+        onMouseEnter={() => iconControls.start("animate")}
+        onMouseLeave={() => iconControls.start("normal")}
+      >
         <div className="relative">
-          <Icon className="h-4 w-4 text-[var(--sidebar-foreground)]/70" />
+          <Icon className="h-4 w-4 text-[var(--sidebar-foreground)]/70" controls={iconControls} />
           <span
             className={cn(
               "absolute -right-1 -top-1 h-2 w-2 rounded-full",
@@ -61,8 +95,16 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   }
 
   return (
-    <li className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors">
-      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--sidebar-foreground)]/60" />
+    <li
+      className={cn(
+        "group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors",
+        isFinished && "cursor-pointer"
+      )}
+      onClick={handleClick}
+      onMouseEnter={() => iconControls.start("animate")}
+      onMouseLeave={() => iconControls.start("normal")}
+    >
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--sidebar-foreground)]/60" controls={iconControls} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">
@@ -72,6 +114,9 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
             {t(`status.${task.status}` as Parameters<typeof t>[0])}
           </Badge>
         </div>
+        {task.name && (
+          <p className="text-[10px] text-[var(--sidebar-foreground)]/70 mt-0.5 truncate font-medium">{task.name}</p>
+        )}
         {timeStr && (
           <p className="text-[10px] text-[var(--sidebar-foreground)]/50 mt-0.5">{timeStr}</p>
         )}
@@ -100,17 +145,33 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
         <Button
           variant="ghost"
           size="icon"
-          className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-[var(--sidebar-foreground)]/50 hover:text-[var(--destructive)]"
-          onClick={(e) => {
-            e.stopPropagation()
-            cancelMutation.mutate()
-          }}
+          className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-[var(--sidebar-foreground)]/50 hover:text-[var(--destructive)]"
+          onClick={(e) => { e.stopPropagation(); setConfirmOpen(true) }}
           disabled={cancelMutation.isPending}
           aria-label={t("cancel")}
         >
           <X className="h-3 w-3" />
         </Button>
       )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("cancelConfirmTitle")}</DialogTitle>
+            <DialogDescription>{t("cancelConfirmDescription")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(false)}>{t("cancelConfirmNo")}</Button>
+            <Button
+              variant="destructive" size="sm"
+              onClick={() => cancelMutation.mutate()}
+              disabled={cancelMutation.isPending}
+            >
+              {t("cancelConfirmYes")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </li>
   )
 }
@@ -157,6 +218,7 @@ export function SidebarTasks() {
   const { data } = useQuery({
     queryKey: ["tasks"],
     queryFn: () => tasksApi.list({ limit: 100 }),
+    staleTime: 0,
     refetchInterval: (query) => {
       const items = query.state.data?.items ?? []
       const hasActive = items.some((t) => t.status === "started" || t.status === "pending")
@@ -164,35 +226,44 @@ export function SidebarTasks() {
     },
   })
 
+  const SIDEBAR_LIMIT = 10
+
   const tasks = data?.items ?? []
 
-  const pending = tasks.filter((t) => t.status === "pending")
   const running = tasks
     .filter((t) => t.status === "started")
     .sort((a, b) =>
       (a.started_at ?? a.created_at) < (b.started_at ?? b.created_at) ? -1 : 1
     )
+  const pending = tasks.filter((t) => t.status === "pending")
   const finished = tasks
     .filter((t) => ["success", "failure", "revoked"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )
 
+  // Fill up to SIDEBAR_LIMIT: running first, then pending, then finished
+  const runningSlice = running.slice(0, SIDEBAR_LIMIT)
+  const remaining1 = SIDEBAR_LIMIT - runningSlice.length
+  const pendingSlice = pending.slice(0, remaining1)
+  const remaining2 = remaining1 - pendingSlice.length
+  const finishedSlice = finished.slice(0, remaining2)
+
   return (
     <div className="space-y-3">
       <TaskGroup
         label={t("running")}
-        tasks={running}
+        tasks={runningSlice}
         emptyLabel={t("noRunningTasks")}
       />
       <TaskGroup
         label={t("pending")}
-        tasks={pending}
+        tasks={pendingSlice}
         emptyLabel={t("noPendingTasks")}
       />
       <TaskGroup
         label={t("finished")}
-        tasks={finished}
+        tasks={finishedSlice}
         emptyLabel={t("noFinishedTasks")}
       />
     </div>

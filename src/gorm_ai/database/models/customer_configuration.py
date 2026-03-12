@@ -9,7 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from gorm_ai.database.base import Base
 
 if TYPE_CHECKING:
+    from gorm_ai.database.models.currency import Currency
     from gorm_ai.database.models.customer import Customer
+    from gorm_ai.database.models.outlet_group import OutletGroup
     from gorm_ai.database.models.prediction_engine import PredictionEngine
 
 
@@ -38,6 +40,24 @@ class CustomerConfiguration(Base):
         nullable=True,
         index=True,
     )
+    group_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("outlet_group.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    production_group_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("outlet_group.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    currency_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("currency.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     customer: Mapped["Customer"] = relationship(
@@ -45,3 +65,10 @@ class CustomerConfiguration(Base):
         back_populates="configuration",
     )
     prediction_engine: Mapped["PredictionEngine | None"] = relationship("PredictionEngine")
+    group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[group_id])
+    production_group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[production_group_id])
+    currency: Mapped["Currency | None"] = relationship("Currency", foreign_keys=[currency_id], lazy="selectin")
+
+    @property
+    def currency_symbol(self) -> str | None:
+        return self.currency.symbol if self.currency else None

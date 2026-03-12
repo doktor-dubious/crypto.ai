@@ -33,7 +33,7 @@ class DataPreprocessor:
             Preprocessed DataFrame with 'date' and 'value' columns
         """
         if not data:
-            return pd.DataFrame(columns=["date", "value"])
+            return pd.DataFrame({"date": pd.Series(dtype="datetime64[ns]"), "value": pd.Series(dtype="float64")})
 
         df = pd.DataFrame(data)
         df["date"] = pd.to_datetime(df["date"])

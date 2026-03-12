@@ -14,6 +14,8 @@ from gorm_ai.services.draw_adjustment import DrawAdjustmentService
 from gorm_ai.services.outlet import OutletService
 from gorm_ai.services.outlet_group import OutletGroupService
 from gorm_ai.services.pad import PadService
+from gorm_ai.services.predefined_pad import PredefinedPadService
+from gorm_ai.services.sales_filter import SalesFilterService
 from gorm_ai.services.prediction import PredictionService
 from gorm_ai.services.prediction_strategy import PredictionStrategyService
 from gorm_ai.services.sales import SalesService
@@ -76,6 +78,16 @@ def get_pad_service(session: DbSession) -> PadService:
     return PadService(session)
 
 
+def get_predefined_pad_service(session: DbSession) -> PredefinedPadService:
+    """Get predefined pad service."""
+    return PredefinedPadService(session)
+
+
+def get_sales_filter_service(session: DbSession) -> SalesFilterService:
+    """Get sales filter service."""
+    return SalesFilterService(session)
+
+
 def get_task_service(session: DbSession) -> TaskService:
     """Get task service."""
     return TaskService(session)
@@ -99,10 +111,13 @@ CustomerConfigurationServiceDep = Annotated[
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 DrawAdjustmentServiceDep = Annotated[DrawAdjustmentService, Depends(get_draw_adjustment_service)]
 PadServiceDep = Annotated[PadService, Depends(get_pad_service)]
+PredefinedPadServiceDep = Annotated[PredefinedPadService, Depends(get_predefined_pad_service)]
 OutletGroupServiceDep = Annotated[OutletGroupService, Depends(get_outlet_group_service)]
 OutletServiceDep = Annotated[OutletService, Depends(get_outlet_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
+SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]
 SalesServiceDep = Annotated[SalesService, Depends(get_sales_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 PredictionStrategyServiceDep = Annotated[PredictionStrategyService, Depends(get_prediction_strategy_service)]
 SimulationStrategyServiceDep = Annotated[SimulationStrategyService, Depends(get_simulation_strategy_service)]
+SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]

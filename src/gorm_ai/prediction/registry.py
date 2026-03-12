@@ -41,6 +41,31 @@ class EngineRegistry:
         except ImportError:
             pass  # Custom engine not available
 
+        # Register AutoGluon Chronos-Bolt engine
+        try:
+            from gorm_ai.prediction.engines.autogluon_engine import AutoGluonEngine
+
+            self.register(PredictionEngineEnum.GLUON_CHRONOS_BOLT, AutoGluonEngine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+        # Register AutoGluon Chronos-2 engine
+        try:
+            from gorm_ai.prediction.engines.chronos2_engine import Chronos2Engine
+
+            self.register(PredictionEngineEnum.GLUON_CHRONOS2, Chronos2Engine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+        # Register AutoGluon Toto engine
+        try:
+            from gorm_ai.prediction.engines.toto_engine import TotoEngine
+
+            self.register(PredictionEngineEnum.GLUON_TOTO, TotoEngine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+
     def register(
         self,
         engine_type: PredictionEngineEnum,

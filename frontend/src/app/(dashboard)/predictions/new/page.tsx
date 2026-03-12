@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { useCustomer } from "@/components/providers/customer-provider"
 import { predictionStrategiesApi, padsApi, predictionsApi } from "@/lib/api"
+import { toast } from "sonner"
 import {
   PredictionCalendar,
   type StrategyAssignment,
@@ -107,7 +108,11 @@ export default function NewPredictionPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("toastQueued"))
       router.push("/")
+    },
+    onError: () => {
+      toast.error(t("toastError"))
     },
   })
 

@@ -13,6 +13,9 @@ class CustomerConfigurationBase(BaseModel):
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     prediction_engine_id: str | None = None
+    group_id: str | None = None
+    production_group_id: str | None = None
+    currency_id: str | None = None
 
 
 class CustomerConfigurationCreate(CustomerConfigurationBase):
@@ -29,6 +32,9 @@ class CustomerConfigurationUpdate(BaseModel):
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     prediction_engine_id: str | None = None
+    group_id: str | None = None
+    production_group_id: str | None = None
+    currency_id: str | None = None
 
 
 class CustomerConfigurationResponse(CustomerConfigurationBase):
@@ -38,6 +44,7 @@ class CustomerConfigurationResponse(CustomerConfigurationBase):
 
     id: str
     customer_id: str
+    currency_symbol: str | None = None
     active: bool
     created_at: datetime
     updated_at: datetime

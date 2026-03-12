@@ -30,6 +30,19 @@ async def bulk_import_sales(
     return [SalesResponse.model_validate(s) for s in sales_records]
 
 
+@router.get("/date-range")
+async def get_sales_date_range(
+    customer_id: str,
+    service: SalesServiceDep,
+) -> dict:
+    """Return the min and max sales date for a customer."""
+    min_date, max_date = await service.get_date_range(customer_id)
+    return {
+        "min_date": min_date.isoformat() if min_date else None,
+        "max_date": max_date.isoformat() if max_date else None,
+    }
+
+
 @router.get("", response_model=list[SalesResponse])
 async def query_sales(
     service: SalesServiceDep,

@@ -14,8 +14,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Copy dependency files
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies including ML extras (timesfm, torch, scikit-learn)
-RUN uv sync --frozen --no-dev --no-install-project --extra ml
+# Install dependencies including ML extras (timesfm, torch, scikit-learn, autogluon)
+RUN uv sync --frozen --no-dev --no-install-project --extra ml --extra autogluon
 
 # Production stage
 FROM python:3.11-slim as production

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, useRef, useEffect, type ReactNode } from "react"
+import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -31,6 +32,7 @@ import {
   type CompletedPredictionResponse,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -38,6 +40,10 @@ const ITEMS_PER_PAGE = 10
 type SortField = "strategy_name" | "date" | "created_at" | "status" | "starred"
 
 type PredictionStatus = "success" | "failure" | "revoked"
+
+function isDowngrade(p: { status: string; engine: string | null; requested_engine: string | null }) {
+  return p.status === "success" && p.requested_engine != null && p.engine !== p.requested_engine
+}
 
 const STATUS_BADGE: Record<PredictionStatus, { variant: "success" | "destructive" | "warning"; label: string }> = {
   success: { variant: "success", label: "statusSuccess" },
@@ -88,6 +94,8 @@ export default function PredictionsCompletedPage() {
   const t = useTranslations("predictions.completed")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
+  const searchParams = useSearchParams()
+  const deepLinkTaskId = searchParams.get("task_id")
 
   // ── Table state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -123,6 +131,20 @@ export default function PredictionsCompletedPage() {
 
   const predictions = listData?.items ?? []
 
+  // ── Deep-link: select and focus prediction from task_id query param ─────────
+  const handledTaskIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!deepLinkTaskId || predictions.length === 0) return
+    if (handledTaskIdRef.current === deepLinkTaskId) return
+    const match = predictions.find((p) => p.task_id === deepLinkTaskId)
+    if (!match) return
+    setSelected(match)
+    setSelectedIds(new Set([match.id]))
+    setShowOnlySelected(true)
+    setActiveTab(match.status === "failure" ? "tab0" : "tab1")
+    handledTaskIdRef.current = deepLinkTaskId
+  }, [deepLinkTaskId, predictions])
+
   const { data: analytics } = useQuery({
     queryKey: ["prediction-analytics", selected?.id],
     queryFn: () => predictionsApi.getAnalytics(selected!.id),
@@ -137,6 +159,10 @@ export default function PredictionsCompletedPage() {
       queryClient.invalidateQueries({ queryKey: ["predictions-completed"] })
       if (selected?.id === id) setSelected(null)
       setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+      toast.success(t("toastDeleted"))
+    },
+    onError: () => {
+      toast.error(t("toastDeleteError"))
     },
   })
 
@@ -224,8 +250,8 @@ export default function PredictionsCompletedPage() {
   }
 
   async function handleBulkDelete() {
-    const successIds = predictions.filter((p) => selectedIds.has(p.id) && p.status === "success").map((p) => p.id)
-    for (const id of successIds) await deleteMutation.mutateAsync(id)
+    const ids = predictions.filter((p) => selectedIds.has(p.id)).map((p) => p.id)
+    for (const id of ids) await deleteMutation.mutateAsync(id)
     setSelectedIds(new Set())
     setBulkDeleteDialogOpen(false)
   }
@@ -351,10 +377,13 @@ export default function PredictionsCompletedPage() {
                     <TableCell className="text-sm">{prediction.date ? formatDate(prediction.date) : "—"}</TableCell>
                     <TableCell className="text-sm text-[var(--muted-foreground)]">{formatDateTime(prediction.created_at)}</TableCell>
                     <TableCell>
-                      {(() => {
-                        const s = STATUS_BADGE[prediction.status as PredictionStatus]
-                        return s ? <Badge variant={s.variant} className="text-xs">{t(s.label as Parameters<typeof t>[0])}</Badge> : null
-                      })()}
+                      {isDowngrade(prediction)
+                        ? <Badge variant="warning" className="text-xs">{t("statusDowngrade")}</Badge>
+                        : (() => {
+                            const s = STATUS_BADGE[prediction.status as PredictionStatus]
+                            return s ? <Badge variant={s.variant} className="text-xs">{t(s.label as Parameters<typeof t>[0])}</Badge> : null
+                          })()
+                      }
                     </TableCell>
                     <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => handleStar(prediction.id)} className="hover:text-amber-400 transition-colors cursor-pointer" aria-label="Toggle star">
@@ -410,11 +439,12 @@ export default function PredictionsCompletedPage() {
               </span>
               <div className="flex items-center gap-1">
                 <Button
-                  variant="ghost" size="icon" className="h-7 w-7 cursor-pointer"
+                  variant="ghost" size="sm" className="h-7 gap-1.5 px-2 cursor-pointer"
                   onClick={() => setShowOnlySelected((v) => !v)}
                   title={showOnlySelected ? "Show all" : "Show only selected"}
                 >
-                  <Focus className={cn("h-4 w-4", showOnlySelected && "text-primary")} />
+                  <Focus className={cn("h-3.5 w-3.5", showOnlySelected && "text-primary")} />
+                  {showOnlySelected && <span className="text-xs">Show all</span>}
                 </Button>
                 <Button
                   variant="ghost" size="icon"
@@ -439,10 +469,10 @@ export default function PredictionsCompletedPage() {
                 {selected.status === "failure" && (
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 text-destructive data-[state=active]:text-destructive" value="tab0">{t("tabError")}</TabsTrigger>
                 )}
-                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab1">{t("tabDetails")}</TabsTrigger>
-                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab2">{t("tabAnalytics")}</TabsTrigger>
-                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab3">{t("tabSpecs")}</TabsTrigger>
-                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab4">{t("tabActions")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabAnalytics")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabSpecs")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabActions")}</TabsTrigger>
               </TabsList>
               <div
                 className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
@@ -496,6 +526,16 @@ export default function PredictionsCompletedPage() {
               {/* ─ Specs ─ */}
               <TabsContent value="tab3" className="space-y-3 max-w-2xl mt-6 px-4">
                 <StatRow label={t("fieldEngine")} value={selected.engine ?? "—"} />
+                {selected.requested_engine != null && (
+                  <StatRow
+                    label={t("fieldRequestedEngine")}
+                    value={
+                      isDowngrade(selected)
+                        ? <span className="text-amber-400">{selected.requested_engine}</span>
+                        : selected.requested_engine
+                    }
+                  />
+                )}
                 <StatRow
                   label={t("fieldEngineParams")}
                   value={
@@ -512,22 +552,16 @@ export default function PredictionsCompletedPage() {
 
               {/* ─ Actions ─ */}
               <TabsContent value="tab4" className="max-w-2xl mt-6 px-4">
-                {selected.status !== "success" ? (
-                  <div className="text-sm text-[var(--muted-foreground)] italic">
-                    Delete is only available for completed predictions.
+                <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>
+                    <p className="text-xs text-[var(--muted-foreground)]">{t("deleteZoneDescription")}</p>
                   </div>
-                ) : (
-                  <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
-                    <div className="space-y-0.5">
-                      <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>
-                      <p className="text-xs text-[var(--muted-foreground)]">{t("deleteZoneDescription")}</p>
-                    </div>
-                    <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={openDeleteDialog}>
-                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                      {t("deleteButton")}
-                    </Button>
-                  </div>
-                )}
+                  <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={openDeleteDialog}>
+                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                    {t("deleteButton")}
+                  </Button>
+                </div>
               </TabsContent>
 
             </div>

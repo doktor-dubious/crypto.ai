@@ -13,6 +13,9 @@ class PredictionEngine(StrEnum):
     TIMESFM = "timesfm"
     TIMESFM_FINETUNED = "timesfm_finetuned"
     CUSTOM = "custom"
+    GLUON_CHRONOS_BOLT = "gluon-chronos-bolt"
+    GLUON_CHRONOS2 = "gluon-chronos2"
+    GLUON_TOTO = "gluon-toto"
 
 
 class TaskStatus(StrEnum):
@@ -168,11 +171,13 @@ class CompletedPredictionResponse(BaseModel):
     strategy_name: str | None
     date: date | None
     engine: str | None
+    requested_engine: str | None = None
     engine_params: dict | None
     batch_size: int | None
     delay: int | None
     use_financials: bool | None
     use_pad: bool | None
+    task_id: str | None
     outlet_count: int
     error: str | None
     created_at: datetime
@@ -237,3 +242,16 @@ class PredictionStrategyResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class PadEffectResponse(BaseModel):
+    """PAD effect estimate for one outlet on one event date."""
+
+    outlet_id: str
+    pad_date: date
+    weekday: int                        # 1=Monday, 7=Sunday
+    pad_predicted: float | None         # model prediction on the PAD date
+    baseline_avg: float | None          # avg prediction on comparable non-PAD weekdays
+    effect: float | None                # pad_predicted - baseline_avg
+    effect_pct: float | None            # effect as % of baseline_avg
+    baseline_count: int                 # number of baseline dates used

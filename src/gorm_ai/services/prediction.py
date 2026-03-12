@@ -9,7 +9,8 @@ import math
 
 ProgressCallback = Callable[[int, str | None], Awaitable[None]]
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,8 +21,11 @@ from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_delivery import OutletDelivery
 from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroupMember
-from gorm_ai.database.models.pad import Pad
+from gorm_ai.database.models.covariate import Covariate, CovariateOutlet
+from gorm_ai.database.models.last_prediction import LastPrediction
+from gorm_ai.database.models.pad import Pad, PadDate
 from gorm_ai.database.models.prediction import Prediction
+from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
 from gorm_ai.prediction.registry import EngineRegistry
@@ -78,10 +82,20 @@ class PredictionService:
         engine = self.engine_registry.get_engine(engine_type)
         capabilities = engine.get_capabilities()
 
-        # Resolve outlet IDs: explicit list → all active outlets for customer
+        # Resolve outlet IDs: explicit list → request group → customer config group → all active
         outlet_ids = request.outlet_ids
         if not outlet_ids:
-            outlet_ids = await self._get_active_outlet_ids(request.customer_id)
+            group_id = request.outlet_group_id
+            if not group_id:
+                cc_result = await self.session.execute(
+                    select(CustomerConfiguration).where(
+                        CustomerConfiguration.customer_id == request.customer_id,
+                        CustomerConfiguration.active.is_(True),
+                    )
+                )
+                cc = cc_result.scalar_one_or_none()
+                group_id = cc.group_id if cc else None
+            outlet_ids = await self._resolve_marginal_outlets(request.customer_id, None, group_id)
 
         # Fetch all historical data up to the cutoff (delay days before the prediction window)
         history_end = request.prediction_from - timedelta(days=1 + request.delay)
@@ -89,7 +103,12 @@ class PredictionService:
         # Pad event dates are customer-level (same for all outlets; effect learned per outlet by Ridge)
         pad_covariates = await self._build_pad_covariates(request.customer_id) if request.use_pad else None
 
-        # Fetch all outlet sales in one query, then process per-outlet in memory
+        # Fetch all outlet sales in one query, then process per-outlet in memory.
+        # Limit to max_history_length days — the engine trims to this anyway, and
+        # fetching years of extra history just to discard it in Python is very slow.
+        history_days = capabilities.max_history_length or 1024
+        history_start = history_end - timedelta(days=history_days - 1)
+
         if on_progress:
             await on_progress(5, f"Loading data ({len(outlet_ids)} outlets)")
 
@@ -97,6 +116,7 @@ class PredictionService:
             customer_id=request.customer_id,
             outlet_ids=outlet_ids,
             end_date=history_end,
+            start_date=history_start,
             apply_sales_filter=True,
         )
 
@@ -107,7 +127,7 @@ class PredictionService:
             cov_end = request.prediction_from + timedelta(days=horizon - 1)
             # Use the earliest sales date across all outlets as the covariate start
             cov_start = min(
-                (sales[0].date for sales in all_sales.values() if sales),
+                (sales[0][0] for sales in all_sales.values() if sales),
                 default=request.prediction_from,
             )
             all_covariates = await self._build_covariates_bulk(
@@ -119,16 +139,18 @@ class PredictionService:
         else:
             all_covariates = {}
 
-        # Collect per-outlet inputs (pure in-memory, no DB calls)
+        # Collect per-outlet inputs (pure in-memory, no DB calls).
+        # Skip outlets with insufficient history — passing empty or near-empty
+        # arrays to the model causes NumPy dtype errors.
+        min_history = capabilities.min_history_length or 1
         batch_items: list[dict] = []
         valid_outlet_ids: list[str] = []
         covariates_by_outlet: dict[str, dict[str, dict[date, float]] | None] = {}
         for outlet_id in outlet_ids:
             sales_data = all_sales.get(outlet_id, [])
+            if len(sales_data) < min_history:
+                continue
             historical_data = self._prepare_historical_data(sales_data)
-
-            if capabilities.max_history_length and len(historical_data) > capabilities.max_history_length:
-                historical_data = historical_data[-capabilities.max_history_length:]
 
             covariates = all_covariates.get(outlet_id) if request.use_financials else None
             covariates_by_outlet[outlet_id] = covariates
@@ -150,6 +172,12 @@ class PredictionService:
             batch_size=request.batch_size,
         )
 
+        ridge_results = getattr(engine, "_last_ridge_results", None)
+        if ridge_results:
+            await self._persist_covariate_outlets(
+                valid_outlet_ids, ridge_results, task_id=task_id
+            )
+
         if on_progress:
             await on_progress(85, "Saving results")
 
@@ -162,7 +190,8 @@ class PredictionService:
         rounding = await self._resolve_rounding(request.customer_id)
         default_cost, default_profit = await self._get_default_financials(request.customer_id) if request.total_return_pct is not None else (None, None)
         await self._persist_predictions(
-            request, actual_engine, valid_outlet_ids, all_results, rounding,
+            request, actual_engine, engine_type.value, valid_outlet_ids, all_results, rounding,
+            task_id=task_id,
             increase_total_by=request.increase_total_by,
             increase_total_by_pct=request.increase_total_by_pct,
             increase_outlets_by=request.increase_outlets_by,
@@ -195,9 +224,11 @@ class PredictionService:
         self,
         request: PredictionRequest,
         engine: str,
+        requested_engine: str,
         outlet_ids: list[str],
         all_results: list[list[PredictionResult]],
-        rounding: int = 1,
+        rounding: int = 2,
+        task_id: str | None = None,
         increase_total_by: int | None = None,
         increase_total_by_pct: float | None = None,
         increase_outlets_by: int | None = None,
@@ -223,6 +254,23 @@ class PredictionService:
             for r in results:
                 date_outlet.setdefault(r.date, {})[outlet_id] = r
 
+        # Load actuals for all outlet/date combinations in one query
+        # (date, outlet_id) → sold
+        pred_dates = list(date_outlet.keys())
+        actuals_result = await self.session.execute(
+            select(Sales.outlet_id, Sales.date, Sales.sold)
+            .where(
+                Sales.outlet_id.in_(outlet_ids),
+                Sales.date.in_(pred_dates),
+                Sales.active.is_(True),
+            )
+        )
+        actuals: dict[tuple[date, str], float] = {
+            (row.date, row.outlet_id): float(row.sold)
+            for row in actuals_result.all()
+            if row.sold is not None
+        }
+
         for pred_date, outlet_results in sorted(date_outlet.items()):
             weekday = pred_date.weekday() + 1  # 1=Monday, 7=Sunday
 
@@ -234,6 +282,7 @@ class PredictionService:
                 date=pred_date,
                 delay=request.delay,
                 engine=engine,
+                requested_engine=requested_engine,
                 engine_params=request.engine_params,
                 use_financials=request.use_financials,
                 use_pad=request.use_pad,
@@ -245,6 +294,7 @@ class PredictionService:
 
             # Compute final delivered quantity for each outlet on this date
             outlet_delivered: dict[str, int] = {}
+            outlet_applied: dict[str, dict[str, float | None]] = {}
             if fixed_total_delivery is not None:
                 outlets_data = [
                     (oid, r.predicted_value, r.lower_bound, r.upper_bound)
@@ -255,6 +305,11 @@ class PredictionService:
                     outlets_data, outlet_deliveries, fixed_total_delivery,
                     ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                 )
+                for oid in outlet_results:
+                    outlet_applied[oid] = self._infer_applied_constraints(
+                        outlet_delivered[oid], outlet_deliveries.get(oid),
+                        ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
+                    )
             elif total_return_pct is not None:
                 def _fin(oid: str, key: str) -> float | None:
                     cov = (covariates_by_outlet or {}).get(oid)
@@ -275,6 +330,11 @@ class PredictionService:
                     default_cost=default_cost, default_profit=default_profit,
                     ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                 )
+                for oid in outlet_results:
+                    outlet_applied[oid] = self._infer_applied_constraints(
+                        outlet_delivered[oid], outlet_deliveries.get(oid),
+                        ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
+                    )
             else:
                 # Normal flow: base from _compute_delivered, then distribute any extras
                 for outlet_id, r in outlet_results.items():
@@ -288,19 +348,21 @@ class PredictionService:
                         base = self._delivered_for_return_pct(
                             effective_return_pct, r.predicted_value, r.lower_bound, r.upper_bound
                         )
-                        outlet_delivered[outlet_id] = self._compute_delivered(
+                        qty, applied = self._compute_delivered(
                             None, base, delivery, rounding,
                             outlet_increase_num=float(increase_outlets_by or 0),
                             outlet_increase_pct=float(increase_outlets_by_pct or 0),
                             ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                         )
                     else:
-                        outlet_delivered[outlet_id] = self._compute_delivered(
+                        qty, applied = self._compute_delivered(
                             r.economic_optimal, r.predicted_value, delivery, rounding,
                             outlet_increase_num=float(increase_outlets_by or 0),
                             outlet_increase_pct=float(increase_outlets_by_pct or 0),
                             ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                         )
+                    outlet_delivered[outlet_id] = qty
+                    outlet_applied[outlet_id] = applied
                 n_extra = increase_total_by or 0
                 if increase_total_by_pct:
                     n_extra += round(sum(outlet_delivered.values()) * increase_total_by_pct / 100)
@@ -314,7 +376,7 @@ class PredictionService:
                         outlet_delivered[oid] += extra
 
             for outlet_id, r in outlet_results.items():
-                delivery = delivery_map.get(outlet_id, {}).get(weekday)
+                ap = outlet_applied.get(outlet_id, {})
                 self.session.add(PredictionOutlet(
                     prediction_id=prediction.id,
                     outlet_id=outlet_id,
@@ -324,12 +386,38 @@ class PredictionService:
                     confidence=r.confidence,
                     eo=r.economic_optimal,
                     delivered=outlet_delivered[outlet_id],
-                    fixed=delivery.fixed if delivery else None,
-                    minimum=delivery.minimum if delivery else None,
-                    maximum=delivery.maximum if delivery else None,
-                    add=delivery.add if delivery else None,
-                    add_pct=delivery.add_pct if delivery else None,
+                    actual_sale=actuals.get((pred_date, outlet_id)),
+                    fixed=ap.get("fixed"),
+                    minimum=ap.get("minimum"),
+                    maximum=ap.get("maximum"),
+                    add=ap.get("add"),
+                    add_pct=ap.get("add_pct"),
                 ))
+
+            # Upsert last_prediction — one row per (outlet_id, weekday), always current
+            for outlet_id, r in outlet_results.items():
+                ap = outlet_applied.get(outlet_id, {})
+                values = dict(
+                    outlet_id=outlet_id,
+                    prediction_id=prediction.id,
+                    weekday=weekday,
+                    predicted=r.predicted_value,
+                    economic_optimal=r.economic_optimal,
+                    delivered=float(outlet_delivered[outlet_id]),
+                    lower_bound=r.lower_bound,
+                    upper_bound=r.upper_bound,
+                    fixed=ap.get("fixed"),
+                    minimum=ap.get("minimum"),
+                    maximum=ap.get("maximum"),
+                    add=ap.get("add"),
+                    add_pct=ap.get("add_pct"),
+                )
+                stmt = pg_insert(LastPrediction).values(**values)
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_last_prediction_outlet_weekday",
+                    set_={k: stmt.excluded[k] for k in values if k not in ("outlet_id", "weekday")},
+                )
+                await self.session.execute(stmt)
 
     async def _load_outlet_deliveries(
         self, outlet_ids: list[str]
@@ -350,15 +438,18 @@ class PredictionService:
         self,
         eo: float | None,
         predicted: float,
-        delivery: OutletDelivery | None,
-        rounding: int = 1,
+        delivery: "OutletDelivery | None",
+        rounding: int = 2,
         outlet_increase_num: float = 0.0,
         outlet_increase_pct: float = 0.0,
         ignore_fixed: bool = False,
         ignore_minimum: bool = False,
         ignore_maximum: bool = False,
-    ) -> int:
+    ) -> "tuple[int, dict[str, float | None]]":
         """Apply outlet delivery constraints to arrive at the final delivered quantity.
+
+        Returns (delivered_qty, applied_constraints) where applied_constraints only
+        contains non-None values for constraints that were actually binding.
 
         Uses eo (economic optimal) as the base when available, falling back to
         predicted_value when eo is None (no financial data configured).
@@ -371,7 +462,7 @@ class PredictionService:
           3. add      — add fixed amount
              add_pct  — multiply by (1 + pct/100); applied after add
 
-        rounding: 1=round (default), 2=ceil, 3=floor
+        rounding: 1=round, 2=ceil (default), 3=floor
         """
         import math
 
@@ -382,6 +473,9 @@ class PredictionService:
                 return max(1, math.floor(v))
             return max(1, round(v))
 
+        applied: dict[str, float | None] = {
+            "fixed": None, "minimum": None, "maximum": None, "add": None, "add_pct": None,
+        }
         base = eo if eo is not None else predicted
 
         # Per-outlet increases applied before delivery constraints
@@ -391,27 +485,63 @@ class PredictionService:
             base += base * outlet_increase_pct / 100.0
 
         if delivery is None:
-            return _round(base)
+            return _round(base), applied
 
         # 1. Fixed override
         if not ignore_fixed and delivery.fixed is not None:
-            return _round(delivery.fixed)
+            applied["fixed"] = float(delivery.fixed)
+            if delivery.add is not None:
+                applied["add"] = float(delivery.add)
+            if delivery.add_pct is not None:
+                applied["add_pct"] = float(delivery.add_pct)
+            return _round(delivery.fixed), applied
 
         delivered = base
 
         # 2. Min / max clamp
         if not ignore_minimum and delivery.minimum is not None and delivered < delivery.minimum:
             delivered = delivery.minimum
+            applied["minimum"] = float(delivery.minimum)
         if not ignore_maximum and delivery.maximum is not None and delivered > delivery.maximum:
             delivered = delivery.maximum
+            applied["maximum"] = float(delivery.maximum)
 
         # 3. Add then add_pct
         if delivery.add is not None:
             delivered += delivery.add
+            applied["add"] = float(delivery.add)
         if delivery.add_pct is not None:
             delivered *= 1.0 + delivery.add_pct / 100.0
+            applied["add_pct"] = float(delivery.add_pct)
 
-        return _round(delivered)
+        return _round(delivered), applied
+
+    @staticmethod
+    def _infer_applied_constraints(
+        delivered_qty: int,
+        delivery: "OutletDelivery | None",
+        ignore_fixed: bool = False,
+        ignore_minimum: bool = False,
+        ignore_maximum: bool = False,
+    ) -> "dict[str, float | None]":
+        """Post-hoc infer which delivery constraints were binding given the final quantity.
+
+        Used for distribution paths (_distribute_fixed_total, _distribute_for_total_return_pct)
+        that don't go through _compute_delivered.
+        """
+        applied: dict[str, float | None] = {
+            "fixed": None, "minimum": None, "maximum": None, "add": None, "add_pct": None,
+        }
+        if delivery is None:
+            return applied
+        if not ignore_fixed and delivery.fixed is not None:
+            applied["fixed"] = float(delivery.fixed)
+            return applied
+        if not ignore_minimum and delivery.minimum is not None and delivered_qty <= round(delivery.minimum):
+            applied["minimum"] = float(delivery.minimum)
+        if not ignore_maximum and delivery.maximum is not None and delivered_qty >= round(delivery.maximum):
+            applied["maximum"] = float(delivery.maximum)
+        return applied
 
     async def get_marginal_value(self, request: MarginalValueRequest) -> MarginalValueResponse:
         """Rank outlets by P(demand > delivered) — the probability of selling one more copy.
@@ -789,7 +919,7 @@ class PredictionService:
         return None, None
 
     async def _resolve_rounding(self, customer_id: str) -> int:
-        """Resolve eo_to_delivery_rounding: customer_configuration → configuration (fallback)."""
+        """Resolve eo_to_delivery_rounding: customer_configuration → configuration → default (ceil)."""
         result = await self.session.execute(
             select(CustomerConfiguration).where(
                 CustomerConfiguration.customer_id == customer_id,
@@ -804,10 +934,10 @@ class PredictionService:
             select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
         )
         gc = result.scalar_one_or_none()
-        if gc:
+        if gc and gc.eo_to_delivery_rounding is not None:
             return gc.eo_to_delivery_rounding
 
-        return 1  # default: round
+        return 2  # default: ceil
 
     async def _get_active_outlet_ids(self, customer_id: str) -> list[str]:
         """Fetch all active outlet IDs for a customer."""
@@ -1054,19 +1184,24 @@ class PredictionService:
                 covariates["profit_per_unit"] = profit_map
             output[outlet_id] = covariates or None
 
+        n_with_financials = sum(1 for v in output.values() if v)
+        logger.debug(
+            "Financial covariates built: %d/%d outlets have cost/profit data "
+            "(default_cost=%s, default_profit=%s)",
+            n_with_financials, len(outlet_ids), default_cost, default_profit,
+        )
+
         return output
 
     async def _build_pad_covariates(
         self, customer_id: str
     ) -> dict[str, set[date]] | None:
-        """Build pad event date sets for use as dynamic binary covariates.
+        """Build pad event date sets split by weekday, for use as Ridge covariates.
 
-        Returns a dict mapping pad feature name to the set of event dates,
-        or None if no active pads with dates exist for this customer.
-
-        The feature name uses the pad ID to guarantee uniqueness.
-        Ridge regression learns the per-outlet sales effect for each event
-        from the historical occurrences and applies it to future dates.
+        Each PAD is split into up to 7 features — one per weekday — so Ridge learns
+        a separate effect per (PAD, weekday) combination. Features are named
+        "{pad_name}_dow_{N}" (e.g. "christmas_dow_6" for Christmas on Saturday).
+        Only weekdays that actually appear in the PAD's event dates are emitted.
         """
         result = await self.session.execute(
             select(Pad).where(
@@ -1081,8 +1216,13 @@ class PredictionService:
         pad_map: dict[str, set[date]] = {}
         for pad in pads:
             event_dates = {pd.date for pd in pad.dates if pd.active}
-            if event_dates:
-                pad_map[f"pad_{pad.id}"] = event_dates
+            if not event_dates:
+                continue
+            slug = _slugify(pad.name)
+            for dow in range(1, 8):
+                dow_dates = {d for d in event_dates if d.weekday() + 1 == dow}
+                if dow_dates:
+                    pad_map[f"{slug}_dow_{dow}"] = dow_dates
 
         return pad_map or None
 
@@ -1166,17 +1306,85 @@ class PredictionService:
 
     def _prepare_historical_data(self, sales_data: list) -> list[dict]:
         """Prepare sales data for prediction engine."""
-        return [
-            {
-                "date": sale.date,
-                "value": sale.sold,
-            }
-            for sale in sales_data
-        ]
+        return [{"date": row_date, "value": sold} for row_date, sold in sales_data]
 
     def get_available_engines(self) -> list[PredictionEngine]:
         """Get list of available prediction engines."""
         return self.engine_registry.get_available_engines()
+
+    async def pad_effect(
+        self,
+        customer_id: str,
+        outlet_id: str,
+        pad_date: date,
+        n_baselines: int = 8,
+    ) -> dict:
+        """Estimate the PAD effect for one outlet on one event date.
+
+        Compares the model's prediction on pad_date to the average prediction
+        on the n_baselines most recent non-PAD days with the same weekday.
+        All values come from prediction_outlets joined to predictions.
+        """
+        from sqlalchemy import extract
+
+        weekday = pad_date.weekday() + 1  # 1=Monday, 7=Sunday
+        # PostgreSQL EXTRACT(DOW): 0=Sunday, 1=Monday … 6=Saturday
+        pg_dow = pad_date.weekday() + 1 if pad_date.weekday() < 6 else 0
+
+        # Collect all active PAD dates for this customer to exclude from baseline
+        pad_result = await self.session.execute(
+            select(PadDate.date)
+            .join(Pad, Pad.id == PadDate.pad_id)
+            .where(Pad.customer_id == customer_id, Pad.active.is_(True), PadDate.active.is_(True))
+        )
+        all_pad_dates: set[date] = {row[0] for row in pad_result.all()}
+
+        # Prediction on the PAD date
+        pad_row = await self.session.execute(
+            select(PredictionOutlet.predicted)
+            .join(Prediction, Prediction.id == PredictionOutlet.prediction_id)
+            .where(
+                PredictionOutlet.outlet_id == outlet_id,
+                Prediction.customer_id == customer_id,
+                Prediction.date == pad_date,
+                PredictionOutlet.predicted.isnot(None),
+            )
+            .order_by(Prediction.created_at.desc())
+            .limit(1)
+        )
+        pad_predicted = pad_row.scalar_one_or_none()
+
+        # Baseline: n most recent non-PAD predictions for the same weekday
+        baseline_result = await self.session.execute(
+            select(PredictionOutlet.predicted)
+            .join(Prediction, Prediction.id == PredictionOutlet.prediction_id)
+            .where(
+                PredictionOutlet.outlet_id == outlet_id,
+                Prediction.customer_id == customer_id,
+                extract("dow", Prediction.date) == pg_dow,
+                Prediction.date != pad_date,
+                Prediction.date.notin_(all_pad_dates),
+                PredictionOutlet.predicted.isnot(None),
+            )
+            .order_by(Prediction.date.desc())
+            .limit(n_baselines)
+        )
+        baseline_values = [row[0] for row in baseline_result.all()]
+
+        baseline_avg = sum(baseline_values) / len(baseline_values) if baseline_values else None
+        effect = (pad_predicted - baseline_avg) if pad_predicted is not None and baseline_avg is not None else None
+        effect_pct = (effect / baseline_avg * 100) if effect is not None and baseline_avg else None
+
+        return {
+            "outlet_id": outlet_id,
+            "pad_date": pad_date,
+            "weekday": weekday,
+            "pad_predicted": pad_predicted,
+            "baseline_avg": baseline_avg,
+            "effect": effect,
+            "effect_pct": round(effect_pct, 2) if effect_pct is not None else None,
+            "baseline_count": len(baseline_values),
+        }
 
     async def list_completed(
         self,
@@ -1200,6 +1408,7 @@ class PredictionService:
                 TaskRecord.customer_id == customer_id,
                 TaskRecord.type == "prediction",
                 TaskRecord.status.in_(["success", "failure", "revoked"]),
+                TaskRecord.active.is_(True),
             )
             .order_by(TaskRecord.completed_at.desc().nulls_last(), TaskRecord.created_at.desc())
         )
@@ -1260,11 +1469,13 @@ class PredictionService:
                         "strategy_name": p.prediction_strategy.name if p.prediction_strategy else None,
                         "date": p.date,
                         "engine": p.engine,
+                        "requested_engine": p.requested_engine,
                         "engine_params": p.engine_params,
                         "batch_size": p.batch_size,
                         "delay": p.delay,
                         "use_financials": p.use_financials,
                         "use_pad": p.use_pad,
+                        "task_id": tr.task_id,
                         "outlet_count": outlet_counts.get(p.id, 0),
                         "error": None,
                         "created_at": tr.completed_at or tr.created_at,
@@ -1281,11 +1492,13 @@ class PredictionService:
                     "strategy_name": None,
                     "date": None,
                     "engine": None,
+                    "requested_engine": None,
                     "engine_params": None,
                     "batch_size": None,
                     "delay": None,
                     "use_financials": None,
                     "use_pad": None,
+                    "task_id": tr.task_id,
                     "outlet_count": 0,
                     "error": tr.error,
                     "created_at": tr.completed_at or tr.created_at,
@@ -1326,13 +1539,137 @@ class PredictionService:
         }
 
     async def delete_prediction(self, prediction_id: str) -> bool:
-        """Soft-delete a prediction."""
+        """Soft-delete a prediction (or its task_record if no prediction rows exist)."""
+        from gorm_ai.database.models.task_record import TaskRecord
+
         result = await self.session.execute(
             select(Prediction).where(Prediction.id == prediction_id, Prediction.active == True)  # noqa: E712
         )
         prediction = result.scalar_one_or_none()
-        if not prediction:
-            return False
-        prediction.active = False
-        await self.session.commit()
-        return True
+        if prediction:
+            prediction.active = False
+            await self.session.commit()
+            return True
+
+        # Fallback: the id may be a task_record.id for a task that succeeded but
+        # produced no prediction rows (e.g. all outlets had insufficient history).
+        tr_result = await self.session.execute(
+            select(TaskRecord).where(
+                TaskRecord.id == prediction_id,
+                TaskRecord.active.is_(True),
+                TaskRecord.type == "prediction",
+            )
+        )
+        task_record = tr_result.scalar_one_or_none()
+        if task_record:
+            task_record.active = False
+            await self.session.commit()
+            return True
+
+    async def _persist_covariate_outlets(
+        self,
+        outlet_ids: list[str],
+        ridge_results: list[dict],
+        task_id: str | None,
+    ) -> None:
+        """Persist Ridge regression coefficients (and intercept) per outlet.
+
+        For each outlet a row is written to covariate_outlet for every feature
+        coefficient plus the intercept. Covariate definition rows are created
+        on first encounter (keyed by name).
+        """
+        now = datetime.now(UTC)
+
+        # Build a name→Covariate cache to avoid repeated SELECTs.
+        covariate_cache: dict[str, Covariate] = {}
+
+        async def _get_or_create_covariate(name: str) -> Covariate:
+            if name in covariate_cache:
+                return covariate_cache[name]
+            result = await self.session.execute(
+                select(Covariate).where(Covariate.name == name)
+            )
+            cov = result.scalar_one_or_none()
+            if cov is None:
+                cov_type, pad_id, description = _classify_covariate(name)
+                cov = Covariate(
+                    name=name,
+                    type=cov_type,
+                    pad_id=pad_id,
+                    description=description,
+                )
+                self.session.add(cov)
+                await self.session.flush()
+            covariate_cache[name] = cov
+            return cov
+
+        # Delete all existing rows for these outlets in one shot, then flush,
+        # before any inserts — avoids autoflush ordering issues.
+        active_outlet_ids = [oid for oid, ri in zip(outlet_ids, ridge_results) if ri is not None]
+        if active_outlet_ids:
+            await self.session.execute(
+                delete(CovariateOutlet).where(
+                    CovariateOutlet.outlet_id.in_(active_outlet_ids)
+                )
+            )
+            await self.session.flush()
+
+        for outlet_id, ridge_info in zip(outlet_ids, ridge_results):
+            if ridge_info is None:
+                continue
+            feature_names: list[str] = ridge_info["feature_names"]
+            coefficients: list[float] = ridge_info["coefficients"]
+            intercept: float = ridge_info["intercept"]
+
+            for feat_name, coeff in zip(feature_names, coefficients):
+                cov = await _get_or_create_covariate(feat_name)
+                if feat_name.startswith("dow_"):
+                    weekday = int(feat_name.split("_")[1])
+                elif "_dow_" in feat_name:
+                    weekday = int(feat_name.rsplit("_dow_", 1)[1])
+                else:
+                    weekday = None
+                self.session.add(CovariateOutlet(
+                    covariate_id=cov.id,
+                    outlet_id=outlet_id,
+                    weekday=weekday,
+                    task_id=task_id,
+                    computed_at=now,
+                    coefficient=coeff,
+                ))
+
+            # Intercept
+            intercept_cov = await _get_or_create_covariate("intercept")
+            self.session.add(CovariateOutlet(
+                covariate_id=intercept_cov.id,
+                outlet_id=outlet_id,
+                weekday=None,
+                task_id=task_id,
+                computed_at=now,
+                coefficient=intercept,
+            ))
+
+        await self.session.flush()
+
+
+def _classify_covariate(name: str) -> tuple[str, str | None, str | None]:
+    """Return (type, pad_id, description) for a covariate feature name."""
+    if name == "intercept":
+        return "intercept", None, "Ridge intercept — systematic bias absorbed per outlet"
+    if name.startswith("dow_"):
+        dow = int(name.split("_")[1])
+        day_names = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday"}
+        return "weekday", None, f"{day_names.get(dow, f'Weekday {dow}')} vs Sunday baseline"
+    if name == "cost_per_unit":
+        return "financial", None, "End-user price per unit — demand signal via price elasticity"
+    if "_dow_" in name:
+        pad_slug, dow_str = name.rsplit("_dow_", 1)
+        day_names = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday", 7: "Sunday"}
+        return "pad", None, f"PAD '{pad_slug}' effect on {day_names.get(int(dow_str), f'weekday {dow_str}')}"
+    return "unknown", None, None
+
+
+def _slugify(text: str) -> str:
+    """Convert a human-readable name to a lowercase underscore slug."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")

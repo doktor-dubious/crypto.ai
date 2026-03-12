@@ -84,8 +84,8 @@ function TabsTrigger({
         "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         "disabled:pointer-events-none disabled:opacity-50",
         isActive
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
+          ? "bg-background text-foreground shadow-sm cursor-pointer"
+          : "text-muted-foreground hover:text-foreground cursor-pointer",
         className
       )}
       {...props}

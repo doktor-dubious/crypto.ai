@@ -45,6 +45,11 @@ class OutletGroup(Base):
         cascade="all, delete-orphan",
     )
 
+    @property
+    def outlet_count(self) -> int:
+        """Count of active members in this group."""
+        return sum(1 for m in self.members if m.active)
+
 
 class OutletGroupMember(Base):
     """Association between outlets and groups."""

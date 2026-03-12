@@ -22,6 +22,7 @@ class TaskService:
         task_id: str,
         task_type: str,
         customer_id: str | None = None,
+        name: str | None = None,
     ) -> TaskRecord:
         """Create a new task record with status 'pending'."""
         record = TaskRecord(
@@ -29,6 +30,7 @@ class TaskService:
             type=task_type,
             status="pending",
             customer_id=customer_id,
+            name=name,
         )
         self.session.add(record)
         await self.session.flush()
@@ -56,6 +58,7 @@ class TaskService:
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
         error: str | None = None,
+        name: str | None = None,
     ) -> None:
         """Update status (and optional timestamps/error) for a task."""
         values: dict = {"status": status}
@@ -65,6 +68,8 @@ class TaskService:
             values["completed_at"] = completed_at
         if error is not None:
             values["error"] = error
+        if name is not None:
+            values["name"] = name
         await self.session.execute(
             update(TaskRecord).where(TaskRecord.task_id == task_id).values(**values)
         )

@@ -19,7 +19,10 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
     from gorm_ai.services.task import TaskService
 
     async with task_session() as session:
-        await TaskService(session).update_status(task_id, "started", started_at=datetime.now(UTC))
+        sim_name = request_data.get("name") or (
+            f"Simulation {request_data.get('simulation_from')} – {request_data.get('simulation_to')}"
+        )
+        await TaskService(session).update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name)
         await session.commit()
 
     try:
@@ -30,9 +33,14 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
 
         request = SimulationRequest(**request_data)
 
+        async def _on_progress(progress: int, message: str) -> None:
+            async with task_session() as s:
+                await TaskService(s).update_progress(task_id, progress, message)
+                await s.commit()
+
         async with task_session() as session:
             service = SimulationService(session)
-            result = await service.run_simulation(request, task_id=task_id)
+            result = await service.run_simulation(request, task_id=task_id, on_progress=_on_progress)
             await session.commit()
 
         async with task_session() as session:

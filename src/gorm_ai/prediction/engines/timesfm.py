@@ -28,6 +28,7 @@ class TimesFMEngine(PredictionEngine):
         self.preprocessor = DataPreprocessor(fill_missing=True, normalize=True)
         self._model = None
         self._model_loaded = False
+        self._last_ridge_results: list[dict] | None = None  # set after each predict_batch call
 
     def get_actual_slug(self) -> str | None:
         if self._model_loaded and self._model is None:
@@ -175,6 +176,7 @@ class TimesFMEngine(PredictionEngine):
                 "values": values,
                 "hist_X": hist_X,
                 "fut_X": fut_X,
+                "feature_names": feature_names,
                 "preprocessor": pp,
                 "covariates": item.get("covariates"),
             })
@@ -185,14 +187,19 @@ class TimesFMEngine(PredictionEngine):
 
         # Run GPU batches and collect raw (normalised) results.
         raw_results: list[tuple] = [None] * len(prepared)  # type: ignore[list-item]
+        all_ridge_infos: list[dict] = [None] * len(prepared)  # type: ignore[list-item]
         loop = asyncio.get_event_loop()
         for batch_start in range(0, len(sorted_prepared), batch_size):
             batch = sorted_prepared[batch_start : batch_start + batch_size]
-            batch_raw = await loop.run_in_executor(
+            batch_raw, batch_ridge = await loop.run_in_executor(
                 None, self._run_batch_inference, batch, horizon
             )
-            for j, raw in enumerate(batch_raw):
-                raw_results[order[batch_start + j]] = raw
+            for j, (raw, ridge_info) in enumerate(zip(batch_raw, batch_ridge)):
+                orig_idx = order[batch_start + j]
+                raw_results[orig_idx] = raw
+                all_ridge_infos[orig_idx] = ridge_info
+
+        self._last_ridge_results = all_ridge_infos
 
         # Build PredictionResult lists in original item order.
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
@@ -227,11 +234,12 @@ class TimesFMEngine(PredictionEngine):
         self,
         batch: list[dict],
         horizon: int,
-    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]], list[dict]]:
         """Sync: single TimesFM forward pass for a batch + per-outlet Ridge.
 
-        Returns a list of (predictions, lower, upper, all_quantiles) tuples,
-        all still in normalised scale.
+        Returns a tuple of:
+          - list of (predictions, lower, upper, all_quantiles) tuples (normalised scale)
+          - list of ridge_info dicts with keys: feature_names, coefficients, intercept
         """
         from sklearn.linear_model import Ridge
 
@@ -242,6 +250,7 @@ class TimesFMEngine(PredictionEngine):
         n_backcast = point_forecast.shape[1] - horizon
 
         results = []
+        ridge_infos = []
         for i, item in enumerate(batch):
             values = item["values"]
             hist_X = item["hist_X"]
@@ -257,9 +266,16 @@ class TimesFMEngine(PredictionEngine):
             residuals = values[-align_len:] - backcast[-align_len:]
             hist_X_aligned = hist_X[-align_len:]
 
+            feature_names = sorted(item.get("feature_names", []))
             ridge = Ridge(alpha=1.0, fit_intercept=True)
             ridge.fit(hist_X_aligned, residuals)
             adj = ridge.predict(fut_X)
+
+            ridge_infos.append({
+                "feature_names": feature_names,
+                "coefficients": list(ridge.coef_),
+                "intercept": float(ridge.intercept_),
+            })
 
             results.append((
                 base_pred + adj,
@@ -268,7 +284,7 @@ class TimesFMEngine(PredictionEngine):
                 base_all_q + adj[:, np.newaxis],
             ))
 
-        return results
+        return results, ridge_infos
 
     def _compute_economic_optimal(
         self,
@@ -283,21 +299,32 @@ class TimesFMEngine(PredictionEngine):
 
         Uses the critical fractile τ = Cu / (Cu + Co) to select the appropriate
         quantile from the full forecast distribution, where:
-          - Cu (underage/stockout cost) = profit_per_unit for that date
-          - Co (overage/holding cost)   = cost_per_unit × (holding_rate / 365) × protection_days
+          - cost_per_unit   = production cost per unit (Co: wasted on unsold units)
+          - profit_per_unit = selling price per unit
+          - Cu              = selling_price − production_cost (margin lost per missed sale)
+          - τ               = (profit − cost) / profit
 
-        Returns None when quantile data or financial data is unavailable.
+        Returns None when quantile data or financial data is unavailable, or when
+        selling price ≤ production cost (economically invalid).
         """
-        if all_quantiles is None or covariates is None:
+        if all_quantiles is None:
+            logger.debug("EO: no quantile data available")
+            return None
+        if covariates is None:
+            logger.debug("EO: no covariates (cost/profit not configured)")
             return None
 
-        profit = covariates.get("profit_per_unit", {}).get(pred_date, 0.0)
-        cost = covariates.get("cost_per_unit", {}).get(pred_date, 0.0)
-        if profit <= 0 or cost <= 0:
+        selling_price = covariates.get("profit_per_unit", {}).get(pred_date, 0.0)
+        production_cost = covariates.get("cost_per_unit", {}).get(pred_date, 0.0)
+        if selling_price <= 0 or production_cost <= 0 or selling_price <= production_cost:
+            logger.debug(
+                "EO: invalid financials on %s — selling_price(profit_per_unit)=%.4f "
+                "production_cost(cost_per_unit)=%.4f (need 0 < cost < price)",
+                pred_date, selling_price, production_cost,
+            )
             return None
 
-        co_period = cost * (holding_rate / 365) * protection_days
-        tau = profit / (profit + co_period)
+        tau = (selling_price - production_cost) / selling_price
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(all_quantiles[day_index, nearest_idx])
 
@@ -390,10 +417,13 @@ class TimesFMEngine(PredictionEngine):
         for dow in range(1, 7):
             result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
 
-        # Financial covariates (cost_per_unit, profit_per_unit) keyed by date
+        # Financial covariates keyed by date — profit_per_unit is excluded because
+        # it reflects margin, not end-user price, and does not influence demand.
+        _EXCLUDED_COVARIATES = {"profit_per_unit"}
         if covariates:
             for feature, date_map in covariates.items():
-                result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
+                if feature not in _EXCLUDED_COVARIATES:
+                    result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
 
         # Pad event indicators — binary 1.0 on event dates, 0.0 otherwise
         # Ridge learns the per-outlet effect magnitude from historical occurrences

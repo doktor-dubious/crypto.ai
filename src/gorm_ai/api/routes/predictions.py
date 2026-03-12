@@ -3,11 +3,14 @@
 from fastapi import APIRouter, HTTPException
 
 from gorm_ai.api.deps import PredictionServiceDep, TaskServiceDep
+from datetime import date
+
 from gorm_ai.schemas.prediction import (
     CompletedPredictionListResponse,
     CompletedPredictionResponse,
     MarginalValueRequest,
     MarginalValueResponse,
+    PadEffectResponse,
     PredictionAnalyticsSummary,
     PredictionEngine,
     PredictionRequest,
@@ -78,7 +81,8 @@ async def create_prediction_async(
     from datetime import UTC, datetime
 
     task = run_prediction_task.delay(data.model_dump(mode="json"))
-    await task_service.create(task.id, "prediction", data.customer_id)
+    prediction_name = f"{data.prediction_from} → {data.prediction_to}"
+    await task_service.create(task.id, "prediction", data.customer_id, name=prediction_name)
 
     return PredictionTaskStatus(
         task_id=task.id,
@@ -158,3 +162,25 @@ async def list_engines(
 ) -> list[PredictionEngine]:
     """List available prediction engines."""
     return service.get_available_engines()
+
+
+@router.get("/pad-effect", response_model=PadEffectResponse)
+async def get_pad_effect(
+    customer_id: str,
+    outlet_id: str,
+    pad_date: date,
+    n_baselines: int = 8,
+    service: PredictionServiceDep = ...,
+) -> PadEffectResponse:
+    """Estimate the demand effect of a PAD event for one outlet.
+
+    Compares the model's prediction on pad_date to the average prediction
+    across the n_baselines most recent non-PAD days with the same weekday.
+    """
+    result = await service.pad_effect(
+        customer_id=customer_id,
+        outlet_id=outlet_id,
+        pad_date=pad_date,
+        n_baselines=n_baselines,
+    )
+    return PadEffectResponse(**result)

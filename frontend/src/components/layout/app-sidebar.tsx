@@ -12,18 +12,26 @@ import {
   CreditCard,
   Home,
   LayoutDashboard,
+  LineChart,
+  List,
   LogOut,
   Plus,
   Search,
   Settings,
   ShoppingCart,
   Sliders,
+  Upload,
   Users,
   CalendarDays,
   FolderOpen,
   Activity,
   Sparkles,
   Cpu,
+  Filter,
+  DollarSign,
+  CalendarClock,
+  RefreshCw,
+  BookMarked,
 } from "lucide-react"
 import { signOut, useSession } from "@/lib/auth-client"
 import {
@@ -63,13 +71,18 @@ function getInitials(name: string): string {
 const NAV_ITEMS = [
   { href: "/", icon: Home, labelKey: "home" },
   { href: "/customers", icon: Users, labelKey: "customers" },
-  { href: "/outlets", icon: ShoppingCart, labelKey: "outlets" },
   { href: "/sales", icon: CreditCard, labelKey: "sales" },
+] as const
+
+const OUTLET_SUBNAV_ITEMS = [
+  { href: "/outlets", icon: List, labelKey: "outletsList" },
+  { href: "/outlets/analytics", icon: LineChart, labelKey: "outletsAnalytics" },
+  { href: "/outlet-groups", icon: FolderOpen, labelKey: "outletGroups" },
+  { href: "/outlets/bulk-update", icon: Upload, labelKey: "outletsBulkUpdate" },
 ] as const
 
 const PREDICTION_ITEMS = [
   { href: "/pads", icon: CalendarDays, labelKey: "pads" },
-  { href: "/outlet-groups", icon: FolderOpen, labelKey: "outletGroups" },
   { href: "/draw-adjustments", icon: Sliders, labelKey: "drawAdjustments" },
 ] as const
 
@@ -77,6 +90,16 @@ const SIMULATION_SUBNAV_ITEMS = [
   { href: "/simulations/new", icon: Plus, labelKey: "simulationsNew" },
   { href: "/simulations/strategies", icon: Sparkles, labelKey: "simulationsStrategies" },
   { href: "/simulations/completed", icon: CheckCircle, labelKey: "simulationsCompleted" },
+] as const
+
+const PADS_SUBNAV_ITEMS = [
+  { href: "/pads", icon: Filter, labelKey: "padsFilters" },
+  { href: "/pads/predefined", icon: BookMarked, labelKey: "predefinedPads" },
+] as const
+
+const FINANCIALS_SUBNAV_ITEMS = [
+  { href: "/financials/date-override", icon: CalendarClock, labelKey: "financialsDateOverride" },
+  { href: "/financials/bulk-update", icon: RefreshCw, labelKey: "financialsBulkUpdate" },
 ] as const
 
 const PREDICTION_SUBNAV_ITEMS = [
@@ -204,7 +227,7 @@ export function AppSidebar() {
       >
         <div className="flex h-[calc(var(--topbar-height,3.5rem)-1px)] items-center gap-2 px-1">
           <a
-            onClick={(e) => { e.stopPropagation(); router.push("/") }}
+            onClick={(e) => { e.stopPropagation(); if (isExpanded) router.push("/"); else toggleSidebar() }}
             className="cursor-pointer p-0.5 shrink-0"
           >
             <img
@@ -283,6 +306,20 @@ export function AppSidebar() {
                 {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
               </DropdownMenuItem>
             ))}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <ShoppingCart className="h-4 w-4" />
+                {t("nav.outlets")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {OUTLET_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
@@ -312,12 +349,38 @@ export function AppSidebar() {
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            {PREDICTION_ITEMS.map((item) => (
-              <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                <item.icon className="h-4 w-4" />
-                {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-              </DropdownMenuItem>
-            ))}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Filter className="h-4 w-4" />
+                {t("nav.padsFilters")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {PADS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <DollarSign className="h-4 w-4" />
+                {t("nav.financials")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {FINANCIALS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem onClick={() => router.push("/draw-adjustments")}>
+              <Sliders className="h-4 w-4" />
+              {t("nav.drawAdjustments")}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             {CONFIG_ITEMS.map((item) => (
               <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>

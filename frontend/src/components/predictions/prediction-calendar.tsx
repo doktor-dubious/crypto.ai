@@ -107,6 +107,8 @@ interface PredictionCalendarProps {
   assignments: StrategyAssignment[]
   selectedDates: Set<string>
   onSelectedDatesChange: (dates: Set<string>) => void
+  onPadChipClick?: (padId: string, padName: string, date: string) => void
+  onBarClick?: (assignmentId: string, assignmentName: string) => void
 }
 
 const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -116,6 +118,8 @@ export function PredictionCalendar({
   assignments,
   selectedDates,
   onSelectedDatesChange,
+  onPadChipClick,
+  onBarClick,
 }: PredictionCalendarProps) {
   const today = new Date()
   const [currentMonth, setCurrentMonth] = useState(today.getMonth() + 1)
@@ -327,15 +331,29 @@ export function PredictionCalendar({
                       {/* PAD chips */}
                       {padNames.length > 0 && (
                         <div className="mt-1 flex flex-col gap-0.5">
-                          {padNames.map((name) => (
-                            <Badge
-                              key={name}
-                              className="text-[9px] px-1 py-0 h-4 rounded-sm border-transparent text-white truncate max-w-full justify-start"
-                              style={{ backgroundColor: "#25693e" }}
-                            >
-                              {name}
-                            </Badge>
-                          ))}
+                          {padNames.map((name) => {
+                            const pad = pads.find((p) => p.name === name)
+                            return (
+                              <Badge
+                                key={name}
+                                onClick={
+                                  onPadChipClick && pad
+                                    ? (e) => {
+                                        e.stopPropagation()
+                                        onPadChipClick(pad.id, pad.name, dateStr)
+                                      }
+                                    : undefined
+                                }
+                                className={cn(
+                                  "text-[9px] px-1 py-0 h-4 rounded-sm border-transparent text-white truncate max-w-full justify-start",
+                                  onPadChipClick && "cursor-pointer hover:brightness-110"
+                                )}
+                                style={{ backgroundColor: "#25693e" }}
+                              >
+                                {name}
+                              </Badge>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -361,19 +379,33 @@ export function PredictionCalendar({
                   />
 
                   {/* Bars */}
-                  {weekBars.map((bar, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center px-2 text-[10px] font-semibold text-white mx-0.5 my-0.5 rounded-sm overflow-hidden"
-                      style={{
-                        gridColumn: `${bar.startCol + 2} / ${bar.endCol + 3}`,
-                        gridRow: bar.row + 1,
-                        backgroundColor: ASSIGNMENT_COLORS[bar.colorIdx % ASSIGNMENT_COLORS.length].bar,
-                      }}
-                    >
-                      {bar.name}
-                    </div>
-                  ))}
+                  {weekBars.map((bar, i) => {
+                    const assignment = assignments.find((a) => a.strategyName === bar.name)
+                    return (
+                      <div
+                        key={i}
+                        onClick={
+                          onBarClick && assignment
+                            ? (e) => {
+                                e.stopPropagation()
+                                onBarClick(assignment.id, assignment.strategyName)
+                              }
+                            : undefined
+                        }
+                        className={cn(
+                          "flex items-center px-2 text-[10px] font-semibold text-white mx-0.5 my-0.5 rounded-sm overflow-hidden",
+                          onBarClick && "cursor-pointer hover:brightness-110"
+                        )}
+                        style={{
+                          gridColumn: `${bar.startCol + 2} / ${bar.endCol + 3}`,
+                          gridRow: bar.row + 1,
+                          backgroundColor: ASSIGNMENT_COLORS[bar.colorIdx % ASSIGNMENT_COLORS.length].bar,
+                        }}
+                      >
+                        {bar.name}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

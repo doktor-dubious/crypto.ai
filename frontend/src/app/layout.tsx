@@ -3,6 +3,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { ThemeProvider } from "next-themes"
 import { QueryProvider } from "@/components/providers/query-provider"
+import { Toaster } from "sonner"
 import { roboto } from './fonts/fonts';
 import { geistSans } from './fonts/fonts';
 import { geistMono } from './fonts/fonts';
@@ -36,6 +37,7 @@ export default async function RootLayout({
         >
           <NextIntlClientProvider messages={messages}>
             <QueryProvider>{children}</QueryProvider>
+            <Toaster richColors closeButton theme="dark" />
           </NextIntlClientProvider>
         </ThemeProvider>
       </body>

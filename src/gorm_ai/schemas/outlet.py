@@ -114,3 +114,34 @@ class OutletResponse(OutletBase):
     updated_at: datetime
     info: list[OutletInfoResponse] = []
     deliveries: list[OutletDeliveryResponse] = []
+
+
+class DeliveryAnalyticsWeekday(BaseModel):
+    """Analytics for one weekday across all metrics."""
+
+    weekday: int  # 1=Monday, 7=Sunday
+    sold_history: list[int | None]       # last 8, index 0 = most recent
+    delivered_history: list[int | None]
+    returned_history: list[int | None]   # delivered - sold, null when delivered is null
+    raw_prediction: float | None         # trimmed mean of last 4 sold values
+    lower_bound: float | None
+    upper_bound: float | None
+    predicted: float | None
+    economic_optimal: float | None
+    delivered: float | None              # latest recommended delivery
+    pad_effect: float | None = None      # avg(PAD predictions) - avg(non-PAD baseline)
+    pad_effect_pct: float | None = None  # pad_effect as % of baseline
+    cost_per_unit: float | None = None
+    profit_per_unit: float | None = None
+    fixed: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    add: float | None = None
+    add_pct: float | None = None
+
+
+class DeliveryAnalyticsResponse(BaseModel):
+    """Delivery analytics per weekday for an outlet."""
+
+    outlet_id: str
+    weekdays: list[DeliveryAnalyticsWeekday]  # up to 7, only weekdays with data

@@ -32,6 +32,7 @@ import {
   type SimulationStrategyResponse, type SimulationStrategyUpdate,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,9 @@ export default function SimulationStrategiesPage() {
       setNewDelay(14)
       setNewPredictionStrategyId(null)
       setSelected(created)
+      toast.success(t("toastCreated"))
     },
+    onError: () => { toast.error(t("toastCreateError")) },
   })
 
   const updateMutation = useMutation({
@@ -145,7 +148,9 @@ export default function SimulationStrategiesPage() {
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ["simulation-strategies"] })
       setSelected(updated)
+      toast.success(t("toastUpdated"))
     },
+    onError: () => { toast.error(t("toastUpdateError")) },
   })
 
   const deleteMutation = useMutation({
@@ -154,7 +159,9 @@ export default function SimulationStrategiesPage() {
       queryClient.invalidateQueries({ queryKey: ["simulation-strategies"] })
       if (selected?.id === id) setSelected(null)
       setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+      toast.success(t("toastDeleted"))
     },
+    onError: () => { toast.error(t("toastDeleteError")) },
   })
 
   // ── Sync draft when selection changes ─────────────────────────────────────
@@ -491,8 +498,8 @@ export default function SimulationStrategiesPage() {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
               <div className="relative w-full">
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab1">{t("tabDetails")}</TabsTrigger>
-                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10" value="tab2">{t("tabActions")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabActions")}</TabsTrigger>
                 </TabsList>
                 <div
                   className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
