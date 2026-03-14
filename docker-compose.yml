@@ -11,10 +11,13 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    group_add:
+      - "124"  # docker group GID — grants access to /var/run/docker.sock
     volumes:
       - ./src:/app/src
       - ./alembic:/app/alembic
       - ./log:/app/log
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
@@ -26,9 +29,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # --concurrency=1 --pool=solo: one prediction at a time, no forked sub-processes.
-    # Multiple concurrent predictions would each load the full model and saturate RAM/CPU.
-    command: celery -A gorm_ai.tasks.celery_app worker --loglevel=info --concurrency=1 --pool=solo
+    # Reads simultaneous_tasks from DB config and starts with matching concurrency.
+    # Uses prefork pool when concurrency > 1, solo pool for concurrency = 1.
+    command: python -m gorm_ai.tasks.worker_entrypoint
     environment:
       - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
       - REDIS_URL=redis://redis:6379/0
@@ -46,6 +49,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis; r=redis.from_url('redis://redis:6379/1'); assert r.ping()\" && kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     deploy:
       resources:

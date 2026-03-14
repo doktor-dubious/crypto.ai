@@ -206,6 +206,26 @@ class CompletedPredictionListResponse(BaseModel):
     total: int
 
 
+class PredictionComparisonItem(BaseModel):
+    """Comparison metrics for a single prediction."""
+
+    id: str
+    name: str
+    date: date | None
+    draw: float
+    expected_demand: float
+    expected_sale: float
+    expected_return: float
+    sold_out_pct: float
+    expected_profit: float | None
+
+
+class PredictionComparisonResponse(BaseModel):
+    """Comparison of multiple predictions."""
+
+    items: list[PredictionComparisonItem]
+
+
 class PredictionEngineResponse(BaseModel):
     """Schema for prediction engine response."""
 

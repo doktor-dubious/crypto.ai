@@ -95,7 +95,10 @@ class TimesFMEngine(PredictionEngine):
         if self._model is not None:
             # Always build covariate arrays — weekday dummies are always included,
             # financial covariates and pad event indicators are added when available.
-            cov_arrays = self._build_covariate_arrays(df, prediction_from, horizon, covariates, pad_dates)
+            weekday_correction = kwargs.get("weekday_correction")
+            cov_arrays = self._build_covariate_arrays(
+                df, prediction_from, horizon, covariates, pad_dates, weekday_correction
+            )
             predictions, lower, upper, all_quantiles = await self._run_inference_with_covariates(
                 values, horizon, cov_arrays
             )
@@ -112,6 +115,17 @@ class TimesFMEngine(PredictionEngine):
             all_quantiles = self.preprocessor.denormalize(all_quantiles)  # (horizon, n_quantiles)
 
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+
+        # Apply weekday profile correction in denormalized space
+        wpc = kwargs.get("weekday_profile_correction", {})
+        if (wpc.get("enabled") if isinstance(wpc, dict) else wpc) and all_quantiles is not None:
+            predictions, all_quantiles = self._apply_weekday_profile_correction(
+                predictions, all_quantiles, historical_data, future_dates,
+                strength=wpc.get("strength", 1.0) if isinstance(wpc, dict) else 1.0,
+                threshold=wpc.get("threshold", 0.0) if isinstance(wpc, dict) else 0.0,
+            )
+            lower = all_quantiles[:, 0]
+            upper = all_quantiles[:, -1]
 
         # Build results
         results = []
@@ -167,6 +181,7 @@ class TimesFMEngine(PredictionEngine):
             cov_arrays = self._build_covariate_arrays(
                 df, prediction_from, horizon,
                 item.get("covariates"), item.get("pad_dates"),
+                item.get("weekday_correction"),
             )
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
@@ -211,6 +226,16 @@ class TimesFMEngine(PredictionEngine):
             lower = pp.denormalize(lower_norm)
             upper = pp.denormalize(upper_norm)
             quantiles = pp.denormalize(quantiles_norm)
+
+            wpc = item.get("weekday_profile_correction", {})
+            if wpc.get("enabled") if isinstance(wpc, dict) else wpc:
+                preds, quantiles = self._apply_weekday_profile_correction(
+                    preds, quantiles, item["historical_data"], future_dates,
+                    strength=wpc.get("strength", 1.0) if isinstance(wpc, dict) else 1.0,
+                    threshold=wpc.get("threshold", 0.0) if isinstance(wpc, dict) else 0.0,
+                )
+                lower = quantiles[:, 0]
+                upper = quantiles[:, -1]
 
             day_results = []
             for idx, pred_date in enumerate(future_dates):
@@ -285,6 +310,95 @@ class TimesFMEngine(PredictionEngine):
             ))
 
         return results, ridge_infos
+
+    @staticmethod
+    def _apply_weekday_profile_correction(
+        predictions: np.ndarray,
+        all_quantiles: np.ndarray,
+        historical_data: list[dict],
+        future_dates: list[date],
+        strength: float = 1.0,
+        threshold: float = 0.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Redistribute forecast's weekly total to match historical weekday proportions.
+
+        Computes each weekday's share of the weekly pattern from recent history
+        (last 8 weeks), then adjusts the denormalized forecast so each weekday
+        matches its historical share while preserving the overall weekly total.
+
+        Must be called on denormalized values to avoid affine distortion from
+        min-max normalization.
+
+        Args:
+            strength: Blending factor 0.0–1.0. 0 = no correction, 1 = full correction.
+                      Applied as: effective_ratio = 1 + strength * (ratio - 1)
+            threshold: Minimum absolute share divergence |ratio - 1| required before
+                       correction is applied to a weekday. Days below threshold are
+                       left unchanged.
+
+        Returns corrected (predictions, all_quantiles).
+        """
+        from collections import defaultdict
+
+        # Use last 8 weeks of history for a stable but current profile
+        recent = historical_data[-56:]
+
+        # Historical mean per weekday (0=Mon..6=Sun)
+        weekday_sums: dict[int, float] = defaultdict(float)
+        weekday_counts: dict[int, int] = defaultdict(int)
+        for record in recent:
+            dow = record["date"].weekday()
+            weekday_sums[dow] += record["value"]
+            weekday_counts[dow] += 1
+
+        hist_means: dict[int, float] = {}
+        for dow in weekday_sums:
+            if weekday_counts[dow] > 0:
+                hist_means[dow] = weekday_sums[dow] / weekday_counts[dow]
+
+        if not hist_means:
+            return predictions, all_quantiles
+
+        total_hist_mean = sum(hist_means.values())
+        if total_hist_mean <= 0:
+            return predictions, all_quantiles
+
+        # Historical weekday shares (proportion each day contributes)
+        hist_shares = {d: m / total_hist_mean for d, m in hist_means.items()}
+
+        # Group forecast indices by weekday
+        forecast_by_dow: dict[int, list[int]] = defaultdict(list)
+        for i, fd in enumerate(future_dates):
+            forecast_by_dow[fd.weekday()].append(i)
+
+        # Forecast mean per weekday and shares
+        forecast_means: dict[int, float] = {}
+        for dow, indices in forecast_by_dow.items():
+            forecast_means[dow] = float(np.mean(predictions[indices]))
+
+        total_forecast_mean = sum(forecast_means.values())
+        if total_forecast_mean <= 0:
+            return predictions, all_quantiles
+
+        forecast_shares = {d: m / total_forecast_mean for d, m in forecast_means.items()}
+
+        # Apply ratio = hist_share / forecast_share with strength damping and threshold
+        corrected_pred = predictions.copy()
+        corrected_q = all_quantiles.copy()
+        for dow, indices in forecast_by_dow.items():
+            if dow not in hist_shares or forecast_shares.get(dow, 0) <= 0:
+                continue
+            raw_ratio = hist_shares[dow] / forecast_shares[dow]
+            # Skip if divergence below threshold
+            if abs(raw_ratio - 1.0) < threshold:
+                continue
+            # Dampen: blend between no-correction (1.0) and full correction (raw_ratio)
+            ratio = 1.0 + strength * (raw_ratio - 1.0)
+            for idx in indices:
+                corrected_pred[idx] *= ratio
+                corrected_q[idx] *= ratio
+
+        return corrected_pred, corrected_q
 
     def _compute_economic_optimal(
         self,
@@ -385,12 +499,13 @@ class TimesFMEngine(PredictionEngine):
         horizon: int,
         covariates: dict[str, dict[date, float]] | None = None,
         pad_dates: dict[str, set[date]] | None = None,
+        weekday_correction: list[bool] | None = None,
     ) -> dict[str, list[float]]:
         """Build full covariate sequences covering historical context + future horizon.
 
-        Always includes weekday one-hot features (dow_1..dow_6; Sunday is the reference
-        category and is omitted). Financial covariates (date-keyed) and pad event
-        indicators (date-keyed binary) are added when provided.
+        Includes weekday one-hot features for each enabled day (dow_1=Mon .. dow_7=Sun).
+        Financial covariates (date-keyed) and pad event indicators (date-keyed binary)
+        are added when provided.
 
         Args:
             df: Preprocessed historical DataFrame with 'date' column (pd.Timestamps)
@@ -398,6 +513,8 @@ class TimesFMEngine(PredictionEngine):
             horizon: Number of future periods
             covariates: Optional feature name → {date: value} (fully resolved per date)
             pad_dates: Optional pad name → set of specific event dates (binary indicator)
+            weekday_correction: Optional list of 7 bools [Mon..Sun]; True = include that
+                day's one-hot feature. None defaults to all True.
 
         Returns:
             Feature name → flat list of floats, length = len(df) + horizon
@@ -413,9 +530,12 @@ class TimesFMEngine(PredictionEngine):
 
         result: dict[str, list[float]] = {}
 
-        # Weekday one-hot encoding (1=Mon … 6=Sat; 7=Sun is the reference category)
-        for dow in range(1, 7):
-            result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+        # Weekday one-hot encoding (dow_1=Mon .. dow_7=Sun); each day is optional.
+        # Enabled days get an explicit feature; disabled days are not corrected.
+        flags = weekday_correction if weekday_correction is not None else [True] * 7
+        for dow in range(1, 8):
+            if flags[dow - 1]:
+                result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
 
         # Financial covariates keyed by date — profit_per_unit is excluded because
         # it reflects margin, not end-user price, and does not influence demand.

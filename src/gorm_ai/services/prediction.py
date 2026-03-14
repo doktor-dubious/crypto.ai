@@ -5,12 +5,14 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
+import logging
 import math
+
+logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[int, str | None], Awaitable[None]]
 
 from sqlalchemy import and_, delete, func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,6 +30,7 @@ from gorm_ai.database.models.prediction import Prediction
 from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
+from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.prediction.registry import EngineRegistry
 from gorm_ai.schemas.prediction import (
     MarginalValueOutlet,
@@ -139,6 +142,10 @@ class PredictionService:
         else:
             all_covariates = {}
 
+        # Resolve weekday correction flags once for all outlets in this prediction run.
+        weekday_correction = await self._resolve_weekday_correction(request.customer_id)
+        weekday_profile_params = await self._resolve_weekday_profile_correction(request.customer_id)
+
         # Collect per-outlet inputs (pure in-memory, no DB calls).
         # Skip outlets with insufficient history — passing empty or near-empty
         # arrays to the model causes NumPy dtype errors.
@@ -158,6 +165,8 @@ class PredictionService:
                 "historical_data": historical_data,
                 "covariates": covariates,
                 "pad_dates": pad_covariates,
+                "weekday_correction": weekday_correction,
+                "weekday_profile_correction": weekday_profile_params,
                 **(request.engine_params or {}),
             })
             valid_outlet_ids.append(outlet_id)
@@ -172,8 +181,46 @@ class PredictionService:
             batch_size=request.batch_size,
         )
 
+        # Weekday-only override: for dates whose weekday has weekday_only=True,
+        # re-run predict_batch with history filtered to that weekday only.
+        weekday_only_flags = await self._resolve_weekday_only(request.customer_id)
+        future_dates = DataPreprocessor.generate_future_dates(request.prediction_from, horizon)
+        wo_dates = [d for d in future_dates if weekday_only_flags[d.weekday()]]
+        if wo_dates:
+            outlet_idx = {oid: i for i, oid in enumerate(valid_outlet_ids)}
+            date_idx = {d: i for i, d in enumerate(future_dates)}
+            for wo_date in wo_dates:
+                target_wd = wo_date.weekday()
+                wo_items: list[dict] = []
+                wo_ids: list[str] = []
+                for outlet_id in valid_outlet_ids:
+                    filtered = [
+                        (d, v) for d, v in all_sales.get(outlet_id, [])
+                        if d.weekday() == target_wd
+                    ]
+                    if len(filtered) < (capabilities.min_history_length or 1):
+                        continue
+                    wo_items.append({
+                        "historical_data": self._prepare_historical_data(filtered),
+                        "covariates": covariates_by_outlet.get(outlet_id) if request.use_financials else None,
+                        "pad_dates": pad_covariates,
+                        "weekday_correction": [False] * 7,
+                    })
+                    wo_ids.append(outlet_id)
+                if not wo_items:
+                    continue
+                wo_results = await engine.predict_batch(
+                    wo_items, horizon=1, prediction_from=wo_date, batch_size=request.batch_size
+                )
+                ri = date_idx[wo_date]
+                for wo_oid, wo_res in zip(wo_ids, wo_results):
+                    if wo_res:
+                        all_results[outlet_idx[wo_oid]][ri] = wo_res[0]
+
         ridge_results = getattr(engine, "_last_ridge_results", None)
+        weekday_corrections: dict[str, dict[int, float]] = {}
         if ridge_results:
+            weekday_corrections = self._extract_weekday_corrections(valid_outlet_ids, ridge_results)
             await self._persist_covariate_outlets(
                 valid_outlet_ids, ridge_results, task_id=task_id
             )
@@ -206,6 +253,7 @@ class PredictionService:
             covariates_by_outlet=covariates_by_outlet,
             default_cost=default_cost,
             default_profit=default_profit,
+            weekday_corrections=weekday_corrections,
         )
 
         if on_progress:
@@ -243,6 +291,7 @@ class PredictionService:
         covariates_by_outlet: "dict[str, dict[str, dict[date, float]] | None] | None" = None,
         default_cost: float | None = None,
         default_profit: float | None = None,
+        weekday_corrections: "dict[str, dict[int, float]] | None" = None,
     ) -> None:
         """Persist one Prediction + N PredictionOutlet rows for each date in the window."""
         # Load delivery constraints for all outlets (weekday → OutletDelivery)
@@ -377,6 +426,7 @@ class PredictionService:
 
             for outlet_id, r in outlet_results.items():
                 ap = outlet_applied.get(outlet_id, {})
+                oc = (weekday_corrections or {}).get(outlet_id, {})
                 self.session.add(PredictionOutlet(
                     prediction_id=prediction.id,
                     outlet_id=outlet_id,
@@ -392,32 +442,45 @@ class PredictionService:
                     maximum=ap.get("maximum"),
                     add=ap.get("add"),
                     add_pct=ap.get("add_pct"),
+                    correction_mon=oc.get(1),
+                    correction_tue=oc.get(2),
+                    correction_wed=oc.get(3),
+                    correction_thu=oc.get(4),
+                    correction_fri=oc.get(5),
+                    correction_sat=oc.get(6),
+                    correction_sun=oc.get(7),
                 ))
 
             # Upsert last_prediction — one row per (outlet_id, weekday), always current
+            # Flush pending ORM objects first so the SELECT below sees the latest state.
+            await self.session.flush()
             for outlet_id, r in outlet_results.items():
                 ap = outlet_applied.get(outlet_id, {})
-                values = dict(
-                    outlet_id=outlet_id,
-                    prediction_id=prediction.id,
-                    weekday=weekday,
-                    predicted=r.predicted_value,
-                    economic_optimal=r.economic_optimal,
-                    delivered=float(outlet_delivered[outlet_id]),
-                    lower_bound=r.lower_bound,
-                    upper_bound=r.upper_bound,
-                    fixed=ap.get("fixed"),
-                    minimum=ap.get("minimum"),
-                    maximum=ap.get("maximum"),
-                    add=ap.get("add"),
-                    add_pct=ap.get("add_pct"),
+                oc = (weekday_corrections or {}).get(outlet_id, {})
+
+                existing = await self.session.execute(
+                    select(LastPrediction).where(
+                        LastPrediction.outlet_id == outlet_id,
+                        LastPrediction.weekday == weekday,
+                    )
                 )
-                stmt = pg_insert(LastPrediction).values(**values)
-                stmt = stmt.on_conflict_do_update(
-                    constraint="uq_last_prediction_outlet_weekday",
-                    set_={k: stmt.excluded[k] for k in values if k not in ("outlet_id", "weekday")},
-                )
-                await self.session.execute(stmt)
+                lp = existing.scalar_one_or_none()
+                if lp is None:
+                    lp = LastPrediction(outlet_id=outlet_id, weekday=weekday)
+                    self.session.add(lp)
+
+                lp.prediction_id = prediction.id
+                lp.predicted = r.predicted_value
+                lp.economic_optimal = r.economic_optimal
+                lp.delivered = float(outlet_delivered[outlet_id])
+                lp.lower_bound = r.lower_bound
+                lp.upper_bound = r.upper_bound
+                lp.fixed = ap.get("fixed")
+                lp.minimum = ap.get("minimum")
+                lp.maximum = ap.get("maximum")
+                lp.add = ap.get("add")
+                lp.add_pct = ap.get("add_pct")
+                lp.weekday_correction = oc.get(weekday)
 
     async def _load_outlet_deliveries(
         self, outlet_ids: list[str]
@@ -917,6 +980,96 @@ class PredictionService:
             return gc.cost_per_unit, gc.profit_per_unit
 
         return None, None
+
+    async def _resolve_weekday_correction(self, customer_id: str) -> list[bool]:
+        """Resolve weekday correction flags [Mon..Sun]: customer_configuration → configuration → all True."""
+        _DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
+        )
+        gc = result.scalar_one_or_none()
+
+        flags = []
+        for day in _DAYS:
+            col = f"weekday_correction_{day}"
+            cc_val = getattr(cc, col, None) if cc else None
+            if cc_val is not None:
+                flags.append(cc_val)
+            elif gc is not None:
+                flags.append(getattr(gc, col, True))
+            else:
+                flags.append(True)
+        return flags
+
+    async def _resolve_weekday_only(self, customer_id: str) -> list[bool]:
+        """Resolve weekday_only flags [Mon..Sun]: customer_configuration → configuration → False."""
+        _DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
+        )
+        gc = result.scalar_one_or_none()
+
+        flags = []
+        for day in _DAYS:
+            col = f"weekday_only_{day}"
+            cc_val = getattr(cc, col, None) if cc else None
+            if cc_val is not None:
+                flags.append(cc_val)
+            elif gc is not None:
+                flags.append(getattr(gc, col, False))
+            else:
+                flags.append(False)
+        return flags
+
+    async def _resolve_weekday_profile_correction(self, customer_id: str) -> dict:
+        """Resolve weekday profile correction params: customer_configuration → configuration → defaults.
+
+        Returns dict with keys: enabled (bool), strength (float), threshold (float).
+        """
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
+        )
+        gc = result.scalar_one_or_none()
+
+        def _resolve(attr: str, default):
+            cc_val = getattr(cc, attr, None) if cc else None
+            if cc_val is not None:
+                return cc_val
+            if gc is not None:
+                return getattr(gc, attr, default)
+            return default
+
+        return {
+            "enabled": _resolve("weekday_profile_correction", False),
+            "strength": _resolve("weekday_profile_correction_strength", 1.0),
+            "threshold": _resolve("weekday_profile_correction_threshold", 0.0),
+        }
 
     async def _resolve_rounding(self, customer_id: str) -> int:
         """Resolve eo_to_delivery_rounding: customer_configuration → configuration → default (ceil)."""
@@ -1538,6 +1691,73 @@ class PredictionService:
             "max_predicted": round(row.max_predicted, 4) if row.max_predicted is not None else None,
         }
 
+    async def get_comparison(self, prediction_ids: list[str], customer_id: str) -> list[dict]:
+        """Compute comparison metrics for a set of predictions."""
+        from sqlalchemy import case as sa_case
+
+        # Get default financials for profit calculation
+        cost_per_unit, profit_per_unit = await self._get_default_financials(customer_id)
+
+        # Fetch prediction metadata (name, date)
+        pred_result = await self.session.execute(
+            select(Prediction)
+            .options(selectinload(Prediction.prediction_strategy))
+            .where(Prediction.id.in_(prediction_ids), Prediction.active.is_(True))
+        )
+        preds_by_id = {p.id: p for p in pred_result.scalars().all()}
+
+        items = []
+        for pid in prediction_ids:
+            pred = preds_by_id.get(pid)
+            if not pred:
+                continue
+
+            # Aggregate per-outlet metrics in one query
+            delivered_col = func.coalesce(PredictionOutlet.delivered, 0.0)
+            predicted_col = func.coalesce(PredictionOutlet.predicted, 0.0)
+            sale_expr = sa_case(
+                (delivered_col < predicted_col, delivered_col),
+                else_=predicted_col,
+            )
+
+            result = await self.session.execute(
+                select(
+                    func.count(PredictionOutlet.id).label("cnt"),
+                    func.sum(delivered_col).label("draw"),
+                    func.sum(predicted_col).label("demand"),
+                    func.sum(sale_expr).label("sale"),
+                    func.count().filter(predicted_col >= delivered_col).label("sold_out_cnt"),
+                ).where(PredictionOutlet.prediction_id == pid)
+            )
+            row = result.one()
+
+            cnt = row.cnt or 0
+            draw = float(row.draw or 0)
+            demand = float(row.demand or 0)
+            sale = float(row.sale or 0)
+            ret = draw - sale
+            sold_out_pct = (row.sold_out_cnt / cnt * 100) if cnt > 0 else 0.0
+
+            profit = None
+            if cost_per_unit is not None and profit_per_unit is not None:
+                profit = round(profit_per_unit * sale - cost_per_unit * ret, 2)
+
+            name = pred.prediction_strategy.name if pred.prediction_strategy else (pred.task_id or pid[:8])
+
+            items.append({
+                "id": pid,
+                "name": name,
+                "date": pred.date,
+                "draw": round(draw, 2),
+                "expected_demand": round(demand, 2),
+                "expected_sale": round(sale, 2),
+                "expected_return": round(ret, 2),
+                "sold_out_pct": round(sold_out_pct, 2),
+                "expected_profit": profit,
+            })
+
+        return items
+
     async def delete_prediction(self, prediction_id: str) -> bool:
         """Soft-delete a prediction (or its task_record if no prediction rows exist)."""
         from gorm_ai.database.models.task_record import TaskRecord
@@ -1565,6 +1785,25 @@ class PredictionService:
             task_record.active = False
             await self.session.commit()
             return True
+
+    @staticmethod
+    def _extract_weekday_corrections(
+        outlet_ids: list[str],
+        ridge_results: list[dict],
+    ) -> dict[str, dict[int, float]]:
+        """Extract dow_N coefficients from ridge_results keyed by outlet_id → weekday int."""
+        result: dict[str, dict[int, float]] = {}
+        for outlet_id, ridge_info in zip(outlet_ids, ridge_results):
+            if ridge_info is None:
+                continue
+            day_corrections: dict[int, float] = {}
+            for feat_name, coeff in zip(ridge_info["feature_names"], ridge_info["coefficients"]):
+                if feat_name.startswith("dow_"):
+                    dow = int(feat_name.split("_")[1])
+                    day_corrections[dow] = coeff
+            if day_corrections:
+                result[outlet_id] = day_corrections
+        return result
 
     async def _persist_covariate_outlets(
         self,

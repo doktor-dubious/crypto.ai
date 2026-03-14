@@ -214,6 +214,13 @@ thead>[data-slot="table-row"]:hover {
   background-color: transparent !important;
 }
 
+/*  ── Sonner toast truncation ──────────────────────────────────*/
+[data-sonner-toast] [data-content] {
+  max-height: calc(1.5em * 10);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /*  ── Calendar Pad Badge ───────────────────────────────────────*/
 .calendar-pad-badge {
   color: var(--color-white-muted) !important;

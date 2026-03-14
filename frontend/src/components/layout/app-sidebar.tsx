@@ -11,7 +11,6 @@ import {
   CheckCircle,
   CreditCard,
   Home,
-  LayoutDashboard,
   LineChart,
   List,
   LogOut,
@@ -32,6 +31,11 @@ import {
   CalendarClock,
   RefreshCw,
   BookMarked,
+  TrendingUp,
+  PieChart,
+  Store,
+  Coins,
+  PackageX,
 } from "lucide-react"
 import { signOut, useSession } from "@/lib/auth-client"
 import {
@@ -81,9 +85,19 @@ const OUTLET_SUBNAV_ITEMS = [
   { href: "/outlets/bulk-update", icon: Upload, labelKey: "outletsBulkUpdate" },
 ] as const
 
-const PREDICTION_ITEMS = [
-  { href: "/pads", icon: CalendarDays, labelKey: "pads" },
-  { href: "/draw-adjustments", icon: Sliders, labelKey: "drawAdjustments" },
+const PREDICTION_SUBNAV_TOP = [
+  { href: "/predictions/new", icon: Plus, labelKey: "predictionsNew" },
+  { href: "/predictions/strategies", icon: Sparkles, labelKey: "predictionsStrategies" },
+  { href: "/predictions/completed", icon: CheckCircle, labelKey: "predictionsCompleted" },
+] as const
+
+const PREDICTION_SUBNAV_MID = [
+  { href: "/predictions/analytics", icon: TrendingUp, labelKey: "predictionsAnalytics" },
+] as const
+
+const PREDICTION_SUBNAV_BOT = [
+  { href: "/draw-adjustments", icon: Sliders, labelKey: "predictionsAdjustments" },
+  { href: "/predictions/configuration", icon: Cpu, labelKey: "predictionsConfiguration" },
 ] as const
 
 const SIMULATION_SUBNAV_ITEMS = [
@@ -102,16 +116,15 @@ const FINANCIALS_SUBNAV_ITEMS = [
   { href: "/financials/bulk-update", icon: RefreshCw, labelKey: "financialsBulkUpdate" },
 ] as const
 
-const PREDICTION_SUBNAV_ITEMS = [
-  { href: "/predictions/new", icon: Plus, labelKey: "predictionsNew" },
-  { href: "/predictions/strategies", icon: Sparkles, labelKey: "predictionsStrategies" },
-  { href: "/predictions/completed", icon: CheckCircle, labelKey: "predictionsCompleted" },
-  { href: "/predictions/configuration", icon: Cpu, labelKey: "predictionsConfiguration" },
+const STATISTICS_SUBNAV_ITEMS = [
+  { href: "/statistics/sales", icon: CreditCard, labelKey: "statisticsSales" },
+  { href: "/statistics/sold-out", icon: PackageX, labelKey: "statisticsSoldOut" },
+  { href: "/statistics/outlets", icon: Store, labelKey: "statisticsOutlets" },
+  { href: "/statistics/profit", icon: Coins, labelKey: "statisticsProfit" },
 ] as const
 
 const CONFIG_ITEMS = [
-  { href: "/configuration", icon: LayoutDashboard, labelKey: "configuration" },
-  { href: "/settings", icon: Settings, labelKey: "settings" },
+  { href: "/configuration", icon: Settings, labelKey: "configuration" },
 ] as const
 
 
@@ -306,28 +319,30 @@ export function AppSidebar() {
                 {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
               </DropdownMenuItem>
             ))}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <ShoppingCart className="h-4 w-4" />
-                {t("nav.outlets")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {OUTLET_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
             <DropdownMenuSeparator />
+
+            {/* Predictions — New, Strategies, Completed | Analytics | Adjustments, Export Configuration */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Activity className="h-4 w-4" />
                 {t("nav.predictions")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {PREDICTION_SUBNAV_ITEMS.map((item) => (
+                {PREDICTION_SUBNAV_TOP.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {PREDICTION_SUBNAV_MID.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {PREDICTION_SUBNAV_BOT.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
@@ -335,6 +350,8 @@ export function AppSidebar() {
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+
+            {/* Simulations */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <BarChart3 className="h-4 w-4" />
@@ -349,6 +366,26 @@ export function AppSidebar() {
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+
+            {/* Outlets — moved below Simulations */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <ShoppingCart className="h-4 w-4" />
+                {t("nav.outlets")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {OUTLET_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            <DropdownMenuSeparator />
+
+            {/* Pads & Filters */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Filter className="h-4 w-4" />
@@ -363,6 +400,8 @@ export function AppSidebar() {
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+
+            {/* Financials */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <DollarSign className="h-4 w-4" />
@@ -377,10 +416,23 @@ export function AppSidebar() {
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuItem onClick={() => router.push("/draw-adjustments")}>
-              <Sliders className="h-4 w-4" />
-              {t("nav.drawAdjustments")}
-            </DropdownMenuItem>
+
+            {/* Statistics */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <PieChart className="h-4 w-4" />
+                {t("nav.statistics")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {STATISTICS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
             <DropdownMenuSeparator />
             {CONFIG_ITEMS.map((item) => (
               <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>

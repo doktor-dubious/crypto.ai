@@ -131,6 +131,7 @@ class DeliveryAnalyticsWeekday(BaseModel):
     delivered: float | None              # latest recommended delivery
     pad_effect: float | None = None      # avg(PAD predictions) - avg(non-PAD baseline)
     pad_effect_pct: float | None = None  # pad_effect as % of baseline
+    weekday_correction: float | None = None  # weekday correction factor from last_prediction
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     fixed: float | None = None

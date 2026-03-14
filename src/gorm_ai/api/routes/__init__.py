@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from gorm_ai.api.routes import (
     configuration,
+    currencies,
     customers,
     draw_adjustments,
     outlet_groups,
@@ -23,6 +24,7 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
+api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(outlets.router, prefix="/outlets", tags=["outlets"])
 api_router.include_router(outlet_groups.router, prefix="/outlet-groups", tags=["outlet-groups"])

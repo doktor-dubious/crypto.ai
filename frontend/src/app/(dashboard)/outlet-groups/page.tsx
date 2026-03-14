@@ -181,7 +181,7 @@ export default function OutletGroupsPage() {
 
   const { data: allOutlets = [] } = useQuery({
     queryKey: ["outlets", activeCustomer?.id],
-    queryFn: () => outletsApi.list(activeCustomer!.id, { limit: 1000 }),
+    queryFn: () => outletsApi.list(activeCustomer!.id, { limit: 5000 }),
     enabled: !!activeCustomer,
   })
 
@@ -250,12 +250,15 @@ export default function OutletGroupsPage() {
     onError: () => toast.error(t("toastDeleteError")),
   })
 
-  const addOutletMutation = useMutation({
-    mutationFn: (outletId: string) => outletGroupsApi.addOutlet(selected!.id, outletId),
-    onSuccess: () => {
+  const addOutletsBulkMutation = useMutation({
+    mutationFn: (outletIds: string[]) => outletGroupsApi.addOutletsBulk(selected!.id, outletIds),
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["outlet-group-outlets"] })
       queryClient.invalidateQueries({ queryKey: ["outlet-groups"] })
-      toast.success(t("toastOutletAdded"))
+      const parts: string[] = []
+      if (result.added > 0) parts.push(t("toastBulkAdded", { count: result.added }))
+      if (result.duplicates > 0) parts.push(t("toastBulkDuplicates", { count: result.duplicates }))
+      toast.success(parts.join("\n"))
     },
     onError: () => toast.error(t("toastOutletAddError")),
   })
@@ -372,7 +375,7 @@ export default function OutletGroupsPage() {
   }
 
   async function handleAddSelected() {
-    for (const id of pendingAddIds) await addOutletMutation.mutateAsync(id)
+    await addOutletsBulkMutation.mutateAsync(pendingAddIds)
     setAvailableSelectedIds(new Set())
     setAddConfirmOpen(false)
   }
@@ -394,21 +397,35 @@ export default function OutletGroupsPage() {
 
   async function confirmFreeAdd() {
     const extIds = parseFreeInputIds()
+    const outletIds: string[] = []
+    const notFound: string[] = []
     for (const extId of extIds) {
       const outlet = allOutlets.find((o) => o.ext_id === extId)
-      if (!outlet) { toast.error(t("outletNotFound", { id: extId })); continue }
-      await addOutletMutation.mutateAsync(outlet.id)
+      if (!outlet) { notFound.push(extId); continue }
+      outletIds.push(outlet.id)
     }
+    if (notFound.length > 0) {
+      const preview = notFound.slice(0, 10).join(", ")
+      const suffix = notFound.length > 10 ? ` (+${notFound.length - 10})` : ""
+      toast.error(t("outletsNotFound", { count: notFound.length, ids: preview + suffix }))
+    }
+    if (outletIds.length > 0) await addOutletsBulkMutation.mutateAsync(outletIds)
     setFreeInput("")
     setFreeAddConfirmOpen(false)
   }
 
   async function confirmFreeRemove() {
     const extIds = parseFreeInputIds()
+    const notFound: string[] = []
     for (const extId of extIds) {
       const outlet = allOutlets.find((o) => o.ext_id === extId)
-      if (!outlet) { toast.error(t("outletNotFound", { id: extId })); continue }
+      if (!outlet) { notFound.push(extId); continue }
       await removeOutletMutation.mutateAsync(outlet.id)
+    }
+    if (notFound.length > 0) {
+      const preview = notFound.slice(0, 10).join(", ")
+      const suffix = notFound.length > 10 ? ` (+${notFound.length - 10})` : ""
+      toast.error(t("outletsNotFound", { count: notFound.length, ids: preview + suffix }))
     }
     setFreeInput("")
     setFreeRemoveConfirmOpen(false)
@@ -902,7 +919,7 @@ export default function OutletGroupsPage() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="secondary" size="sm" onClick={() => setAddConfirmOpen(false)}>{t("deleteCancel")}</Button>
-            <Button size="sm" onClick={handleAddSelected} disabled={addOutletMutation.isPending}>
+            <Button size="sm" onClick={handleAddSelected} disabled={addOutletsBulkMutation.isPending}>
               {t("addConfirmButton")}
             </Button>
           </DialogFooter>
@@ -918,7 +935,7 @@ export default function OutletGroupsPage() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="secondary" size="sm" onClick={() => setFreeAddConfirmOpen(false)}>{t("deleteCancel")}</Button>
-            <Button size="sm" onClick={confirmFreeAdd} disabled={addOutletMutation.isPending}>
+            <Button size="sm" onClick={confirmFreeAdd} disabled={addOutletsBulkMutation.isPending}>
               {t("freeAddConfirmButton")}
             </Button>
           </DialogFooter>

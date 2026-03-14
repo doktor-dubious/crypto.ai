@@ -34,6 +34,23 @@ class CustomerConfiguration(Base):
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     eo_to_delivery_rounding: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1=round, 2=ceil, 3=floor; None = inherit from global config
+    weekday_correction_mon: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_tue: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_wed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_thu: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_fri: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_sat: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_correction_sun: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_mon: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_tue: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_wed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_thu: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_fri: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_sat: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_only_sun: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_profile_correction: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    weekday_profile_correction_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weekday_profile_correction_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     prediction_engine_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("prediction_engine.id", ondelete="SET NULL"),

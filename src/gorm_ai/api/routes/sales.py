@@ -5,7 +5,17 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 
 from gorm_ai.api.deps import SalesServiceDep
-from gorm_ai.schemas.sales import SalesBulkImport, SalesCreate, SalesQuery, SalesResponse
+from gorm_ai.schemas.sales import (
+    AggregatedSalesDataPoint,
+    AggregatedSalesRequest,
+    AggregatedSalesResponse,
+    EfficiencyDataPoint,
+    EfficiencyResponse,
+    SalesBulkImport,
+    SalesCreate,
+    SalesQuery,
+    SalesResponse,
+)
 
 router = APIRouter()
 
@@ -64,6 +74,42 @@ async def query_sales(
     )
     sales = await service.query(query)
     return [SalesResponse.model_validate(s) for s in sales]
+
+
+@router.post("/aggregated", response_model=AggregatedSalesResponse)
+async def get_aggregated_sales(
+    data: AggregatedSalesRequest,
+    service: SalesServiceDep,
+) -> AggregatedSalesResponse:
+    """Aggregate sales by date across multiple outlets."""
+    rows = await service.get_aggregated(
+        customer_id=data.customer_id,
+        outlet_ids=data.outlet_ids,
+        start_date=data.start_date,
+        end_date=data.end_date,
+    )
+    return AggregatedSalesResponse(
+        data=[AggregatedSalesDataPoint(**r) for r in rows],
+        outlet_count=len(data.outlet_ids),
+    )
+
+
+@router.post("/efficiency", response_model=EfficiencyResponse)
+async def get_efficiency(
+    data: AggregatedSalesRequest,
+    service: SalesServiceDep,
+) -> EfficiencyResponse:
+    """Compute return % and sold-out % by date across outlets."""
+    rows = await service.get_efficiency(
+        customer_id=data.customer_id,
+        outlet_ids=data.outlet_ids,
+        start_date=data.start_date,
+        end_date=data.end_date,
+    )
+    return EfficiencyResponse(
+        data=[EfficiencyDataPoint(**r) for r in rows],
+        outlet_count=len(data.outlet_ids),
+    )
 
 
 @router.get("/{sales_id}", response_model=SalesResponse)

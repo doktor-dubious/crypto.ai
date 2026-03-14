@@ -116,7 +116,7 @@ class AutoGluonEngine(PredictionEngine):
         return await loop.run_in_executor(
             None,
             self._run_autogluon_batch,
-            items, horizon, prediction_from, holding_rate, protection_days,
+            items, horizon, prediction_from, batch_size, holding_rate, protection_days,
         )
 
     def _run_autogluon_batch(
@@ -124,10 +124,30 @@ class AutoGluonEngine(PredictionEngine):
         items: list[dict],
         horizon: int,
         prediction_from: date,
+        batch_size: int,
         holding_rate: float,
         protection_days: int,
     ) -> list[list[PredictionResult]]:
-        """Sync: single AutoGluon fit+predict for all outlets combined."""
+        """Sync: AutoGluon fit+predict, sub-batched by batch_size to bound memory use."""
+        output: list[list[PredictionResult]] = []
+        for start in range(0, len(items), batch_size):
+            sub_items = items[start : start + batch_size]
+            output.extend(
+                self._run_single_autogluon_batch(
+                    sub_items, horizon, prediction_from, holding_rate, protection_days
+                )
+            )
+        return output
+
+    def _run_single_autogluon_batch(
+        self,
+        items: list[dict],
+        horizon: int,
+        prediction_from: date,
+        holding_rate: float,
+        protection_days: int,
+    ) -> list[list[PredictionResult]]:
+        """Sync: single AutoGluon fit+predict for one sub-batch of outlets."""
         from autogluon.timeseries import TimeSeriesDataFrame, TimeSeriesPredictor
 
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
@@ -149,6 +169,7 @@ class AutoGluonEngine(PredictionEngine):
                 cov_arrays = self._build_covariate_arrays(
                     df, prediction_from, horizon,
                     item.get("covariates"), item.get("pad_dates"),
+                    item.get("weekday_correction"),
                 )
                 if i == 0:
                     covariate_names = sorted(cov_arrays.keys())
@@ -331,12 +352,13 @@ class AutoGluonEngine(PredictionEngine):
         horizon: int,
         covariates: dict[str, dict[date, float]] | None = None,
         pad_dates: dict[str, set[date]] | None = None,
+        weekday_correction: list[bool] | None = None,
     ) -> dict[str, list[float]]:
         """Build full covariate sequences covering historical context + future horizon.
 
-        Always includes weekday one-hot features (dow_1..dow_6; Sunday is the reference
-        category and is omitted). Financial covariates (date-keyed) and pad event
-        indicators (date-keyed binary) are added when provided.
+        Includes weekday one-hot features for each enabled day (dow_1=Mon .. dow_7=Sun).
+        Financial covariates (date-keyed) and pad event indicators (date-keyed binary)
+        are added when provided.
         """
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
@@ -346,9 +368,12 @@ class AutoGluonEngine(PredictionEngine):
 
         result: dict[str, list[float]] = {}
 
-        # Weekday one-hot encoding (dow_1..dow_6; Sunday=7 is reference)
-        for dow in range(1, 7):
-            result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+        # Weekday one-hot encoding (dow_1=Mon .. dow_7=Sun); each day is optional.
+        # Enabled days get an explicit feature; disabled days are not corrected.
+        flags = weekday_correction if weekday_correction is not None else [True] * 7
+        for dow in range(1, 8):
+            if flags[dow - 1]:
+                result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
 
         # Financial covariates keyed by date — profit_per_unit is excluded because
         # it reflects margin, not end-user price, and does not influence demand.

@@ -3,6 +3,8 @@
 import asyncio
 from datetime import UTC, date, datetime
 
+from fastapi import HTTPException
+
 from gorm_ai.tasks.celery_app import celery_app
 
 
@@ -19,10 +21,21 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
     from gorm_ai.services.task import TaskService
 
     async with task_session() as session:
+        # Guard against redelivery after worker restart.
+        # Redelivered tasks get a new Celery ID that won't exist in our DB.
+        ts = TaskService(session)
+        try:
+            record = await ts.get(task_id)
+            if record.status == "revoked":
+                return {"skipped": True, "reason": "task was revoked"}
+        except HTTPException:
+            # Unknown task ID → redelivered zombie, skip it
+            return {"skipped": True, "reason": "redelivered task not in DB"}
+
         sim_name = request_data.get("name") or (
             f"Simulation {request_data.get('simulation_from')} – {request_data.get('simulation_to')}"
         )
-        await TaskService(session).update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name)
+        await ts.update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name)
         await session.commit()
 
     try:

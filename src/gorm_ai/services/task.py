@@ -1,7 +1,7 @@
 """Task record service."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
@@ -116,12 +116,73 @@ class TaskService:
         items = list(result.scalars().all())
         return items, total
 
+    async def update_resource_metrics(
+        self,
+        task_id: str,
+        peak_memory_mb: float | None,
+        cpu_time_s: float | None,
+    ) -> None:
+        """Store resource usage metrics after a task completes."""
+        values: dict = {}
+        if peak_memory_mb is not None:
+            values["peak_memory_mb"] = peak_memory_mb
+        if cpu_time_s is not None:
+            values["cpu_time_s"] = cpu_time_s
+        if not values:
+            return
+        await self.session.execute(
+            update(TaskRecord).where(TaskRecord.task_id == task_id).values(**values)
+        )
+
     async def cancel(self, task_id: str) -> None:
         """Revoke a Celery task and mark its record as 'revoked'."""
         from gorm_ai.tasks.celery_app import celery_app
 
         await asyncio.to_thread(celery_app.control.revoke, task_id, terminate=True)
         await self.update_status(task_id, "revoked", completed_at=datetime.now(UTC))
+
+    async def mark_stale_tasks_failed(self, stale_seconds: int = 0) -> int:
+        """Mark all 'started' tasks as failed.
+
+        Called only when the worker container is confirmed down, so any
+        task still marked 'started' will never complete.  ``stale_seconds``
+        can optionally require that updated_at is older than N seconds.
+        """
+        wheres = [TaskRecord.status == "started"]
+        if stale_seconds > 0:
+            cutoff = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+            wheres.append(TaskRecord.updated_at < cutoff)
+        result = await self.session.execute(
+            update(TaskRecord)
+            .where(*wheres)
+            .values(
+                status="failure",
+                error="Worker lost",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(TaskRecord.id)
+        )
+        rows = result.all()
+        return len(rows)
+
+    async def get_active_from_db(self) -> list[CeleryWorkerTask]:
+        """Return 'started' tasks from DB.
+
+        Fallback for solo pool where inspect().active() can't respond
+        because the worker thread is blocked on computation.
+        """
+        result = await self.session.execute(
+            select(TaskRecord).where(TaskRecord.status == "started")
+        )
+        return [
+            CeleryWorkerTask(
+                task_id=r.task_id,
+                name=r.name or r.type,
+                worker="(busy)",
+                args=[],
+            )
+            for r in result.scalars().all()
+        ]
 
     async def get_active(self) -> list[CeleryWorkerTask]:
         """Return live active tasks from Celery workers."""

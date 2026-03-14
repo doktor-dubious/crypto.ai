@@ -15,6 +15,7 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/predictions/strategies": "predictionsStrategies",
   "/predictions/completed": "predictionsCompleted",
   "/predictions/configuration": "predictionsConfiguration",
+  "/predictions/analytics": "predictionsAnalytics",
   "/simulations": "simulations",
   "/simulations/new": "simulationsNew",
   "/simulations/strategies": "simulationsStrategies",
@@ -25,8 +26,11 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/financials/bulk-update": "financialsBulkUpdate",
   "/outlet-groups": "outletGroups",
   "/draw-adjustments": "drawAdjustments",
+  "/statistics/sales": "statisticsSales",
+  "/statistics/sold-out": "statisticsSoldOut",
+  "/statistics/outlets": "statisticsOutlets",
+  "/statistics/profit": "statisticsProfit",
   "/configuration": "configuration",
-  "/settings": "settings",
 }
 
 export function Topbar() {

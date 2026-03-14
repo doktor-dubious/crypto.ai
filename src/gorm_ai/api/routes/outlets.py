@@ -31,7 +31,7 @@ async def create_outlet(
 async def list_outlets(
     service: OutletServiceDep,
     customer_id: str | None = Query(default=None),
-    limit: int = Query(default=100, le=1000),
+    limit: int = Query(default=100, le=10000),
     offset: int = Query(default=0, ge=0),
     include_inactive: bool = Query(default=False),
 ) -> list[OutletResponse]:

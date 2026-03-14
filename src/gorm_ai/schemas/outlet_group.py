@@ -43,3 +43,16 @@ class OutletGroupMemberCreate(BaseModel):
     """Schema for adding an outlet to a group."""
 
     outlet_id: str
+
+
+class OutletGroupMemberBulkCreate(BaseModel):
+    """Schema for adding multiple outlets to a group."""
+
+    outlet_ids: list[str]
+
+
+class OutletGroupBulkAddResponse(BaseModel):
+    """Response for bulk add operation."""
+
+    added: int
+    duplicates: int

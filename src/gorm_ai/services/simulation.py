@@ -145,6 +145,9 @@ class SimulationService:
         # Delivery constraints for all outlets (used when persisting prediction_outlets)
         delivery_map = await self._prediction_service._load_outlet_deliveries(outlet_ids)
         rounding = await self._prediction_service._resolve_rounding(request.customer_id)
+        weekday_correction = await self._prediction_service._resolve_weekday_correction(request.customer_id)
+        weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
+        weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
 
         # Per-outlet scalar accumulators — avoids holding all SimulationDayResult objects in RAM
         outlet_profit_acc: dict[str, float] = {oid: 0.0 for oid in outlet_ids}
@@ -203,6 +206,7 @@ class SimulationService:
 
             # --- Collect per-outlet inputs for this chunk ---
             batch_outlet_ids: list[str] = []
+            outlet_historical: dict[str, list[dict]] = {}
 
             batch_items: list[dict] = []
             for outlet_id in outlet_ids:
@@ -225,10 +229,13 @@ class SimulationService:
                 ):
                     historical_data = historical_data[-capabilities.max_history_length :]
 
+                outlet_historical[outlet_id] = historical_data
                 batch_items.append({
                     "historical_data": historical_data,
                     "covariates": covariates_cache[outlet_id],
                     "pad_dates": pad_covariates,
+                    "weekday_correction": weekday_correction,
+                    "weekday_profile_correction": weekday_profile_params,
                 })
                 batch_outlet_ids.append(outlet_id)
 
@@ -236,6 +243,48 @@ class SimulationService:
             all_predictions: list[list[PredictionResult]] = await engine.predict_batch(
                 batch_items, horizon, chunk_start, batch_size=request.batch_size
             )
+
+            # Weekday-only override: for dates whose weekday has weekday_only=True,
+            # re-run predict_batch with history filtered to that weekday only.
+            chunk_dates = [chunk_start + timedelta(days=i) for i in range(horizon)]
+            wo_dates_in_chunk = [d for d in chunk_dates if weekday_only_flags[d.weekday()]]
+            if wo_dates_in_chunk and batch_outlet_ids:
+                date_to_idx = {d: i for i, d in enumerate(chunk_dates)}
+                outlet_to_idx = {oid: i for i, oid in enumerate(batch_outlet_ids)}
+                for wo_date in wo_dates_in_chunk:
+                    target_wd = wo_date.weekday()
+                    wo_items: list[dict] = []
+                    wo_ids: list[str] = []
+                    for outlet_id in batch_outlet_ids:
+                        filtered = [
+                            row for row in outlet_historical[outlet_id]
+                            if row["date"].weekday() == target_wd
+                        ]
+                        if len(filtered) < capabilities.min_history_length:
+                            continue
+                        wo_items.append({
+                            "historical_data": filtered,
+                            "covariates": covariates_cache[outlet_id],
+                            "pad_dates": pad_covariates,
+                            "weekday_correction": [False] * 7,
+                        })
+                        wo_ids.append(outlet_id)
+                    if not wo_items:
+                        continue
+                    wo_results = await engine.predict_batch(
+                        wo_items, 1, wo_date, batch_size=request.batch_size
+                    )
+                    ri = date_to_idx[wo_date]
+                    for wo_oid, wo_res in zip(wo_ids, wo_results):
+                        if wo_res:
+                            all_predictions[outlet_to_idx[wo_oid]][ri] = wo_res[0]
+
+            ridge_results = getattr(engine, "_last_ridge_results", None)
+            chunk_weekday_corrections: dict[str, dict[int, float]] = {}
+            if ridge_results:
+                chunk_weekday_corrections = PredictionService._extract_weekday_corrections(
+                    batch_outlet_ids, ridge_results
+                )
             actual_engine = "same_draw" if is_same_draw else (engine.get_actual_slug() or engine_type.value)
 
             # Same Draw: compute per-date sum(delivered) across all outlets in the chunk
@@ -389,6 +438,7 @@ class SimulationService:
 
                     for outlet_id, r in outlet_results.items():
                         delivery = delivery_map.get(outlet_id, {}).get(weekday)
+                        oc = chunk_weekday_corrections.get(outlet_id, {})
                         self.session.add(PredictionOutlet(
                             prediction_id=pred_record.id,
                             outlet_id=outlet_id,
@@ -404,6 +454,13 @@ class SimulationService:
                             maximum=delivery.maximum if delivery else None,
                             add=delivery.add if delivery else None,
                             add_pct=delivery.add_pct if delivery else None,
+                            correction_mon=oc.get(1),
+                            correction_tue=oc.get(2),
+                            correction_wed=oc.get(3),
+                            correction_thu=oc.get(4),
+                            correction_fri=oc.get(5),
+                            correction_sat=oc.get(6),
+                            correction_sun=oc.get(7),
                         ))
 
                     self.session.add(SimulationDateModel(

@@ -180,6 +180,116 @@ class SalesService:
         row = result.one()
         return row[0], row[1]
 
+    async def get_aggregated(
+        self,
+        customer_id: str,
+        outlet_ids: list[str],
+        start_date: date,
+        end_date: date,
+    ) -> list[dict]:
+        """Aggregate sales by date across multiple outlets.
+
+        Returns list of dicts with keys: date, delivered, sold, returned.
+        """
+        query = (
+            select(
+                Sales.date,
+                func.sum(Sales.delivered).label("delivered"),
+                func.sum(Sales.sold).label("sold"),
+            )
+            .where(
+                Sales.customer_id == customer_id,
+                Sales.outlet_id.in_(outlet_ids),
+                Sales.date >= start_date,
+                Sales.date <= end_date,
+                Sales.active.is_(True),
+            )
+            .group_by(Sales.date)
+            .order_by(Sales.date)
+        )
+
+        result = await self.session.execute(query)
+        rows = result.all()
+
+        return [
+            {
+                "date": row.date,
+                "delivered": int(row.delivered) if row.delivered is not None else None,
+                "sold": int(row.sold),
+                "returned": int(row.delivered) - int(row.sold) if row.delivered is not None else None,
+            }
+            for row in rows
+        ]
+
+    async def get_efficiency(
+        self,
+        customer_id: str,
+        outlet_ids: list[str],
+        start_date: date,
+        end_date: date,
+    ) -> list[dict]:
+        """Compute efficiency metrics per date across outlets.
+
+        Returns list of dicts with: date, delivered, sold, returned,
+        return_pct, sold_out_pct, outlet_count, sold_out_count.
+
+        sold_out = outlets where sold >= delivered on that date.
+        """
+        from sqlalchemy import case, cast, Float
+
+        query = (
+            select(
+                Sales.date,
+                func.sum(Sales.delivered).label("delivered"),
+                func.sum(Sales.sold).label("sold"),
+                func.count().label("outlet_count"),
+                func.sum(
+                    case(
+                        (
+                            (Sales.delivered.is_not(None)) & (Sales.sold >= Sales.delivered),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("sold_out_count"),
+            )
+            .where(
+                Sales.customer_id == customer_id,
+                Sales.outlet_id.in_(outlet_ids),
+                Sales.date >= start_date,
+                Sales.date <= end_date,
+                Sales.active.is_(True),
+            )
+            .group_by(Sales.date)
+            .order_by(Sales.date)
+        )
+
+        result = await self.session.execute(query)
+        rows = result.all()
+
+        out = []
+        for row in rows:
+            delivered = int(row.delivered) if row.delivered is not None else None
+            sold = int(row.sold)
+            returned = delivered - sold if delivered is not None else None
+            outlet_count = int(row.outlet_count)
+            sold_out_count = int(row.sold_out_count)
+
+            return_pct = round(returned / delivered * 100, 2) if delivered else None
+            sold_out_pct = round(sold_out_count / outlet_count * 100, 2) if outlet_count else None
+
+            out.append({
+                "date": row.date,
+                "delivered": delivered,
+                "sold": sold,
+                "returned": returned,
+                "return_pct": return_pct,
+                "sold_out_pct": sold_out_pct,
+                "outlet_count": outlet_count,
+                "sold_out_count": sold_out_count,
+            })
+        return out
+
     async def delete(self, sales_id: str, hard_delete: bool = False) -> bool:
         """Delete a sales record (soft delete by default)."""
         sales = await self.get(sales_id)

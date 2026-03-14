@@ -39,6 +39,8 @@ class TaskRecordResponse(BaseModel):
     progress: int = 0
     progress_message: str | None = None
     name: str | None = None
+    peak_memory_mb: float | None = None
+    cpu_time_s: float | None = None
     created_at: datetime
     updated_at: datetime
 

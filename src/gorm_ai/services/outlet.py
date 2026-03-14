@@ -14,6 +14,7 @@ from gorm_ai.database.models import (
     Prediction,
     PredictionOutlet,
 )
+from gorm_ai.database.models.covariate import Covariate, CovariateOutlet
 from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.sales import Sales
 from gorm_ai.schemas.outlet import (
@@ -189,6 +190,21 @@ class OutletService:
             lp.weekday: lp for lp in lp_result.scalars().all()
         }
 
+        # Fetch weekday ridge corrections from covariate_outlet as fallback
+        # (used when last_prediction.weekday_correction is null — e.g. pre-052 rows)
+        cov_result = await self.session.execute(
+            select(CovariateOutlet.weekday, CovariateOutlet.coefficient)
+            .join(Covariate, Covariate.id == CovariateOutlet.covariate_id)
+            .where(
+                CovariateOutlet.outlet_id == outlet_id,
+                Covariate.type == "weekday",
+                CovariateOutlet.weekday.isnot(None),
+            )
+        )
+        covariate_corrections: dict[int, float] = {
+            int(row.weekday): float(row.coefficient) for row in cov_result.all()
+        }
+
         # Compute PAD effect per weekday using prediction_outlet history
         # Subquery: all active PAD dates for this customer
         pad_date_subq = (
@@ -305,6 +321,10 @@ class OutletService:
                     delivered=lp.delivered if lp else None,
                     pad_effect=pad_effect,
                     pad_effect_pct=pad_effect_pct,
+                    weekday_correction=(
+                        lp.weekday_correction if lp and lp.weekday_correction is not None
+                        else covariate_corrections.get(wd)
+                    ),
                     cost_per_unit=fin.cost_per_unit if fin else None,
                     profit_per_unit=fin.profit_per_unit if fin else None,
                     fixed=lp.fixed if lp else None,

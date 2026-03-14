@@ -12,6 +12,8 @@ from gorm_ai.schemas.prediction import (
     MarginalValueResponse,
     PadEffectResponse,
     PredictionAnalyticsSummary,
+    PredictionComparisonItem,
+    PredictionComparisonResponse,
     PredictionEngine,
     PredictionRequest,
     PredictionResponse,
@@ -47,6 +49,19 @@ async def get_prediction_analytics(
     """Get aggregate analytics for a completed prediction."""
     data = await service.get_analytics(prediction_id)
     return PredictionAnalyticsSummary(**data)
+
+
+@router.post("/compare", response_model=PredictionComparisonResponse)
+async def compare_predictions(
+    customer_id: str,
+    prediction_ids: list[str],
+    service: PredictionServiceDep,
+) -> PredictionComparisonResponse:
+    """Compare multiple completed predictions side-by-side."""
+    items = await service.get_comparison(prediction_ids, customer_id)
+    return PredictionComparisonResponse(
+        items=[PredictionComparisonItem(**item) for item in items],
+    )
 
 
 @router.delete("/{prediction_id}", status_code=204)

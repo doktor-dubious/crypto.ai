@@ -3,6 +3,8 @@
 import asyncio
 from datetime import UTC, date, datetime
 
+from fastapi import HTTPException
+
 from gorm_ai.tasks.celery_app import celery_app
 
 
@@ -38,7 +40,16 @@ async def _run_prediction_async(task_id: str, request_data: dict) -> dict:
     from gorm_ai.services.task import TaskService
 
     async with task_session() as session:
-        await TaskService(session).update_status(task_id, "started", started_at=datetime.now(UTC))
+        # Guard against redelivery after worker restart.
+        ts = TaskService(session)
+        try:
+            record = await ts.get(task_id)
+            if record.status == "revoked":
+                return {"skipped": True, "reason": "task was revoked"}
+        except HTTPException:
+            return {"skipped": True, "reason": "redelivered task not in DB"}
+
+        await ts.update_status(task_id, "started", started_at=datetime.now(UTC))
         await session.commit()
 
     async def _on_progress(progress: int, message: str | None = None) -> None:

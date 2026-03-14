@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Plus, X,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Plus, X, Info,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,6 +32,12 @@ import {
 import {
   LineChart, Line, CartesianGrid, XAxis, YAxis,
 } from "recharts"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useCustomer } from "@/components/providers/customer-provider"
 import {
   outletsApi, outletGroupsApi, customerConfigurationApi, salesApi,
@@ -55,6 +61,19 @@ function buildPaginationPages(current: number, total: number): (number | "ellips
   if (current < total - 2) pages.push("ellipsis")
   pages.push(total)
   return pages
+}
+
+function HeaderInfo({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="h-3 w-3 text-[var(--muted-foreground)] cursor-help shrink-0 inline-block ml-0.5 align-middle" />
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs">
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -126,6 +145,9 @@ function DeliveryAnalyticsWeekdayRows({
                 </td>
                 <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle" title={wd.pad_effect_pct != null ? `${wd.pad_effect_pct.toFixed(1)}%` : undefined}>
                   {fmtNum(wd.pad_effect)}
+                </td>
+                <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle">
+                  {fmtNum(wd.weekday_correction)}
                 </td>
                 <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle">
                   {fmtNum(wd.lower_bound)}
@@ -226,7 +248,7 @@ export default function OutletsListPage() {
 
   const { data: outlets = [], isLoading } = useQuery({
     queryKey: ["outlets", activeCustomer?.id],
-    queryFn: () => outletsApi.list(activeCustomer!.id, { limit: 500 }),
+    queryFn: () => outletsApi.list(activeCustomer!.id, { limit: 5000 }),
     enabled: !!activeCustomer,
     retry: false,
   })
@@ -1031,6 +1053,7 @@ export default function OutletsListPage() {
 
                 {/* ─ Delivery Analytics ─ */}
                 <TabsContent value="tab6" className="mt-4 px-2">
+                  <TooltipProvider delayDuration={200}>
                   {deliveryAnalyticsLoading ? (
                     <div className="flex items-center justify-center h-48 text-sm text-[var(--muted-foreground)]">Loading…</div>
                   ) : !deliveryAnalytics ? (
@@ -1043,17 +1066,18 @@ export default function OutletsListPage() {
                             <th className="text-left font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}></th>
                             <th className="text-left font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[56px]" rowSpan={2}></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-1 border-x border-[var(--border)]" colSpan={8}>
-                              History
+                              History <HeaderInfo text={t("daHistoryInfo")} />
                             </th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[64px]" rowSpan={2}>{t("daRawPred")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[48px]" rowSpan={2}>{t("daPad")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daLower")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daUpper")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daPredict")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daEO")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daLatest")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}>{t("daCostProfit")}</th>
-                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}>{t("daConstraints")}</th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[64px]" rowSpan={2}>{t("daRawPred")} <HeaderInfo text={t("daRawPredInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[48px]" rowSpan={2}>{t("daPad")} <HeaderInfo text={t("daPadInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[56px]" rowSpan={2}>{t("daWkCorrect")} <HeaderInfo text={t("daWkCorrectInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daLower")} <HeaderInfo text={t("daLowerInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daUpper")} <HeaderInfo text={t("daUpperInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daPredict")} <HeaderInfo text={t("daPredictInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daEO")} <HeaderInfo text={t("daEOInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daLatest")} <HeaderInfo text={t("daLatestInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}>{t("daCostProfit")} <HeaderInfo text={t("daCostProfitInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}>{t("daConstraints")} <HeaderInfo text={t("daConstraintsInfo")} /></th>
                           </tr>
                           <tr className="border-b border-[var(--border)]">
                             {[1,2,3,4,5,6,7,8].map((n) => (
@@ -1069,6 +1093,7 @@ export default function OutletsListPage() {
                       </table>
                     </div>
                   )}
+                  </TooltipProvider>
                 </TabsContent>
 
                 {/* ─ Actions ─ */}

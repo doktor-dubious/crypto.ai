@@ -74,13 +74,57 @@ class OutletGroupService:
 
         return True
 
-    async def add_outlet(self, group_id: str, outlet_id: str) -> OutletGroupMember:
-        """Add an outlet to a group."""
+    async def add_outlet(self, group_id: str, outlet_id: str) -> OutletGroupMember | None:
+        """Add an outlet to a group. Returns None if already a member."""
+        existing = await self.session.execute(
+            select(OutletGroupMember).where(
+                OutletGroupMember.group_id == group_id,
+                OutletGroupMember.outlet_id == outlet_id,
+            )
+        )
+        member = existing.scalar_one_or_none()
+        if member:
+            if not member.active:
+                member.active = True
+                await self.session.flush()
+                return member
+            return None
         member = OutletGroupMember(group_id=group_id, outlet_id=outlet_id)
         self.session.add(member)
         await self.session.flush()
         await self.session.refresh(member)
         return member
+
+    async def add_outlets_bulk(
+        self, group_id: str, outlet_ids: list[str]
+    ) -> dict[str, int]:
+        """Add multiple outlets to a group, skipping duplicates."""
+        existing_result = await self.session.execute(
+            select(OutletGroupMember).where(
+                OutletGroupMember.group_id == group_id,
+                OutletGroupMember.outlet_id.in_(outlet_ids),
+            )
+        )
+        existing_map = {m.outlet_id: m for m in existing_result.scalars().all()}
+
+        added = 0
+        duplicates = 0
+        for outlet_id in outlet_ids:
+            member = existing_map.get(outlet_id)
+            if member:
+                if not member.active:
+                    member.active = True
+                    added += 1
+                else:
+                    duplicates += 1
+            else:
+                self.session.add(
+                    OutletGroupMember(group_id=group_id, outlet_id=outlet_id)
+                )
+                added += 1
+
+        await self.session.flush()
+        return {"added": added, "duplicates": duplicates}
 
     async def get_outlets(self, group_id: str) -> list[Outlet]:
         """Get all active outlets in a group."""

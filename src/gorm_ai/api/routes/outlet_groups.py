@@ -6,7 +6,9 @@ from gorm_ai.api.deps import DrawAdjustmentServiceDep, OutletGroupServiceDep
 from gorm_ai.schemas.draw_adjustment import DrawAdjustmentResponse
 from gorm_ai.schemas.outlet import OutletResponse
 from gorm_ai.schemas.outlet_group import (
+    OutletGroupBulkAddResponse,
     OutletGroupCreate,
+    OutletGroupMemberBulkCreate,
     OutletGroupMemberCreate,
     OutletGroupResponse,
     OutletGroupUpdate,
@@ -93,9 +95,26 @@ async def add_outlet_to_group(
     data: OutletGroupMemberCreate,
     service: OutletGroupServiceDep,
 ) -> dict:
-    """Add an outlet to a group."""
-    await service.add_outlet(group_id, data.outlet_id)
+    """Add an outlet to a group (skips if already a member)."""
+    member = await service.add_outlet(group_id, data.outlet_id)
+    if member is None:
+        return {"message": "Outlet already in group"}
     return {"message": "Outlet added to group successfully"}
+
+
+@router.post(
+    "/{group_id}/outlets/bulk",
+    response_model=OutletGroupBulkAddResponse,
+    status_code=200,
+)
+async def add_outlets_bulk(
+    group_id: str,
+    data: OutletGroupMemberBulkCreate,
+    service: OutletGroupServiceDep,
+) -> OutletGroupBulkAddResponse:
+    """Add multiple outlets to a group, skipping duplicates."""
+    result = await service.add_outlets_bulk(group_id, data.outlet_ids)
+    return OutletGroupBulkAddResponse(**result)
 
 
 @router.delete("/{group_id}/outlets/{outlet_id}", status_code=204)

@@ -60,3 +60,48 @@ class SalesQuery(BaseModel):
     end_date: date | None = None
     limit: int = 100
     offset: int = 0
+
+
+class AggregatedSalesRequest(BaseModel):
+    """Request for aggregated sales across multiple outlets."""
+
+    customer_id: str
+    outlet_ids: list[str]
+    start_date: date
+    end_date: date
+
+
+class AggregatedSalesDataPoint(BaseModel):
+    """A single date's aggregated sales data."""
+
+    date: date
+    delivered: int | None = None
+    sold: int = 0
+    returned: int | None = None
+
+
+class AggregatedSalesResponse(BaseModel):
+    """Response for aggregated sales across outlets."""
+
+    data: list[AggregatedSalesDataPoint]
+    outlet_count: int
+
+
+class EfficiencyDataPoint(BaseModel):
+    """A single date's efficiency metrics."""
+
+    date: date
+    return_pct: float | None = None
+    sold_out_pct: float | None = None
+    delivered: int | None = None
+    sold: int = 0
+    returned: int | None = None
+    outlet_count: int = 0
+    sold_out_count: int = 0
+
+
+class EfficiencyResponse(BaseModel):
+    """Response for efficiency metrics across outlets."""
+
+    data: list[EfficiencyDataPoint]
+    outlet_count: int
