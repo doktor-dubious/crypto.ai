@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,11 +27,17 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { simulationsApi, customerConfigurationApi, type CompletedSimulationResponse, type ZeroShotResponse, type ModelFitOutlet, type ModelFitResponse, type FilteredOverviewResponse } from "@/lib/api"
+import { simulationsApi, customerConfigurationApi, type CompletedSimulationResponse, type ZeroShotResponse, type ModelFitOutlet, type ModelFitResponse, type FilteredOverviewResponse, type AccuracyStatsResponse } from "@/lib/api"
+import {
+  Tooltip as UiTooltip,
+  TooltipContent as UiTooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Legend } from "recharts"
+import { ComposedChart, LineChart, Line, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Legend } from "recharts"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -135,6 +141,7 @@ function SectionHeader({ label }: { label: string }) {
 // ─── Zero Shot table ──────────────────────────────────────────────────────────
 
 function ZeroShotTable({ data }: { data: ZeroShotResponse }) {
+  const withData = data.total - data.no_actual_data
   const rows: { name: string; count: number; muted?: boolean }[] = [
     { name: "0 (Perfect)",   count: data.zero_shot },
     { name: "+1",            count: data.zero_shot_plus_1 },
@@ -145,8 +152,10 @@ function ZeroShotTable({ data }: { data: ZeroShotResponse }) {
     { name: "- mul",         count: data.zero_shot_minus_mul },
     { name: "No sales data", count: data.no_actual_data, muted: true },
   ]
+  const within1 = data.zero_shot + data.zero_shot_plus_1 + data.zero_shot_minus_1
+  const within2 = within1 + data.zero_shot_plus_2 + data.zero_shot_minus_2
   const pct = (n: number) =>
-    data.total > 0 ? `${((n / data.total) * 100).toFixed(1)}%` : "—"
+    withData > 0 ? `${((n / withData) * 100).toFixed(1)}%` : "—"
   const fmt = (n: number) => n.toLocaleString()
   return (
     <Table>
@@ -162,13 +171,32 @@ function ZeroShotTable({ data }: { data: ZeroShotResponse }) {
             <TableCell className={cn("font-medium", row.muted && "text-[var(--muted-foreground)]")}>{row.name}</TableCell>
             <TableCell className={cn("text-right tabular-nums", row.muted && "text-[var(--muted-foreground)]")}>
               {fmt(row.count)}
-              <span className="ml-1.5 text-[var(--muted-foreground)] font-normal">({pct(row.count)})</span>
+              {!row.muted && <span className="ml-1.5 text-[var(--muted-foreground)] font-normal">({pct(row.count)})</span>}
             </TableCell>
           </TableRow>
         ))}
+        <TableRow className="border-t-2 bg-[var(--muted)]/20">
+          <TableCell className="font-medium">Within ±1</TableCell>
+          <TableCell className="text-right tabular-nums">
+            {fmt(within1)}
+            <span className="ml-1.5 text-[var(--muted-foreground)] font-normal">({pct(within1)})</span>
+          </TableCell>
+        </TableRow>
+        <TableRow className="bg-[var(--muted)]/20">
+          <TableCell className="font-medium">Within ±2</TableCell>
+          <TableCell className="text-right tabular-nums">
+            {fmt(within2)}
+            <span className="ml-1.5 text-[var(--muted-foreground)] font-normal">({pct(within2)})</span>
+          </TableCell>
+        </TableRow>
         <TableRow className="border-t-2">
           <TableCell className="font-medium text-[var(--muted-foreground)]">Total</TableCell>
-          <TableCell className="text-right tabular-nums text-[var(--muted-foreground)]">{fmt(data.total)}</TableCell>
+          <TableCell className="text-right tabular-nums text-[var(--muted-foreground)]">
+            {fmt(withData)}
+            {data.no_actual_data > 0 && (
+              <span className="ml-1.5 font-normal text-xs">({fmt(data.no_actual_data)} excl.)</span>
+            )}
+          </TableCell>
         </TableRow>
       </TableBody>
     </Table>
@@ -207,81 +235,142 @@ function OverviewSection({ label, data, t, currencySymbol, actual }: {
   const total = (data.g1 ?? 0) + (data.g2 ?? 0) + (data.g3 ?? 0) + (data.g4 ?? 0)
   const hasAny = data.g1 != null || data.g2 != null || data.g3 != null || data.g4 != null
 
+  const returnRate = data.total_delivered && data.total_delivered > 0
+    ? ((data.total_returned ?? 0) / data.total_delivered * 100).toFixed(1)
+    : null
+  const sellThrough = data.total_delivered && data.total_delivered > 0
+    ? ((data.total_sold ?? 0) / data.total_delivered * 100).toFixed(1)
+    : null
+  const actualReturnRate = actual?.delivered && actual.delivered > 0
+    ? ((actual.returned ?? 0) / actual.delivered * 100).toFixed(1)
+    : null
+  const actualSellThrough = actual?.delivered && actual.delivered > 0
+    ? ((actual.sold ?? 0) / actual.delivered * 100).toFixed(1)
+    : null
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr>
-            <th className={cn(thBase, "text-left w-12")} />
-            <th colSpan={3} className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewUnits")}</th>
-            <th colSpan={4} className={cn(thBase, "bg-[var(--muted)]/20")}>{t("overviewProfit")}</th>
-          </tr>
-          <tr>
-            <th className={cn(thBase, "text-left")} />
-            <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColDelivered")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColSold")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColReturned")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG1")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG2")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG3")}</th>
-            <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG4")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {actual && (
+    <div className="space-y-3">
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
+          <thead>
             <tr>
-              <td className={tdLabel}>{t("overviewRowActual")}</td>
-              <td className={tdBase}>{formatNumber(actual.delivered)}</td>
-              <td className={tdBase}>{formatNumber(actual.sold)}</td>
-              <td className={tdBase}>{formatNumber(actual.returned)}</td>
+              <th className={cn(thBase, "text-left w-12")} />
+              <th colSpan={3} className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewUnits")}</th>
+              <th colSpan={4} className={cn(thBase, "bg-[var(--muted)]/20")}>{t("overviewProfit")}</th>
+            </tr>
+            <tr>
+              <th className={cn(thBase, "text-left")} />
+              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColDelivered")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColSold")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColReturned")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG1")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG2")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG3")}</th>
+              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG4")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {actual && (
+              <tr>
+                <td className={tdLabel}>{t("overviewRowActual")}</td>
+                <td className={tdBase}>{formatNumber(actual.delivered)}</td>
+                <td className={tdBase}>{formatNumber(actual.sold)}</td>
+                <td className={tdBase}>{formatNumber(actual.returned)}</td>
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+              </tr>
+            )}
+            <tr>
+              <td className={tdLabel}>{t("overviewRowTotal")}</td>
+              <td className={tdBase}>{formatNumber(data.total_delivered)}</td>
+              <td className={tdBase}>{formatNumber(data.total_sold)}</td>
+              <td className={tdBase}>{formatNumber(data.total_returned)}</td>
+              <td className={cn(tdBase, data.g1 != null && data.g1 < 0 && "text-red-500")}>{formatCurrency(data.g1, currencySymbol)}</td>
+              <td className={cn(tdBase, data.g2 != null && data.g2 < 0 && "text-red-500")}>{formatCurrency(data.g2, currencySymbol)}</td>
+              <td className={cn(tdBase, data.g3 != null && data.g3 < 0 && "text-red-500")}>{formatCurrency(data.g3, currencySymbol)}</td>
+              <td className={cn(tdBase, data.g4 != null && data.g4 < 0 && "text-red-500")}>{formatCurrency(data.g4, currencySymbol)}</td>
+            </tr>
+            <tr>
+              <td className={tdLabel}>{t("overviewRowDelta")}</td>
+              <td className={tdBase}>{formatNumber(data.diff_delivered)}</td>
+              <td className={cn(tdBase, "text-red-500 font-medium")}>{formatNumber(data.lost_sale)}</td>
+              <td className={tdBase}>{formatNumber(data.diff_return)}</td>
               <td className={tdBase} />
               <td className={tdBase} />
               <td className={tdBase} />
               <td className={tdBase} />
             </tr>
-          )}
-          <tr>
-            <td className={tdLabel}>{t("overviewRowTotal")}</td>
-            <td className={tdBase}>{formatNumber(data.total_delivered)}</td>
-            <td className={tdBase}>{formatNumber(data.total_sold)}</td>
-            <td className={tdBase}>{formatNumber(data.total_returned)}</td>
-            <td className={cn(tdBase, data.g1 != null && data.g1 < 0 && "text-red-500")}>{formatCurrency(data.g1, currencySymbol)}</td>
-            <td className={cn(tdBase, data.g2 != null && data.g2 < 0 && "text-red-500")}>{formatCurrency(data.g2, currencySymbol)}</td>
-            <td className={cn(tdBase, data.g3 != null && data.g3 < 0 && "text-red-500")}>{formatCurrency(data.g3, currencySymbol)}</td>
-            <td className={cn(tdBase, data.g4 != null && data.g4 < 0 && "text-red-500")}>{formatCurrency(data.g4, currencySymbol)}</td>
-          </tr>
-          <tr>
-            <td className={tdLabel}>{t("overviewRowDelta")}</td>
-            <td className={tdBase}>{formatNumber(data.diff_delivered)}</td>
-            <td className={cn(tdBase, "text-red-500 font-medium")}>{formatNumber(data.lost_sale)}</td>
-            <td className={tdBase}>{formatNumber(data.diff_return)}</td>
-            <td className={tdBase} />
-            <td className={tdBase} />
-            <td className={tdBase} />
-            <td className={tdBase} />
-          </tr>
-          <tr>
-            <td className={tdLabel}>{t("overviewRowDelta")}</td>
-            <td className={tdBase} />
-            <td className={tdBase}>{formatNumber(data.more_sale)}</td>
-            <td className={tdBase} />
-            <td className={tdBase} />
-            <td className={tdBase} />
-            <td className={tdBase} />
-            <td className={tdBase} />
-          </tr>
-        </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-border/60">
-            <td colSpan={4} className={cn(tdLabel, "text-right font-semibold border-t-2 border-border/60")}>
-              {t("overviewRowResult")}
-            </td>
-            <td colSpan={4} className={cn(tdBase, "text-right font-semibold border-t-2 border-border/60", hasAny && total < 0 && "text-red-500")}>
-              {hasAny ? formatCurrency(total, currencySymbol) : "—"}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+            <tr>
+              <td className={tdLabel}>{t("overviewRowDelta")}</td>
+              <td className={tdBase} />
+              <td className={tdBase}>{formatNumber(data.more_sale)}</td>
+              <td className={tdBase} />
+              <td className={tdBase} />
+              <td className={tdBase} />
+              <td className={tdBase} />
+              <td className={tdBase} />
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-border/60">
+              <td colSpan={4} className={cn(tdLabel, "text-right font-semibold border-t-2 border-border/60")}>
+                {t("overviewRowResult")}
+              </td>
+              <td colSpan={4} className={cn(tdBase, "text-right font-semibold border-t-2 border-border/60", hasAny && total < 0 && "text-red-500")}>
+                {hasAny ? formatCurrency(total, currencySymbol) : "—"}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {(returnRate || actualReturnRate) && (
+        <TooltipProvider delayDuration={200}>
+          <div className="flex flex-col gap-1 text-xs text-[var(--muted-foreground)]">
+            {(actualReturnRate || actualSellThrough) && (
+              <div className="flex items-center gap-4">
+                {actualReturnRate && (
+                  <span>{t("overviewActualReturnRate")}: <span className="font-medium text-foreground">{actualReturnRate}%</span></span>
+                )}
+                {actualSellThrough && (
+                  <span>{t("overviewActualSellThrough")}: <span className="font-medium text-foreground">{actualSellThrough}%</span></span>
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-4">
+              {returnRate && (
+                <span className="inline-flex items-center gap-1">
+                  {t("overviewReturnRate")}
+                  <UiTooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
+                    </TooltipTrigger>
+                    <UiTooltipContent side="top" className="max-w-xs text-xs">
+                      {t("overviewReturnRateInfo")}
+                    </UiTooltipContent>
+                  </UiTooltip>
+                  : <span className="font-medium text-foreground">{returnRate}%</span>
+                </span>
+              )}
+              {sellThrough && (
+                <span className="inline-flex items-center gap-1">
+                  {t("overviewSellThrough")}
+                  <UiTooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
+                    </TooltipTrigger>
+                    <UiTooltipContent side="top" className="max-w-xs text-xs">
+                      {t("overviewSellThroughInfo")}
+                    </UiTooltipContent>
+                  </UiTooltip>
+                  : <span className="font-medium text-foreground">{sellThrough}%</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </TooltipProvider>
+      )}
     </div>
   )
 }
@@ -352,6 +441,43 @@ function ModelFitSeriesCombobox({
   )
 }
 
+function StatsInfoItem({ label, info, value }: { label: string; info: string; value: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[var(--muted-foreground)]">
+      {label}
+      <UiTooltip>
+        <TooltipTrigger asChild>
+          <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
+        </TooltipTrigger>
+        <UiTooltipContent side="top" className="max-w-xs text-xs">
+          {info}
+        </UiTooltipContent>
+      </UiTooltip>
+      : <span className="font-medium text-foreground tabular-nums">{value}</span>
+    </span>
+  )
+}
+
+function ModelFitStatsBar({ stats, t }: { stats: AccuracyStatsResponse | undefined; t: TFunc }) {
+  if (!stats) return null
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="flex items-center gap-4 text-xs border rounded-md px-3 py-1.5 bg-[var(--muted)]/20">
+        <StatsInfoItem label={t("statsMAE")} info={t("statsMAEInfo")} value={stats.mae.toFixed(2)} />
+        <StatsInfoItem label={t("statsRMSE")} info={t("statsRMSEInfo")} value={stats.rmse.toFixed(2)} />
+        <StatsInfoItem label={t("statsBias")} info={t("statsBiasInfo")} value={(stats.bias >= 0 ? "+" : "") + stats.bias.toFixed(2)} />
+        {stats.mape != null && (
+          <StatsInfoItem label={t("statsMAPE")} info={t("statsMAPEInfo")} value={`${stats.mape.toFixed(1)}%`} />
+        )}
+        {stats.r_squared != null && (
+          <StatsInfoItem label={t("statsR2")} info={t("statsR2Info")} value={stats.r_squared.toFixed(3)} />
+        )}
+        <StatsInfoItem label={t("statsN")} info={t("statsNInfo")} value={stats.count.toLocaleString()} />
+      </div>
+    </TooltipProvider>
+  )
+}
+
 function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, onWeekdayChange }: {
   simulationId: string
   simFrom: string | null
@@ -360,6 +486,7 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
   weekdayFilter: WeekdayFilter
   onWeekdayChange: (v: WeekdayFilter) => void
 }) {
+  const t = useTranslations("simulations.completed")
   const [fromDate, setFromDate] = useState(simFrom ?? "")
   const [toDate, setToDate]     = useState(simTo ?? "")
   const [selectedSeries, setSelectedSeries] = useState<Set<ModelFitSeriesKey>>(new Set(["delivered"]))
@@ -402,7 +529,34 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
     staleTime: 30_000,
   })
 
-  const chartData = (fitData ?? baseData)?.data ?? []
+  // Derive accuracy stats scenario from selected series (first match wins)
+  const statsScenario: ScenarioColumn = selectedSeries.has("delivered") ? "delivered"
+    : selectedSeries.has("eo") ? "eo"
+    : selectedSeries.has("predicted") ? "predicted"
+    : "delivered"
+
+  const { data: accuracyStats } = useQuery({
+    queryKey: ["simulation-accuracy-stats", simulationId, statsScenario, weekdays],
+    queryFn: () => simulationsApi.getAccuracyStats(simulationId, statsScenario, weekdays ?? undefined),
+    staleTime: 60_000,
+  })
+
+  const rawChartData = (fitData ?? baseData)?.data ?? []
+
+  // Whether to show confidence band
+  const showBand = selectedSeries.has("upper_bound") && selectedSeries.has("lower_bound")
+
+  // Add derived _band_base and _band_range for stacked area confidence band
+  const chartData = useMemo(() => {
+    if (!showBand) return rawChartData
+    return rawChartData.map((d) => ({
+      ...d,
+      _band_base: d.lower_bound ?? 0,
+      _band_range: d.upper_bound != null && d.lower_bound != null
+        ? Math.max(0, d.upper_bound - d.lower_bound)
+        : 0,
+    }))
+  }, [rawChartData, showBand])
 
   function toggleOutlet(id: string) {
     setAllSelected(false)
@@ -490,18 +644,47 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
           <WeekdayCombobox value={weekdayFilter} onChange={onWeekdayChange} />
         </div>
 
+        <ModelFitStatsBar stats={accuracyStats} t={t} />
+
         {isLoading ? (
           <div className="flex-1 flex items-center justify-center text-sm text-[var(--muted-foreground)]">Loading…</div>
         ) : chartData.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-sm text-[var(--muted-foreground)]">No data</div>
         ) : (
           <ChartContainer config={MODEL_FIT_CHART_CONFIG} className="flex-1 min-h-0">
-            <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+            <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
               <XAxis dataKey="date" tickFormatter={xFormatter} tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} width={40} />
               <ChartTooltip content={<ChartTooltipContent />} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
+              {showBand && (
+                <>
+                  <Area
+                    type="monotone"
+                    dataKey="_band_base"
+                    stackId="confidence"
+                    stroke="none"
+                    fill="transparent"
+                    connectNulls
+                    legendType="none"
+                    name="_band_base"
+                    isAnimationActive={false}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="_band_range"
+                    stackId="confidence"
+                    stroke="none"
+                    fill="hsl(var(--chart-5, 0 72% 51%))"
+                    fillOpacity={0.12}
+                    connectNulls
+                    legendType="none"
+                    name="Confidence Band"
+                    isAnimationActive={false}
+                  />
+                </>
+              )}
               <Line
                 type="monotone"
                 dataKey="actual_sale"
@@ -523,7 +706,7 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
                   connectNulls
                 />
               ))}
-            </LineChart>
+            </ComposedChart>
           </ChartContainer>
         )}
       </div>
@@ -591,25 +774,44 @@ function scenarioOverviewData(sim: CompletedSimulationResponse, scenario: Scenar
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const SIM_STORAGE_PREFIX = "gorm:simCompleted:"
+
+function loadSimJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${SIM_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function saveSimJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${SIM_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 export default function SimulationsCompletedPage() {
   const t = useTranslations("simulations.completed")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
   const searchParams = useSearchParams()
   const deepLinkTaskId = searchParams.get("task_id")
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadSimJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadSimJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("created_at")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedSimId, setSelectedSimId] = useState<string | null>(() => loadSimJson<string | null>(cid, "selectedSim", null))
   const [selected, setSelected] = useState<CompletedSimulationResponse | null>(null)
-  const [activeTab, setActiveTab] = useState("tab1")
+  const [activeTab, setActiveTab] = useState(() => loadSimJson<string>(cid, "activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -654,6 +856,13 @@ export default function SimulationsCompletedPage() {
     retry: false,
   })
 
+  const { data: zeroShotStats } = useQuery({
+    queryKey: ["simulation-accuracy-stats-zs", selected?.simulation_id, scenario, weekday],
+    queryFn: () => simulationsApi.getAccuracyStats(selected!.simulation_id!, scenario, weekdayDays ?? undefined),
+    enabled: !!selected?.simulation_id && activeTab === "tab4",
+    staleTime: 60_000,
+  })
+
   const { data: overviewFiltered } = useQuery({
     queryKey: ["simulation-overview-filtered", selected?.simulation_id, scenario, weekday],
     queryFn: () => simulationsApi.getOverview(selected!.simulation_id!, scenario, weekdayDays ?? undefined),
@@ -662,6 +871,37 @@ export default function SimulationsCompletedPage() {
   })
 
   const simulations = listData?.items ?? []
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) saveSimJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) saveSimJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) saveSimJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveSimJson(cid, "selectedSim", selected?.id ?? null) }, [cid, selected?.id])
+
+  // ── Restore selected simulation from persisted ID when list loads ──────────
+
+  useEffect(() => {
+    if (!simulations.length || selected || deepLinkTaskId) return
+    if (selectedSimId) {
+      const found = simulations.find((s) => s.id === selectedSimId)
+      if (found) setSelected(found)
+    }
+  }, [simulations.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadSimJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadSimJson<string[]>(cid, "starred", [])))
+      setSelectedSimId(loadSimJson<string | null>(cid, "selectedSim", null))
+      setSelected(null)
+      setActiveTab(loadSimJson<string>(cid, "activeTab", "tab1"))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ── Deep-link: select and focus simulation from task_id query param ──────
   const handledTaskIdRef = useRef<string | null>(null)
@@ -998,6 +1238,7 @@ export default function SimulationsCompletedPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 text-destructive data-[state=active]:text-destructive" value="tab0">{t("tabError")}</TabsTrigger>
                 )}
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tabSpecs">{t("tabSpecs")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabStats")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabZeroShot")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabModelFit")}</TabsTrigger>
@@ -1056,9 +1297,25 @@ export default function SimulationsCompletedPage() {
                       : "—"
                   }
                 />
-                <StatRow label={t("fieldEngine")} value={selected.engine ?? "—"} />
                 <StatRow label={t("fieldDelay")} value={selected.delay != null ? `${selected.delay} days` : "—"} />
                 <StatRow label={t("fieldOutlets")} value={selected.outlet_count} />
+              </TabsContent>
+
+              {/* ─ Specs ─ */}
+              <TabsContent value="tabSpecs" className="space-y-3 max-w-2xl mt-6 px-4">
+                <StatRow label={t("fieldEngine")} value={selected.engine ?? "—"} />
+                {selected.engine_params && Object.keys(selected.engine_params).length > 0 && (
+                  <>
+                    <div className="pt-2">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">{t("fieldParams")}</p>
+                      <div className="space-y-1.5">
+                        {Object.entries(selected.engine_params).map(([key, val]) => (
+                          <StatRow key={key} label={key} value={String(val ?? "—")} />
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
               </TabsContent>
 
               {/* ─ Overview ─ */}
@@ -1130,7 +1387,52 @@ export default function SimulationsCompletedPage() {
                   ) : !zeroShot ? (
                     <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">No data</div>
                   ) : (
-                    <ZeroShotTable data={zeroShot} />
+                    <>
+                      <ZeroShotTable data={zeroShot} />
+                      {zeroShotStats && (
+                        <TooltipProvider delayDuration={200}>
+                          <div className="space-y-2 pt-2">
+                            <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">{t("statsHeading")}</p>
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                              <StatRow label={t("statsMAE")} value={
+                                <span className="inline-flex items-center gap-1 tabular-nums">
+                                  {zeroShotStats.mae.toFixed(2)}
+                                  <UiTooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger><UiTooltipContent side="top" className="max-w-xs text-xs">{t("statsMAEInfo")}</UiTooltipContent></UiTooltip>
+                                </span>
+                              } />
+                              <StatRow label={t("statsRMSE")} value={
+                                <span className="inline-flex items-center gap-1 tabular-nums">
+                                  {zeroShotStats.rmse.toFixed(2)}
+                                  <UiTooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger><UiTooltipContent side="top" className="max-w-xs text-xs">{t("statsRMSEInfo")}</UiTooltipContent></UiTooltip>
+                                </span>
+                              } />
+                              <StatRow label={t("statsBias")} value={
+                                <span className="inline-flex items-center gap-1 tabular-nums">
+                                  {(zeroShotStats.bias >= 0 ? "+" : "") + zeroShotStats.bias.toFixed(2)}
+                                  <UiTooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger><UiTooltipContent side="top" className="max-w-xs text-xs">{t("statsBiasInfo")}</UiTooltipContent></UiTooltip>
+                                </span>
+                              } />
+                              {zeroShotStats.mape != null && (
+                                <StatRow label={t("statsMAPE")} value={
+                                  <span className="inline-flex items-center gap-1 tabular-nums">
+                                    {zeroShotStats.mape.toFixed(1)}%
+                                    <UiTooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger><UiTooltipContent side="top" className="max-w-xs text-xs">{t("statsMAPEInfo")}</UiTooltipContent></UiTooltip>
+                                  </span>
+                                } />
+                              )}
+                              {zeroShotStats.r_squared != null && (
+                                <StatRow label={t("statsR2")} value={
+                                  <span className="inline-flex items-center gap-1 tabular-nums">
+                                    {zeroShotStats.r_squared.toFixed(3)}
+                                    <UiTooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger><UiTooltipContent side="top" className="max-w-xs text-xs">{t("statsR2Info")}</UiTooltipContent></UiTooltip>
+                                  </span>
+                                } />
+                              )}
+                            </div>
+                          </div>
+                        </TooltipProvider>
+                      )}
+                    </>
                   )}
                 </div>
               </TabsContent>

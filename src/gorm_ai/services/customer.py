@@ -1,5 +1,7 @@
 """Customer service for business logic."""
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +54,16 @@ class CustomerService:
         for field, value in update_data.items():
             setattr(customer, field, value)
 
+        await self.session.flush()
+        await self.session.refresh(customer)
+        return customer
+
+    async def touch_last_opened(self, customer_id: str) -> Customer | None:
+        """Update last_opened_at timestamp for a customer."""
+        customer = await self.get(customer_id)
+        if not customer:
+            return None
+        customer.last_opened_at = datetime.now(UTC)
         await self.session.flush()
         await self.session.refresh(customer)
         return customer

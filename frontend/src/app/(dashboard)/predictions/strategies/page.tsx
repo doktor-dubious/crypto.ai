@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useEffect, useRef, type ReactNode } from "react"
+import { useState, useMemo, useEffect, useRef, useCallback, type ReactNode } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -119,23 +119,42 @@ function SwitchRow({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const STRAT_STORAGE_PREFIX = "gorm:predStrategies:"
+
+function loadStratJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${STRAT_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function saveStratJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${STRAT_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 export default function PredictionStrategiesPage() {
   const t = useTranslations("predictions.strategies")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadStratJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadStratJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("name")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(() => loadStratJson<string | null>(cid, "selectedStrategy", null))
   const [selectedStrategy, setSelectedStrategy] = useState<PredictionStrategyResponse | null>(null)
-  const [activeTab, setActiveTab] = useState("tab1")
+  const [activeTab, setActiveTab] = useState(() => loadStratJson<string>(cid, "activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
   const [draft, setDraft] = useState<PredictionStrategyUpdate>({})
@@ -179,6 +198,37 @@ export default function PredictionStrategiesPage() {
   })
 
   const defaultEngineId = customerConfig?.prediction_engine_id ?? globalConfig?.prediction_engine_id ?? null
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) saveStratJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) saveStratJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) saveStratJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveStratJson(cid, "selectedStrategy", selectedStrategy?.id ?? null) }, [cid, selectedStrategy?.id])
+
+  // ── Restore selected strategy from persisted ID when list loads ────────────
+
+  useEffect(() => {
+    if (!strategies.length || selectedStrategy) return
+    if (selectedStrategyId) {
+      const found = strategies.find((s) => s.id === selectedStrategyId)
+      if (found) setSelectedStrategy(found)
+    }
+  }, [strategies.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadStratJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadStratJson<string[]>(cid, "starred", [])))
+      setSelectedStrategyId(loadStratJson<string | null>(cid, "selectedStrategy", null))
+      setSelectedStrategy(null)
+      setActiveTab(loadStratJson<string>(cid, "activeTab", "tab1"))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 

@@ -4,6 +4,9 @@ import { usePathname } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { Bell, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { LockIcon } from "@/components/ui/animated-icons/lock"
+import { LockOpenIcon } from "@/components/ui/animated-icons/lock-open"
+import { useLock } from "@/components/providers/lock-provider"
 
 const ROUTE_TITLE_MAP: Record<string, string> = {
   "/": "home",
@@ -25,11 +28,18 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/financials/date-override": "financialsDateOverride",
   "/financials/bulk-update": "financialsBulkUpdate",
   "/outlet-groups": "outletGroups",
-  "/draw-adjustments": "drawAdjustments",
+  "/prediction-adjustments": "predictionAdjustments",
   "/statistics/sales": "statisticsSales",
   "/statistics/sold-out": "statisticsSoldOut",
   "/statistics/outlets": "statisticsOutlets",
   "/statistics/profit": "statisticsProfit",
+  "/import": "importImport",
+  "/import/templates": "importTemplates",
+  "/import/log": "importLog",
+  "/export": "exportExport",
+  "/export/templates": "exportTemplates",
+  "/export/log": "exportLog",
+  "/ai-models": "aiModelsModels",
   "/configuration": "configuration",
 }
 
@@ -37,6 +47,7 @@ export function Topbar() {
   const pathname = usePathname()
   const tNav = useTranslations("nav")
   const tTopbar = useTranslations("topbar")
+  const { isLocked, toggleLock } = useLock()
 
   const titleKey = ROUTE_TITLE_MAP[pathname] ?? "home"
   const title = tNav(titleKey as Parameters<typeof tNav>[0])
@@ -49,6 +60,17 @@ export function Topbar() {
       <h1 className="text-sm font-semibold text-[var(--foreground)]">{title}</h1>
 
       <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={tTopbar("lock")}
+          className="h-8 w-8 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+          asChild
+        >
+          <div onClick={toggleLock}>
+            {isLocked ? <LockIcon size={16} /> : <LockOpenIcon size={16} />}
+          </div>
+        </Button>
         <Button
           variant="ghost"
           size="icon"

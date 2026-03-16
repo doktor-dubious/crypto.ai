@@ -1,3 +1,8 @@
+---
+model: haiku
+allowed-tools: Bash, Read, Glob, Grep
+---
+
 Stage all changes, commit with a descriptive message, and push to the current remote branch.
 
 Steps:
@@ -5,7 +10,7 @@ Steps:
 2. Run `git diff` and `git diff --cached` to understand what changed.
 3. Stage all changes with `git add -A`.
 4. Write a concise commit message that follows the repository's existing commit style. End with:
-   Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+   Authored-By: Rune Skardhamar <rune@predictioninstitute.com>
 5. Commit the changes.
 6. Push to the current branch's remote tracking branch. If no upstream is set, push with `git push -u origin HEAD`.
 

@@ -22,12 +22,13 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
 
     async with task_session() as session:
         # Guard against redelivery after worker restart.
-        # Redelivered tasks get a new Celery ID that won't exist in our DB.
+        # Only run tasks that are still pending – any other status means
+        # the task already ran, was cancelled, or failed previously.
         ts = TaskService(session)
         try:
             record = await ts.get(task_id)
-            if record.status == "revoked":
-                return {"skipped": True, "reason": "task was revoked"}
+            if record.status != "pending":
+                return {"skipped": True, "reason": f"task status is {record.status}"}
         except HTTPException:
             # Unknown task ID → redelivered zombie, skip it
             return {"skipped": True, "reason": "redelivered task not in DB"}
@@ -47,8 +48,13 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
         request = SimulationRequest(**request_data)
 
         async def _on_progress(progress: int, message: str) -> None:
+            from gorm_ai.tasks.celery_app import get_current_metrics
             async with task_session() as s:
-                await TaskService(s).update_progress(task_id, progress, message)
+                ts = TaskService(s)
+                await ts.update_progress(task_id, progress, message)
+                peak_mem, cpu_time = get_current_metrics(task_id)
+                if peak_mem is not None:
+                    await ts.update_resource_metrics(task_id, peak_mem, cpu_time)
                 await s.commit()
 
         async with task_session() as session:

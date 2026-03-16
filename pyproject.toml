@@ -32,6 +32,9 @@ ml = [
 autogluon = [
     "autogluon.timeseries>=1.2.0",
 ]
+chronos = [
+    "chronos-forecasting>=1.4.0",
+]
 # MOIRAI-2 (Salesforce/moirai-2.0-R-small via uni2ts) is implemented in
 # src/gorm_ai/prediction/engines/moirai2_engine.py and registered as "moirai2",
 # but cannot be installed alongside autogluon-timeseries:

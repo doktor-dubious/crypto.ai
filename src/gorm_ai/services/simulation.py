@@ -12,19 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 log = structlog.get_logger()
 
+
 from gorm_ai.database.models.configuration import Configuration
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_group import OutletGroupMember
-from gorm_ai.database.models.pad import Pad
 from gorm_ai.database.models.prediction import Prediction as PredictionModel
-from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
+from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.simulation import Simulation as SimulationModel
 from gorm_ai.database.models.simulation_date import SimulationDate as SimulationDateModel
 from gorm_ai.prediction.registry import EngineRegistry
 from gorm_ai.schemas.prediction import PredictionEngine, PredictionResult
-from sqlalchemy.orm import selectinload
 from gorm_ai.schemas.simulation import (
     OutletSimulationResult,
     SimulationGroup,
@@ -71,6 +70,7 @@ class SimulationService:
 
         engine_type = await self._resolve_engine(request.customer_id, request.engine, strategy_engine_slug)
         engine = self.engine_registry.get_engine(engine_type)
+        resolved_engine_params = await self._prediction_service._apply_engine_parameters(engine, engine_type.value)
         capabilities = engine.get_capabilities()
 
         outlet_ids = await self._resolve_outlets(
@@ -93,6 +93,7 @@ class SimulationService:
             simulation_to=request.simulation_to,
             delay=request.delay,
             engine="same_draw" if is_same_draw else engine_type.value,
+            engine_params=resolved_engine_params or None,
             task_id=task_id,
             outlet_group_id=request.outlet_group_id,
         )
@@ -335,6 +336,7 @@ class SimulationService:
                         date=pred_date,
                         delay=request.delay,
                         engine=actual_engine,
+                        engine_params=resolved_engine_params or None,
                         use_financials=request.use_financials,
                         use_pad=request.use_pad,
                         batch_size=request.batch_size,
@@ -889,6 +891,7 @@ class SimulationService:
         sims_needing_actual = [s for s in sim_by_task.values() if s.actual_total_sale is None and s.id]
         if sims_needing_actual:
             from sqlalchemy import func as sqlfunc
+
             from gorm_ai.database.models.simulation_date import SimulationDate
             rows = await self.session.execute(
                 select(
@@ -1042,6 +1045,99 @@ class SimulationService:
             "total":              r.total,
         }
 
+    async def get_accuracy_stats(
+        self,
+        simulation_id: str,
+        column: str = "delivered",
+        weekdays: list[int] | None = None,
+    ) -> dict | None:
+        """Compute statistical accuracy metrics (MAE, Bias, RMSE, MAPE, R²) for a simulation."""
+        from sqlalchemy import Float, Integer, extract, func, literal
+
+        from gorm_ai.database.models.prediction import Prediction as PredictionModel
+        from gorm_ai.database.models.simulation_date import SimulationDate
+
+        sim = await self.session.get(SimulationModel, simulation_id)
+        if not sim or not sim.active:
+            return None
+
+        _col_map = {
+            "delivered":   PredictionOutlet.delivered,
+            "eo":          PredictionOutlet.eo,
+            "predicted":   PredictionOutlet.predicted,
+            "upper_bound": PredictionOutlet.upper_bound,
+            "lower_bound": PredictionOutlet.lower_bound,
+        }
+        col = _col_map.get(column, PredictionOutlet.delivered)
+
+        filters = [
+            SimulationDate.simulation_id == simulation_id,
+            PredictionOutlet.actual_sale.isnot(None),
+            col.isnot(None),
+        ]
+        if weekdays:
+            filters.append(extract("isodow", PredictionModel.date).in_(weekdays))
+
+        pred_val = func.round(col).cast(Float)
+        actual_val = PredictionOutlet.actual_sale.cast(Float)
+        diff = pred_val - actual_val
+        abs_diff = func.abs(diff)
+
+        row = await self.session.execute(
+            select(
+                func.count(PredictionOutlet.id).label("cnt"),
+                func.avg(abs_diff).label("mae"),
+                func.avg(diff).label("bias"),
+                func.sqrt(func.avg(diff * diff)).label("rmse"),
+                # For R²: SS_tot = sum(actual²) - sum(actual)²/n
+                func.sum(actual_val * actual_val).label("sum_actual_sq"),
+                func.sum(actual_val).label("sum_actual"),
+                # SS_res = sum((pred - actual)²)
+                func.sum(diff * diff).label("ss_res"),
+                # For MAPE: count nonzero actuals
+                func.count(
+                    func.nullif(actual_val, literal(0.0))
+                ).label("nonzero_cnt"),
+                # Sum of |diff|/actual only for nonzero actuals
+                func.sum(
+                    func.abs(diff) / func.nullif(actual_val, literal(0.0))
+                ).label("ape_sum"),
+            )
+            .join(SimulationDate, SimulationDate.prediction_id == PredictionOutlet.prediction_id)
+            .join(PredictionModel, PredictionModel.id == PredictionOutlet.prediction_id)
+            .where(*filters)
+        )
+        r = row.one()
+
+        cnt = r.cnt or 0
+        if cnt == 0:
+            return None
+
+        mae = float(r.mae)
+        bias = float(r.bias)
+        rmse = float(r.rmse)
+
+        # MAPE — computed over nonzero actuals only
+        mape = None
+        if r.nonzero_cnt and r.nonzero_cnt > 0 and r.ape_sum is not None:
+            mape = float(r.ape_sum) / int(r.nonzero_cnt) * 100.0
+
+        # R² = 1 - SS_res / SS_tot, where SS_tot = sum(a²) - sum(a)²/n
+        r_squared = None
+        if r.sum_actual_sq is not None and r.sum_actual is not None and cnt > 0:
+            ss_tot = float(r.sum_actual_sq) - float(r.sum_actual) ** 2 / cnt
+            if ss_tot > 0:
+                r_squared = 1.0 - float(r.ss_res) / ss_tot
+
+        return {
+            "mae": round(mae, 4),
+            "bias": round(bias, 4),
+            "rmse": round(rmse, 4),
+            "mape": round(mape, 2) if mape is not None else None,
+            "r_squared": round(r_squared, 4) if r_squared is not None else None,
+            "count": cnt,
+        }
+
     async def delete_simulation(self, simulation_id: str) -> bool:
         """Soft-delete a simulation record."""
         result = await self.session.execute(
@@ -1110,12 +1206,12 @@ class SimulationService:
 
         Includes actual totals and profit group (g1-g4) data computed via classification.
         """
-        from sqlalchemy import extract, literal_column, text
+        from sqlalchemy import extract
 
+        from gorm_ai.database.models.outlet_financials import OutletFinancials
         from gorm_ai.database.models.prediction import Prediction as PredictionModel
         from gorm_ai.database.models.sales import Sales
         from gorm_ai.database.models.simulation_date import SimulationDate
-        from gorm_ai.database.models.outlet_financials import OutletFinancials
 
         sim = await self.session.get(SimulationModel, simulation_id)
         if not sim or not sim.active:
@@ -1171,6 +1267,10 @@ class SimulationService:
         actual_total_delivered = 0.0
         actual_total_sale = 0.0
         actual_total_returned = 0.0
+        diff_delivered_total = 0
+        diff_return_total = 0
+        lost_sale_total = 0
+        more_sale_total = 0
         g_profit: dict[int, float] = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         has_scenario = False
         has_actual = False
@@ -1183,21 +1283,36 @@ class SimulationService:
             if scenario_delivery is not None and actual_sale is not None:
                 has_scenario = True
                 s_draw = max(1, round(float(scenario_delivery)))
-                if s_draw < actual_sale:
-                    s_sold = s_draw
-                    s_returned = 0.0
-                elif s_draw > actual_sale and actual_draw is not None and actual_draw - actual_sale == 0.0:
-                    s_sold = s_draw
-                    s_returned = 0.0
-                else:
-                    s_sold = actual_sale
-                    s_returned = max(0.0, s_draw - actual_sale)
-                total_delivered += s_draw
-                total_sold += s_sold
-                total_returned += s_returned
 
-                # G1-G4 profit classification
+                # Use conservative sold/returned (matches run_simulation logic)
+                total_delivered += s_draw
+                total_sold += round(min(s_draw, actual_sale))
+                total_returned += round(max(0.0, s_draw - actual_sale))
+
+                # Diff metrics (require actual_draw)
                 if actual_draw is not None:
+                    actual_return_val = max(0.0, actual_draw - actual_sale)
+                    sold_out = actual_return_val == 0.0
+
+                    if s_draw < actual_sale:
+                        s_return_if = 0.0
+                        loss_sale = round(s_draw - actual_sale)  # negative
+                        more_sale = 0
+                    elif s_draw > actual_sale and sold_out:
+                        s_return_if = 0.0
+                        loss_sale = 0
+                        more_sale = round(s_draw - actual_sale)  # positive
+                    else:
+                        s_return_if = max(0.0, s_draw - actual_sale)
+                        loss_sale = 0
+                        more_sale = 0
+
+                    diff_delivered_total += round(s_draw - actual_draw)
+                    diff_return_total += round(s_return_if - actual_return_val)
+                    lost_sale_total += loss_sale
+                    more_sale_total += more_sale
+
+                    # G1-G4 profit classification
                     cost, profit_unit = fin_map.get((r.outlet_id, int(r.weekday)), (None, None))
                     if cost is None:
                         cost = default_cost
@@ -1205,7 +1320,6 @@ class SimulationService:
                         profit_unit = default_profit
                     _cost = cost or 0.0
                     _profit = profit_unit or 0.0
-                    sold_out = (actual_draw - actual_sale) == 0.0
                     if s_draw < actual_draw:
                         reduction = actual_draw - s_draw
                         if s_draw >= actual_sale:
@@ -1232,6 +1346,10 @@ class SimulationService:
             "actual_total_delivered": actual_total_delivered if has_actual else None,
             "actual_total_sale": actual_total_sale if has_actual else None,
             "actual_total_returned": actual_total_returned if has_actual else None,
+            "diff_delivered": diff_delivered_total if has_scenario else None,
+            "diff_return": diff_return_total if has_scenario else None,
+            "lost_sale": lost_sale_total if has_scenario else None,
+            "more_sale": more_sale_total if has_scenario else None,
             "g1": g_profit[1] or None,
             "g2": g_profit[2] or None,
             "g3": g_profit[3] or None,
@@ -1265,6 +1383,7 @@ class SimulationService:
 
         # Build aggregated time series
         from sqlalchemy import extract, func
+
         from gorm_ai.database.models.prediction import Prediction as PredictionModel
 
         filters = [SimulationDate.simulation_id == simulation_id]

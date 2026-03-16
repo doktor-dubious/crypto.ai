@@ -64,6 +64,18 @@ async def update_customer(
     return CustomerResponse.model_validate(customer)
 
 
+@router.post("/{customer_id}/opened", response_model=CustomerResponse)
+async def touch_customer_opened(
+    customer_id: str,
+    service: CustomerServiceDep,
+) -> CustomerResponse:
+    """Update last_opened_at timestamp for a customer."""
+    customer = await service.touch_last_opened(customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return CustomerResponse.model_validate(customer)
+
+
 @router.delete("/{customer_id}", status_code=204)
 async def delete_customer(
     customer_id: str,

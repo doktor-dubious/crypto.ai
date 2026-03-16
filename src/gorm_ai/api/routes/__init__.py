@@ -6,11 +6,13 @@ from gorm_ai.api.routes import (
     configuration,
     currencies,
     customers,
-    draw_adjustments,
+    financial_dates,
+    import_templates,
     outlet_groups,
     outlets,
     pads,
     predefined_pads,
+    prediction_adjustments,
     prediction_engines,
     prediction_strategies,
     predictions,
@@ -26,10 +28,12 @@ api_router = APIRouter()
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
 api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
+api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])
+api_router.include_router(import_templates.router, prefix="/import-templates", tags=["import-templates"])
 api_router.include_router(outlets.router, prefix="/outlets", tags=["outlets"])
 api_router.include_router(outlet_groups.router, prefix="/outlet-groups", tags=["outlet-groups"])
 api_router.include_router(
-    draw_adjustments.router, prefix="/draw-adjustments", tags=["draw-adjustments"]
+    prediction_adjustments.router, prefix="/prediction-adjustments", tags=["prediction-adjustments"]
 )
 api_router.include_router(pads.router, prefix="/pads", tags=["pads"])
 api_router.include_router(predefined_pads.router, prefix="/predefined-pads", tags=["predefined-pads"])

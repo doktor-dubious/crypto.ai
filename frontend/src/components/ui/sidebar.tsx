@@ -167,7 +167,7 @@ export function SidebarContent({
     <div
       data-sidebar="content"
       className={cn(
-        "flex flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden p-2",
+        "flex flex-1 flex-col gap-2 overflow-hidden p-2",
         className
       )}
       {...props}

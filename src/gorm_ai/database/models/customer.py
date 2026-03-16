@@ -2,7 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import SmallInteger, String, Text
+from datetime import datetime
+
+from sqlalchemy import DateTime, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gorm_ai.database.base import Base
@@ -27,17 +29,18 @@ class Customer(Base):
     name: Mapped[str] = mapped_column(String(255), index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     outlets: Mapped[list["Outlet"]] = relationship(
         "Outlet",
         back_populates="customer",
-        lazy="selectin",
+        lazy="noload",
     )
     outlet_groups: Mapped[list["OutletGroup"]] = relationship(
         "OutletGroup",
         back_populates="customer",
-        lazy="selectin",
+        lazy="noload",
     )
     sales: Mapped[list["Sales"]] = relationship(
         "Sales",
@@ -47,7 +50,7 @@ class Customer(Base):
     configuration: Mapped["CustomerConfiguration | None"] = relationship(
         "CustomerConfiguration",
         back_populates="customer",
-        lazy="selectin",
+        lazy="noload",
         cascade="all, delete-orphan",
         uselist=False,
     )

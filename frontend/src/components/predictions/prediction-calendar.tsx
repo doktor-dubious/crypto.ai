@@ -109,6 +109,7 @@ interface PredictionCalendarProps {
   onSelectedDatesChange: (dates: Set<string>) => void
   onPadChipClick?: (padId: string, padName: string, date: string) => void
   onBarClick?: (assignmentId: string, assignmentName: string) => void
+  navigateToDate?: { year: number; month: number } | null
 }
 
 const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -120,10 +121,18 @@ export function PredictionCalendar({
   onSelectedDatesChange,
   onPadChipClick,
   onBarClick,
+  navigateToDate,
 }: PredictionCalendarProps) {
   const today = new Date()
   const [currentMonth, setCurrentMonth] = useState(today.getMonth() + 1)
   const [currentYear, setCurrentYear] = useState(today.getFullYear())
+
+  useEffect(() => {
+    if (navigateToDate) {
+      setCurrentYear(navigateToDate.year)
+      setCurrentMonth(navigateToDate.month)
+    }
+  }, [navigateToDate])
   const [lastClicked, setLastClicked] = useState<string | null>(null)
 
   // Use refs for drag state so event handlers always read the current value

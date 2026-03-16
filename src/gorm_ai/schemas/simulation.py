@@ -221,6 +221,7 @@ class CompletedSimulationResponse(BaseModel):
     simulation_from: date | None = None
     simulation_to: date | None = None
     engine: str | None = None
+    engine_params: dict | None = None
     delay: int | None = None
     outlet_count: int = 0
     outlet_group_id: str | None = None
@@ -320,6 +321,17 @@ class ModelFitDataPoint(BaseModel):
 class ModelFitResponse(BaseModel):
     outlets: list[ModelFitOutlet]
     data: list[ModelFitDataPoint]
+
+
+class AccuracyStatsResponse(BaseModel):
+    """Statistical accuracy metrics for a simulation."""
+
+    mae: float                        # Mean Absolute Error
+    bias: float                       # Mean Error (positive = over-prediction)
+    rmse: float                       # Root Mean Squared Error
+    mape: float | None                # Mean Absolute Percentage Error (None if actuals contain zeros)
+    r_squared: float | None           # Coefficient of determination
+    count: int                        # Number of data points used
 
 
 class FilteredOverviewResponse(BaseModel):

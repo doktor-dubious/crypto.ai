@@ -2,8 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from gorm_ai.api.deps import DrawAdjustmentServiceDep, OutletGroupServiceDep
-from gorm_ai.schemas.draw_adjustment import DrawAdjustmentResponse
+from gorm_ai.api.deps import OutletGroupServiceDep, PredictionAdjustmentServiceDep
 from gorm_ai.schemas.outlet import OutletResponse
 from gorm_ai.schemas.outlet_group import (
     OutletGroupBulkAddResponse,
@@ -13,6 +12,7 @@ from gorm_ai.schemas.outlet_group import (
     OutletGroupResponse,
     OutletGroupUpdate,
 )
+from gorm_ai.schemas.prediction_adjustment import PredictionAdjustmentResponse
 
 router = APIRouter()
 
@@ -129,14 +129,14 @@ async def remove_outlet_from_group(
         raise HTTPException(status_code=404, detail="Outlet group membership not found")
 
 
-# Draw adjustments for group
+# Prediction adjustments for group
 
 
-@router.get("/{group_id}/draw-adjustments", response_model=list[DrawAdjustmentResponse])
-async def list_group_draw_adjustments(
+@router.get("/{group_id}/prediction-adjustments", response_model=list[PredictionAdjustmentResponse])
+async def list_group_prediction_adjustments(
     group_id: str,
-    service: DrawAdjustmentServiceDep,
-) -> list[DrawAdjustmentResponse]:
-    """Get all draw adjustments for a group."""
+    service: PredictionAdjustmentServiceDep,
+) -> list[PredictionAdjustmentResponse]:
+    """Get all prediction adjustments for a group."""
     adjustments = await service.get_by_group(group_id)
-    return [DrawAdjustmentResponse.model_validate(a) for a in adjustments]
+    return [PredictionAdjustmentResponse.model_validate(a) for a in adjustments]

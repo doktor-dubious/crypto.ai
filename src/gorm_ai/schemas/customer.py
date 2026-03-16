@@ -37,5 +37,6 @@ class CustomerResponse(CustomerBase):
 
     id: str
     active: bool
+    last_opened_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

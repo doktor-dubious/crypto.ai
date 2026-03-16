@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Query
 from gorm_ai.api.deps import OutletServiceDep
 from gorm_ai.schemas.outlet import (
     DeliveryAnalyticsResponse,
+    OutletConstraintsResponse,
+    OutletConstraintsUpdate,
     OutletCreate,
     OutletDeliveryCreate,
     OutletDeliveryResponse,
@@ -119,6 +121,32 @@ async def delete_outlet_info(
     deleted = await service.delete_info(outlet_id, info_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Outlet info not found")
+
+
+# Constraints (deliveries + financials per weekday)
+@router.get("/{outlet_id}/constraints", response_model=OutletConstraintsResponse)
+async def get_outlet_constraints(
+    outlet_id: str,
+    service: OutletServiceDep,
+) -> OutletConstraintsResponse:
+    """Get delivery constraints and financials per weekday."""
+    result = await service.get_constraints(outlet_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return result
+
+
+@router.put("/{outlet_id}/constraints", response_model=OutletConstraintsResponse)
+async def update_outlet_constraints(
+    outlet_id: str,
+    data: OutletConstraintsUpdate,
+    service: OutletServiceDep,
+) -> OutletConstraintsResponse:
+    """Update delivery constraints and financials per weekday."""
+    result = await service.update_constraints(outlet_id, data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Outlet not found")
+    return result
 
 
 # Delivery analytics

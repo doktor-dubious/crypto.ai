@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gorm_ai.database.models import Configuration
 from gorm_ai.schemas.configuration import ConfigurationUpdate
 
-
 SINGLETON_ID = "00000000-0000-0000-0000-000000000001"
 
 

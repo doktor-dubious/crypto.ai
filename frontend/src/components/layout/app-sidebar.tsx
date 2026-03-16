@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
@@ -15,7 +15,6 @@ import {
   List,
   LogOut,
   Plus,
-  Search,
   Settings,
   ShoppingCart,
   Sliders,
@@ -36,6 +35,11 @@ import {
   Store,
   Coins,
   PackageX,
+  Import,
+  Download,
+  FileSpreadsheet,
+  ScrollText,
+  Brain,
 } from "lucide-react"
 import { signOut, useSession } from "@/lib/auth-client"
 import {
@@ -57,10 +61,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { createPortal } from "react-dom"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { SidebarTasks } from "@/components/layout/sidebar-tasks"
 import { ThemeToggle } from "@/components/layout/theme-toggle"
-import { Input } from "@/components/ui/input"
 import { useCustomer } from "@/components/providers/customer-provider"
 
 function getInitials(name: string): string {
@@ -96,7 +101,7 @@ const PREDICTION_SUBNAV_MID = [
 ] as const
 
 const PREDICTION_SUBNAV_BOT = [
-  { href: "/draw-adjustments", icon: Sliders, labelKey: "predictionsAdjustments" },
+  { href: "/prediction-adjustments", icon: Sliders, labelKey: "predictionsAdjustments" },
   { href: "/predictions/configuration", icon: Cpu, labelKey: "predictionsConfiguration" },
 ] as const
 
@@ -123,6 +128,22 @@ const STATISTICS_SUBNAV_ITEMS = [
   { href: "/statistics/profit", icon: Coins, labelKey: "statisticsProfit" },
 ] as const
 
+const IMPORT_SUBNAV_ITEMS = [
+  { href: "/import/templates", icon: FileSpreadsheet, labelKey: "importTemplates" },
+  { href: "/import", icon: Download, labelKey: "importImport" },
+  { href: "/import/log", icon: ScrollText, labelKey: "importLog" },
+] as const
+
+const EXPORT_SUBNAV_ITEMS = [
+  { href: "/export/templates", icon: FileSpreadsheet, labelKey: "exportTemplates" },
+  { href: "/export", icon: Upload, labelKey: "exportExport" },
+  { href: "/export/log", icon: ScrollText, labelKey: "exportLog" },
+] as const
+
+const AI_MODELS_SUBNAV_ITEMS = [
+  { href: "/ai-models", icon: List, labelKey: "aiModelsModels" },
+] as const
+
 const CONFIG_ITEMS = [
   { href: "/configuration", icon: Settings, labelKey: "configuration" },
 ] as const
@@ -130,28 +151,17 @@ const CONFIG_ITEMS = [
 
 function CustomerSwitcher() {
   const t = useTranslations("nav")
-  const { customers, sortedCustomers, activeCustomer, setActiveCustomer } = useCustomer()
-  const [searchQuery, setSearchQuery] = useState("")
+  const { customers, sortedCustomers, recentCustomers, activeCustomer, setActiveCustomer } = useCustomer()
   const [isOpen, setIsOpen] = useState(false)
 
-  useEffect(() => {
-    if (!isOpen) setSearchQuery("")
-  }, [isOpen])
-
-  const orderedCustomers = useMemo(() => {
-    if (!activeCustomer) return sortedCustomers
-    return [activeCustomer, ...sortedCustomers.filter((c) => c.id !== activeCustomer.id)]
-  }, [sortedCustomers, activeCustomer])
-
-  const filteredCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return orderedCustomers
-    const q = searchQuery.toLowerCase()
-    return orderedCustomers.filter((c) => c.name.toLowerCase().includes(q))
-  }, [orderedCustomers, searchQuery])
-
-  if (!activeCustomer) return null
-
-  const showSearch = customers.length > 8
+  if (!activeCustomer) return (
+    <div className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b">
+      <Blocks className="h-4 w-4 shrink-0" />
+      <span className="text-xs truncate group-data-[collapsible=icon]:hidden text-[var(--muted-foreground)]">
+        Loading…
+      </span>
+    </div>
+  )
 
   if (customers.length === 1) {
     return (
@@ -164,55 +174,101 @@ function CustomerSwitcher() {
     )
   }
 
+  // IDs of recent customers to avoid showing them twice in "All"
+  const recentIds = new Set(recentCustomers.map((c) => c.id))
+  const otherCustomers = sortedCustomers.filter((c) => !recentIds.has(c.id))
+
+  function handleSelect(id: string) {
+    const customer = customers.find((c) => c.id === id)
+    if (customer) {
+      setActiveCustomer(customer)
+      setIsOpen(false)
+    }
+  }
+
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 })
+
+  // Position the dropdown below the trigger; flip above if it would overflow
+  useEffect(() => {
+    if (!isOpen || !triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    const dropdownHeight = 320 // max-h-[300px] + input + border
+    const spaceBelow = window.innerHeight - rect.bottom
+    const top = spaceBelow >= dropdownHeight ? rect.bottom : rect.top - dropdownHeight
+    setPos({ top: Math.max(0, top), left: rect.left, width: rect.width })
+  }, [isOpen])
+
+  // Close on outside click
+  const handleOutsideClick = useCallback((e: MouseEvent) => {
+    if (
+      dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+      triggerRef.current && !triggerRef.current.contains(e.target as Node)
+    ) {
+      setIsOpen(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen) {
+      document.addEventListener("mousedown", handleOutsideClick)
+      return () => document.removeEventListener("mousedown", handleOutsideClick)
+    }
+  }, [isOpen, handleOutsideClick])
+
   return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <button className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b hover:text-sidebar-foreground transition-colors outline-none cursor-pointer group-data-[collapsible=icon]:justify-center">
-          <Blocks className="h-4 w-4 shrink-0" />
-          <span className="flex-1 text-xs truncate text-left group-data-[collapsible=icon]:hidden">
-            {activeCustomer.name}
-          </span>
-          <ChevronDown className="h-3 w-3 shrink-0 group-data-[collapsible=icon]:hidden" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[var(--sidebar-width)]">
-        <DropdownMenuLabel>{t("customers")}</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {showSearch && (
-          <div className="px-2 py-1.5">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
-              <Input
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-8 pl-8"
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => e.stopPropagation()}
-              />
-            </div>
-          </div>
-        )}
-        <div className="max-h-64 overflow-y-auto">
-          {filteredCustomers.map((c) => (
-            <DropdownMenuItem
-              key={c.id}
-              onClick={() => { setActiveCustomer(c); setIsOpen(false) }}
-              className="cursor-pointer"
-            >
-              <span className={c.id === activeCustomer.id ? "font-medium" : ""}>
-                {c.name}
-              </span>
-            </DropdownMenuItem>
-          ))}
-          {filteredCustomers.length === 0 && (
-            <div className="px-2 py-4 text-center text-sm text-[var(--muted-foreground)]">
-              No results
-            </div>
-          )}
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <button
+        ref={triggerRef}
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b hover:text-sidebar-foreground transition-colors outline-none cursor-pointer group-data-[collapsible=icon]:justify-center"
+      >
+        <Blocks className="h-4 w-4 shrink-0" />
+        <span className="flex-1 text-xs truncate text-left group-data-[collapsible=icon]:hidden">
+          {activeCustomer.name}
+        </span>
+        <ChevronDown className="h-3 w-3 shrink-0 group-data-[collapsible=icon]:hidden" />
+      </button>
+      {isOpen && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width, backgroundColor: "var(--popover)" }}
+          className="z-[9999] isolate rounded-md border text-popover-foreground shadow-2xl"
+        >
+          <Command style={{ backgroundColor: "var(--popover)" }}>
+            <CommandInput placeholder={t("searchCustomers")} />
+            <CommandList>
+              <CommandEmpty>{t("noResults")}</CommandEmpty>
+              <CommandGroup>
+                {recentCustomers.map((c) => (
+                  <CommandItem
+                    key={c.id}
+                    value={c.name}
+                    onSelect={() => handleSelect(c.id)}
+                    className={c.id === activeCustomer.id ? "font-medium" : ""}
+                  >
+                    {c.name}
+                  </CommandItem>
+                ))}
+                {recentCustomers.length > 0 && otherCustomers.length > 0 && <CommandSeparator />}
+                {otherCustomers.map((c) => (
+                  <CommandItem
+                    key={c.id}
+                    value={c.name}
+                    onSelect={() => handleSelect(c.id)}
+                    className={c.id === activeCustomer.id ? "font-medium" : ""}
+                  >
+                    {c.name}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </div>,
+        document.body
+      )}
+    </>
   )
 }
 
@@ -274,7 +330,7 @@ export function AppSidebar() {
 
         {/* Task list */}
         <div
-          className="flex-1 min-h-0 overflow-y-auto"
+          className="flex-1 min-h-0 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           <SidebarTasks />
@@ -425,6 +481,56 @@ export function AppSidebar() {
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {STATISTICS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* AI Models */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Brain className="h-4 w-4" />
+                {t("nav.aiModels")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {AI_MODELS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            <DropdownMenuSeparator />
+
+            {/* Import */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Import className="h-4 w-4" />
+                {t("nav.import")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {IMPORT_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* Export */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Upload className="h-4 w-4" />
+                {t("nav.export")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {EXPORT_SUBNAV_ITEMS.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}

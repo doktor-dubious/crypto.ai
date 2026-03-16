@@ -47,6 +47,7 @@ class LegacyMigrator:
         table: str = "all",
         country_mapping: dict = None,
         dry_run: bool = False,
+        customer_name: str = None,
     ):
         self.mysql_config = mysql_config
         self.postgres_url = postgres_url
@@ -54,9 +55,10 @@ class LegacyMigrator:
         self.table = table.lower()
         self.country_mapping = country_mapping or {}
         self.dry_run = dry_run
+        self.customer_name = customer_name
 
         # Validate table parameter
-        valid_tables = ["all", "customers", "outlets", "sales", "financials", "financial_dates", "pads", "groups", "sales_filters"]
+        valid_tables = ["all", "customers", "outlets", "deliveries", "sales", "financials", "financial_dates", "pads", "groups", "sales_filters"]
         if self.table not in valid_tables:
             raise ValueError(f"Invalid table '{self.table}'. Must be one of: {', '.join(valid_tables)}")
 
@@ -86,6 +88,13 @@ class LegacyMigrator:
     def generate_uuid(self) -> str:
         """Generate a new UUID as string."""
         return str(uuid4())
+
+    @staticmethod
+    def sanitize_str(value):
+        """Strip null bytes from strings (MySQL allows 0x00, PostgreSQL does not)."""
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+        return value
 
     def convert_country(self, country_id: int) -> str:
         """Convert country_id to country code."""
@@ -125,6 +134,12 @@ class LegacyMigrator:
                     # Migrate outlets (requires customer to exist)
                     await self.load_customer_uuid(pg_conn)
                     await self.migrate_outlets(mysql_conn, pg_conn)
+
+                elif self.table == "deliveries":
+                    # Re-migrate outlet_deliveries only (requires customer and outlets)
+                    await self.load_customer_uuid(pg_conn)
+                    await self.load_outlet_mappings(pg_conn)
+                    await self.remigrate_deliveries(mysql_conn, pg_conn)
 
                 elif self.table == "financials":
                     # Migrate outlet_financials only (requires outlets to exist)
@@ -261,9 +276,9 @@ class LegacyMigrator:
             """,
             self.customer_uuid,
             0,  # type - default
-            pub["publication_name"],
-            pub["description"],
-            f"Migrated from legacy publication_id={self.publication_id}. cps_name={pub.get('cps_name', '')}",
+            self.sanitize_str(self.customer_name or pub["publication_name"]),
+            self.sanitize_str(pub["description"]),
+            self.sanitize_str(f"Migrated from legacy publication_id={self.publication_id}. cps_name={pub.get('cps_name', '')}"),
             bool(pub["active"]),
             pub.get("date_created", datetime.now()),
             pub.get("date_upd", datetime.now()),
@@ -277,7 +292,7 @@ class LegacyMigrator:
         logger.info("Migrating outlets...")
 
         count = 0
-        with mysql_conn.cursor(pymysql.cursors.SSDictCursor) as cursor:
+        with mysql_conn.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute(
                 """
                 SELECT * FROM outlet
@@ -286,9 +301,11 @@ class LegacyMigrator:
                 """,
                 (self.publication_id,),
             )
-            for outlet in cursor:
-                await self.migrate_single_outlet(mysql_conn, outlet, pg_conn)
-                count += 1
+            outlets = cursor.fetchall()
+
+        for outlet in outlets:
+            await self.migrate_single_outlet(mysql_conn, outlet, pg_conn)
+            count += 1
 
         logger.info(f"✓ Migrated {count} outlets")
 
@@ -325,15 +342,15 @@ class LegacyMigrator:
             """,
             outlet_uuid,
             self.customer_uuid,
-            outlet["ext_id_1"],
+            self.sanitize_str(outlet["ext_id_1"]),
             outlet["id"] if outlet["id"] != 0 else None,
-            outlet["outlet_name"],
-            outlet["description"],
-            outlet.get("notes", ""),
-            outlet["street_and_number"] or None,
-            outlet["zip_name"] or None,
-            outlet["city_name"] or None,
-            outlet["us_state_name"] or None,
+            self.sanitize_str(outlet["outlet_name"]),
+            self.sanitize_str(outlet["description"]),
+            self.sanitize_str(outlet.get("notes", "")),
+            self.sanitize_str(outlet["street_and_number"]) or None,
+            self.sanitize_str(outlet["zip_name"]) or None,
+            self.sanitize_str(outlet["city_name"]) or None,
+            self.sanitize_str(outlet["us_state_name"]) or None,
             self.convert_country(outlet["country_id"]),
             start_date,
             end_date,
@@ -349,8 +366,8 @@ class LegacyMigrator:
         # Insert outlet_info records (key-value pairs for extra fields)
         await self.migrate_outlet_info(outlet, outlet_uuid, pg_conn)
 
-        # Insert outlet_deliveries records (draw days)
-        await self.migrate_outlet_deliveries(outlet, outlet_uuid, pg_conn)
+        # Insert outlet_deliveries records (draw days + delivery values)
+        await self.migrate_outlet_deliveries(mysql_conn, outlet, outlet_uuid, pg_conn)
 
         # Insert outlet_financials records (cost/profit per weekday)
         await self.migrate_outlet_financials(mysql_conn, outlet["outlet_id"], outlet_uuid, pg_conn)
@@ -410,43 +427,112 @@ class LegacyMigrator:
                 self.generate_uuid(),
                 outlet_uuid,
                 key,
-                str(value),
+                self.sanitize_str(str(value)),
                 True,
                 datetime.now(),
                 datetime.now(),
             )
             self.stats["outlet_info"] += 1
 
-    async def migrate_outlet_deliveries(self, outlet: dict, outlet_uuid: str, pg_conn):
-        """Migrate outlet draw days to outlet_deliveries table."""
+    async def migrate_outlet_deliveries(self, mysql_conn, outlet: dict, outlet_uuid: str, pg_conn):
+        """Migrate outlet draw days + outlet_delivery to outlet_deliveries table.
+
+        - outlet.draw_monday..draw_sunday  -> open (bool: whether the day is a delivery day)
+        - outlet_delivery per weekday      -> fixed, minimum, maximum, add, add_pct
+        """
+        # Map draw_* fields to open flag per weekday (1-7, Monday=1)
         draw_days = [
-            ("draw_monday", 0),
-            ("draw_tuesday", 1),
-            ("draw_wednesday", 2),
-            ("draw_thursday", 3),
-            ("draw_friday", 4),
-            ("draw_saturday", 5),
-            ("draw_sunday", 6),
+            ("draw_monday", 1),
+            ("draw_tuesday", 2),
+            ("draw_wednesday", 3),
+            ("draw_thursday", 4),
+            ("draw_friday", 5),
+            ("draw_saturday", 6),
+            ("draw_sunday", 7),
         ]
 
+        open_by_weekday = {}
         for field_name, weekday in draw_days:
-            quantity = 1 if outlet.get(field_name, 1) else 0  # Default to 1 if not specified
+            open_by_weekday[weekday] = bool(outlet.get(field_name, 0))
+
+        # Read delivery values from MySQL outlet_delivery table
+        legacy_outlet_id = outlet["outlet_id"]
+        delivery_by_weekday: dict[int, dict] = {}
+
+        with mysql_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT day_of_week, minimum_delivery, fixed_delivery,
+                       maximum_delivery, added_delivery, added_delivery_pct
+                FROM outlet_delivery
+                WHERE outlet_id = %s AND active = 1
+                """,
+                (legacy_outlet_id,),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            # MySQL day_of_week 0-6 -> PostgreSQL weekday 1-7
+            weekday = row["day_of_week"] + 1
+            delivery_by_weekday[weekday] = row
+
+        # Insert one row per weekday (1-7)
+        for weekday in range(1, 8):
+            is_open = open_by_weekday.get(weekday, False)
+            delivery = delivery_by_weekday.get(weekday, {})
 
             await pg_conn.execute(
                 """
                 INSERT INTO outlet_deliveries (
-                    id, outlet_id, weekday, quantity, active, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    id, outlet_id, weekday, open, fixed, minimum, maximum, add, add_pct, active, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 self.generate_uuid(),
                 outlet_uuid,
                 weekday,
-                quantity,
+                is_open,
+                delivery.get("fixed_delivery") or 0,
+                delivery.get("minimum_delivery") or 0,
+                delivery.get("maximum_delivery") or 0,
+                delivery.get("added_delivery") or 0,
+                float(delivery.get("added_delivery_pct") or 0),
                 True,
                 datetime.now(),
                 datetime.now(),
             )
             self.stats["outlet_deliveries"] += 1
+
+    async def remigrate_deliveries(self, mysql_conn, pg_conn):
+        """Delete and re-migrate outlet_deliveries for all outlets of this customer."""
+        logger.info("Re-migrating outlet_deliveries...")
+
+        # Delete existing outlet_deliveries for this customer's outlets
+        outlet_uuids = list(self.outlet_mapping.values())
+        deleted = await pg_conn.execute(
+            """
+            DELETE FROM outlet_deliveries
+            WHERE outlet_id = ANY($1::uuid[])
+            """,
+            outlet_uuids,
+        )
+        logger.info(f"✓ Deleted existing outlet_deliveries: {deleted}")
+
+        # Re-fetch outlet rows from MySQL to get draw_* fields
+        legacy_ids = list(self.outlet_mapping.keys())
+        placeholders = ", ".join(["%s"] * len(legacy_ids))
+        with mysql_conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(
+                f"SELECT * FROM outlet WHERE outlet_id IN ({placeholders})",
+                legacy_ids,
+            )
+            outlets = cursor.fetchall()
+
+        for outlet in outlets:
+            legacy_id = outlet["outlet_id"]
+            outlet_uuid = self.outlet_mapping[legacy_id]
+            await self.migrate_outlet_deliveries(mysql_conn, outlet, outlet_uuid, pg_conn)
+
+        logger.info(f"✓ Re-migrated {self.stats['outlet_deliveries']} outlet_deliveries")
 
     async def migrate_outlet_financials(
         self, mysql_conn, legacy_outlet_id: int, outlet_uuid: str, pg_conn
@@ -732,17 +818,15 @@ class LegacyMigrator:
                 """
                 INSERT INTO financial_dates (
                     id, customer_id, name, description,
-                    start_date, end_date, weekday, method, copy_from_weekday,
+                    date, method, copy_from_weekday,
                     active, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 """,
                 financial_date_uuid,
                 self.customer_uuid,
-                header["name"],
-                header.get("description") or None,
+                self.sanitize_str(header["name"]),
+                self.sanitize_str(header.get("description")) or None,
                 header["tarif_date_start"],
-                header["tarif_date_end"],
-                weekday,
                 header.get("method") or 0,
                 copy_from_weekday,
                 True,
@@ -956,7 +1040,7 @@ async def main():
         "--table",
         type=str,
         default="all",
-        choices=["all", "customers", "outlets", "financials", "financial_dates", "groups", "pads", "sales", "sales_filters"],
+        choices=["all", "customers", "outlets", "deliveries", "financials", "financial_dates", "groups", "pads", "sales", "sales_filters"],
         help="Table to migrate: all, customers, outlets, financials, financial_dates, groups, pads, sales, or sales_filters (default: all)",
     )
     parser.add_argument(
@@ -992,6 +1076,10 @@ async def main():
     parser.add_argument(
         "--country-mapping",
         help="Path to JSON file with country_id -> country_code mapping",
+    )
+    parser.add_argument(
+        "--customer-name",
+        help="Override the customer name (default: use publication_name from legacy DB)",
     )
     parser.add_argument(
         "--dry-run",
@@ -1041,6 +1129,7 @@ async def main():
         table=args.table,
         country_mapping=country_mapping,
         dry_run=args.dry_run,
+        customer_name=args.customer_name,
     )
 
     await migrator.migrate()

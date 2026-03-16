@@ -91,6 +91,14 @@ class PredictionEngine(ABC):
             results.append(result)
         return results
 
+    def apply_parameters(self, params: dict[str, str]) -> None:
+        """Apply engine-specific parameters from the database.
+
+        ``params`` is a mapping of parameter name → selected value (strings).
+        Override in engines that support runtime configuration (e.g. model size,
+        precision, sample count).  The default implementation is a no-op.
+        """
+
     def get_actual_slug(self) -> str | None:
         """Return the slug of the algorithm actually used, or None to use the registered type.
 

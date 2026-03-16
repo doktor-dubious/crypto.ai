@@ -105,3 +105,49 @@ class EfficiencyResponse(BaseModel):
 
     data: list[EfficiencyDataPoint]
     outlet_count: int
+
+
+class FinancialsRequest(BaseModel):
+    """Request for financial statistics."""
+
+    customer_id: str
+    outlet_ids: list[str]
+    start_date: date
+    end_date: date
+
+
+class FinancialsPerDateDataPoint(BaseModel):
+    """Financial metrics aggregated per date."""
+
+    date: date
+    revenue: float
+    cost: float
+    profit: float
+    avg_profit: float
+    outlet_count: int
+
+
+class FinancialsPerDateResponse(BaseModel):
+    """Response for per-date financial statistics."""
+
+    data: list[FinancialsPerDateDataPoint]
+    outlet_count: int
+
+
+class FinancialsPerOutletDataPoint(BaseModel):
+    """Financial metrics per outlet over the period."""
+
+    outlet_id: str
+    ext_id: str
+    name: str
+    revenue: float
+    cost: float
+    profit: float
+    avg_profit: float
+    days: int
+
+
+class FinancialsPerOutletResponse(BaseModel):
+    """Response for per-outlet financial statistics."""
+
+    data: list[FinancialsPerOutletDataPoint]

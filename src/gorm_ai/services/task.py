@@ -141,6 +141,40 @@ class TaskService:
         await asyncio.to_thread(celery_app.control.revoke, task_id, terminate=True)
         await self.update_status(task_id, "revoked", completed_at=datetime.now(UTC))
 
+    async def mark_stale_pending_revoked(self, stale_seconds: int = 300) -> int:
+        """Mark pending tasks as revoked if they have been waiting too long.
+
+        A task stuck in 'pending' for longer than ``stale_seconds`` was likely
+        lost (worker restarted with --purge, Redis flush, etc.) and will never
+        be picked up.
+
+        Skips cleanup when a task is currently running ('started'), since
+        pending tasks may be legitimately queued behind it.
+        """
+        # Don't revoke pending tasks while another task is actively running —
+        # they may just be waiting their turn.
+        running = await self.session.execute(
+            select(func.count()).select_from(TaskRecord).where(TaskRecord.status == "started")
+        )
+        if running.scalar_one() > 0:
+            return 0
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+        result = await self.session.execute(
+            update(TaskRecord)
+            .where(
+                TaskRecord.status == "pending",
+                TaskRecord.created_at < cutoff,
+            )
+            .values(
+                status="revoked",
+                error="Timed out waiting for worker",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(TaskRecord.id)
+        )
+        return len(result.all())
+
     async def mark_stale_tasks_failed(self, stale_seconds: int = 0) -> int:
         """Mark all 'started' tasks as failed.
 

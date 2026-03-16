@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -165,18 +165,36 @@ function StepCircle({ n, active }: { n: number; active: boolean }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const SIMN_STORAGE_PREFIX = "gorm:simNew:"
+
+function loadSimNJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${SIMN_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function saveSimNJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${SIMN_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 export default function SimulationsNewPage() {
   const t = useTranslations("simulations.new")
   const { activeCustomer } = useCustomer()
+  const cid = activeCustomer?.id ?? ""
 
-  const [name, setName] = useState("")
-  const [description, setDescription] = useState("")
-  const [simType, setSimType] = useState<SimType>(1)
-  const [delay, setDelay] = useState(14)
-  const [strategyId, setStrategyId] = useState<string | null>(null)
-  const [outletGroupId, setOutletGroupId] = useState<string | null>(null)
-  const [startDate, setStartDate] = useState<Date | undefined>()
-  const [endDate, setEndDate] = useState<Date | undefined>()
+  const [name, setName] = useState(() => loadSimNJson<string>(cid, "name", ""))
+  const [description, setDescription] = useState(() => loadSimNJson<string>(cid, "description", ""))
+  const [simType, setSimType] = useState<SimType>(() => loadSimNJson<SimType>(cid, "simType", 1))
+  const [delay, setDelay] = useState(() => loadSimNJson<number>(cid, "delay", 14))
+  const [strategyId, setStrategyId] = useState<string | null>(() => loadSimNJson<string | null>(cid, "strategyId", null))
+  const [outletGroupId, setOutletGroupId] = useState<string | null>(() => loadSimNJson<string | null>(cid, "outletGroupId", null))
+  const [startDate, setStartDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "startDate", null); return v ? new Date(v) : undefined })
+  const [endDate, setEndDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "endDate", null); return v ? new Date(v) : undefined })
 
   const { data: strategies = [] } = useQuery({
     queryKey: ["prediction-strategies", activeCustomer?.id],
@@ -210,6 +228,34 @@ export default function SimulationsNewPage() {
   const endMaxDate = lastSalesDate
 
   // Default outlet group to customer configuration value when data loads
+  // ─── Persist state to localStorage ─────────────────────────────────────────
+
+  useEffect(() => { if (cid) saveSimNJson(cid, "name", name) }, [cid, name])
+  useEffect(() => { if (cid) saveSimNJson(cid, "description", description) }, [cid, description])
+  useEffect(() => { if (cid) saveSimNJson(cid, "simType", simType) }, [cid, simType])
+  useEffect(() => { if (cid) saveSimNJson(cid, "delay", delay) }, [cid, delay])
+  useEffect(() => { if (cid) saveSimNJson(cid, "strategyId", strategyId) }, [cid, strategyId])
+  useEffect(() => { if (cid) saveSimNJson(cid, "outletGroupId", outletGroupId) }, [cid, outletGroupId])
+  useEffect(() => { if (cid) saveSimNJson(cid, "startDate", startDate?.toISOString() ?? null) }, [cid, startDate])
+  useEffect(() => { if (cid) saveSimNJson(cid, "endDate", endDate?.toISOString() ?? null) }, [cid, endDate])
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setName(loadSimNJson<string>(cid, "name", ""))
+      setDescription(loadSimNJson<string>(cid, "description", ""))
+      setSimType(loadSimNJson<SimType>(cid, "simType", 1))
+      setDelay(loadSimNJson<number>(cid, "delay", 14))
+      setStrategyId(loadSimNJson<string | null>(cid, "strategyId", null))
+      setOutletGroupId(loadSimNJson<string | null>(cid, "outletGroupId", null))
+      const sd = loadSimNJson<string | null>(cid, "startDate", null)
+      setStartDate(sd ? new Date(sd) : undefined)
+      const ed = loadSimNJson<string | null>(cid, "endDate", null)
+      setEndDate(ed ? new Date(ed) : undefined)
+    }
+    prevCidRef.current = cid
+  }, [cid])
+
   const defaultGroupId = customerConfig?.group_id ?? null
   const resolvedGroupId = outletGroupId === null && defaultGroupId ? defaultGroupId : outletGroupId
 

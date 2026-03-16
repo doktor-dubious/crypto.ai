@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +17,8 @@ class PredictionEngine(StrEnum):
     GLUON_CHRONOS_BOLT = "gluon-chronos-bolt"
     GLUON_CHRONOS2 = "gluon-chronos2"
     GLUON_TOTO = "gluon-toto"
+    CHRONOS2 = "chronos2"
+    CHRONOS_BOLT = "chronos-bolt"
 
 
 class TaskStatus(StrEnum):
@@ -169,7 +172,7 @@ class CompletedPredictionResponse(BaseModel):
     outlet_group_name: str | None
     prediction_strategy_id: str | None
     strategy_name: str | None
-    date: date | None
+    date: Optional[date]
     engine: str | None
     requested_engine: str | None = None
     engine_params: dict | None
@@ -211,7 +214,7 @@ class PredictionComparisonItem(BaseModel):
 
     id: str
     name: str
-    date: date | None
+    date: Optional[date]
     draw: float
     expected_demand: float
     expected_sale: float
@@ -226,6 +229,29 @@ class PredictionComparisonResponse(BaseModel):
     items: list[PredictionComparisonItem]
 
 
+class PredictionEngineParameterResponse(BaseModel):
+    """Schema for a prediction engine parameter."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    prediction_engine_id: str
+    name: str
+    value: str
+    description: str | None
+    sort_order: int
+    selected: bool
+
+
+class PredictionEngineParameterCreate(BaseModel):
+    """Schema for creating a prediction engine parameter."""
+
+    name: str
+    value: str
+    description: str | None = None
+    sort_order: int = 0
+
+
 class PredictionEngineResponse(BaseModel):
     """Schema for prediction engine response."""
 
@@ -236,6 +262,23 @@ class PredictionEngineResponse(BaseModel):
     name: str
     description: str | None
     notes: str | None
+
+
+class PredictionEngineCreate(BaseModel):
+    """Schema for creating a prediction engine."""
+
+    slug: str
+    name: str
+    description: str | None = None
+    notes: str | None = None
+
+
+class PredictionEngineUpdate(BaseModel):
+    """Schema for updating a prediction engine."""
+
+    name: str | None = None
+    description: str | None = None
+    notes: str | None = None
 
 
 class PredictionStrategyResponse(BaseModel):

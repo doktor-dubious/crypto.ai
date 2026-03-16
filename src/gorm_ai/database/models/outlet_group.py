@@ -10,8 +10,8 @@ from gorm_ai.database.base import Base
 
 if TYPE_CHECKING:
     from gorm_ai.database.models.customer import Customer
-    from gorm_ai.database.models.draw_adjustment import DrawAdjustment
     from gorm_ai.database.models.outlet import Outlet
+    from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 
 
 class OutletGroup(Base):
@@ -38,8 +38,8 @@ class OutletGroup(Base):
         lazy="selectin",
         cascade="all, delete-orphan",
     )
-    draw_adjustments: Mapped[list["DrawAdjustment"]] = relationship(
-        "DrawAdjustment",
+    prediction_adjustments: Mapped[list["PredictionAdjustment"]] = relationship(
+        "PredictionAdjustment",
         back_populates="group",
         lazy="selectin",
         cascade="all, delete-orphan",

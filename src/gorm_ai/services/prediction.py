@@ -1,12 +1,11 @@
 """Prediction service for managing predictions."""
 
 import heapq
+import logging
+import math
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
-
-import logging
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +16,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from gorm_ai.database.models.configuration import Configuration
+from gorm_ai.database.models.covariate import Covariate, CovariateOutlet
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
+from gorm_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
+from gorm_ai.database.models.prediction_engine_parameter import PredictionEngineParameter
 from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
+from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_delivery import OutletDelivery
 from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroupMember
-from gorm_ai.database.models.covariate import Covariate, CovariateOutlet
-from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.pad import Pad, PadDate
 from gorm_ai.database.models.prediction import Prediction
-from gorm_ai.database.models.sales import Sales
+from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
+from gorm_ai.database.models.sales import Sales
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.prediction.registry import EngineRegistry
 from gorm_ai.schemas.prediction import (
@@ -83,6 +85,7 @@ class PredictionService:
             raise ValueError("prediction_to must be on or after prediction_from")
 
         engine = self.engine_registry.get_engine(engine_type)
+        resolved_engine_params = await self._apply_engine_parameters(engine, engine_type.value)
         capabilities = engine.get_capabilities()
 
         # Resolve outlet IDs: explicit list → request group → customer config group → all active
@@ -320,6 +323,19 @@ class PredictionService:
             if row.sold is not None
         }
 
+        # Load prediction adjustments for the outlet group (date-specific overrides)
+        adj_by_date: dict[date, list[PredictionAdjustment]] = {}
+        if request.outlet_group_id:
+            adj_result = await self.session.execute(
+                select(PredictionAdjustment).where(
+                    PredictionAdjustment.group_id == request.outlet_group_id,
+                    PredictionAdjustment.date.in_(pred_dates),
+                    PredictionAdjustment.active.is_(True),
+                )
+            )
+            for adj in adj_result.scalars():
+                adj_by_date.setdefault(adj.date, []).append(adj)
+
         for pred_date, outlet_results in sorted(date_outlet.items()):
             weekday = pred_date.weekday() + 1  # 1=Monday, 7=Sunday
 
@@ -332,7 +348,7 @@ class PredictionService:
                 delay=request.delay,
                 engine=engine,
                 requested_engine=requested_engine,
-                engine_params=request.engine_params,
+                engine_params=resolved_engine_params or None,
                 use_financials=request.use_financials,
                 use_pad=request.use_pad,
                 batch_size=request.batch_size,
@@ -386,6 +402,24 @@ class PredictionService:
                     )
             else:
                 # Normal flow: base from _compute_delivered, then distribute any extras
+                # Accumulate prediction adjustments for this date
+                adj_outlet_num = 0.0
+                adj_outlet_pct = 0.0
+                adj_total_num = 0
+                adj_total_pct = 0.0
+                for adj in adj_by_date.get(pred_date, []):
+                    if adj.type == 1:    # PER_OUTLET_BY_NUMBER
+                        adj_outlet_num += adj.value
+                    elif adj.type == 2:  # PER_OUTLET_BY_PERCENTAGE
+                        adj_outlet_pct += adj.value
+                    elif adj.type == 3:  # OVERALL_BY_NUMBER
+                        adj_total_num += int(adj.value)
+                    elif adj.type == 4:  # OVERALL_BY_PERCENTAGE
+                        adj_total_pct += adj.value
+
+                eff_outlet_num = float(increase_outlets_by or 0) + adj_outlet_num
+                eff_outlet_pct = float(increase_outlets_by_pct or 0) + adj_outlet_pct
+
                 for outlet_id, r in outlet_results.items():
                     delivery = delivery_map.get(outlet_id, {}).get(weekday)
                     effective_return_pct = (
@@ -399,22 +433,23 @@ class PredictionService:
                         )
                         qty, applied = self._compute_delivered(
                             None, base, delivery, rounding,
-                            outlet_increase_num=float(increase_outlets_by or 0),
-                            outlet_increase_pct=float(increase_outlets_by_pct or 0),
+                            outlet_increase_num=eff_outlet_num,
+                            outlet_increase_pct=eff_outlet_pct,
                             ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                         )
                     else:
                         qty, applied = self._compute_delivered(
                             r.economic_optimal, r.predicted_value, delivery, rounding,
-                            outlet_increase_num=float(increase_outlets_by or 0),
-                            outlet_increase_pct=float(increase_outlets_by_pct or 0),
+                            outlet_increase_num=eff_outlet_num,
+                            outlet_increase_pct=eff_outlet_pct,
                             ignore_fixed=ignore_fixed, ignore_minimum=ignore_minimum, ignore_maximum=ignore_maximum,
                         )
                     outlet_delivered[outlet_id] = qty
                     outlet_applied[outlet_id] = applied
-                n_extra = increase_total_by or 0
-                if increase_total_by_pct:
-                    n_extra += round(sum(outlet_delivered.values()) * increase_total_by_pct / 100)
+                n_extra = (increase_total_by or 0) + adj_total_num
+                eff_total_pct = (increase_total_by_pct or 0) + adj_total_pct
+                if eff_total_pct:
+                    n_extra += round(sum(outlet_delivered.values()) * eff_total_pct / 100)
                 if n_extra > 0:
                     outlets_data = [
                         (oid, r.predicted_value, r.lower_bound, r.upper_bound, float(outlet_delivered[oid]))
@@ -550,8 +585,8 @@ class PredictionService:
         if delivery is None:
             return _round(base), applied
 
-        # 1. Fixed override
-        if not ignore_fixed and delivery.fixed is not None:
+        # 1. Fixed override (0 means not set)
+        if not ignore_fixed and delivery.fixed:
             applied["fixed"] = float(delivery.fixed)
             if delivery.add is not None:
                 applied["add"] = float(delivery.add)
@@ -562,10 +597,10 @@ class PredictionService:
         delivered = base
 
         # 2. Min / max clamp
-        if not ignore_minimum and delivery.minimum is not None and delivered < delivery.minimum:
+        if not ignore_minimum and delivery.minimum and delivered < delivery.minimum:
             delivered = delivery.minimum
             applied["minimum"] = float(delivery.minimum)
-        if not ignore_maximum and delivery.maximum is not None and delivered > delivery.maximum:
+        if not ignore_maximum and delivery.maximum and delivered > delivery.maximum:
             delivered = delivery.maximum
             applied["maximum"] = float(delivery.maximum)
 
@@ -597,12 +632,12 @@ class PredictionService:
         }
         if delivery is None:
             return applied
-        if not ignore_fixed and delivery.fixed is not None:
+        if not ignore_fixed and delivery.fixed:
             applied["fixed"] = float(delivery.fixed)
             return applied
-        if not ignore_minimum and delivery.minimum is not None and delivered_qty <= round(delivery.minimum):
+        if not ignore_minimum and delivery.minimum and delivered_qty <= round(delivery.minimum):
             applied["minimum"] = float(delivery.minimum)
-        if not ignore_maximum and delivery.maximum is not None and delivered_qty >= round(delivery.maximum):
+        if not ignore_maximum and delivery.maximum and delivered_qty >= round(delivery.maximum):
             applied["maximum"] = float(delivery.maximum)
         return applied
 
@@ -788,16 +823,16 @@ class PredictionService:
             result: dict[str, int] = {}
             for oid, _, _, _, _, _ in outlets_data:
                 delivery = outlet_deliveries.get(oid)
-                if not ignore_fixed and delivery and delivery.fixed is not None:
+                if not ignore_fixed and delivery and delivery.fixed:
                     result[oid] = max(1, round(delivery.fixed))
                     continue
                 denom = profit_m[oid] + cost_m[oid] + lam
                 r_i = max(0.001, min(0.999, (cost_m[oid] + lam) / denom)) if denom > 0 else (0.001 if lam < 0 else 0.999)
                 d = PredictionService._delivered_for_return_pct(r_i * 100.0, p50m[oid], p10m[oid], p90m[oid])
                 d = max(0.0, d)
-                if not ignore_minimum and delivery and delivery.minimum is not None:
+                if not ignore_minimum and delivery and delivery.minimum:
                     d = max(d, float(delivery.minimum))
-                if not ignore_maximum and delivery and delivery.maximum is not None:
+                if not ignore_maximum and delivery and delivery.maximum:
                     d = min(d, float(delivery.maximum))
                 result[oid] = max(1, round(d))
             return result
@@ -857,14 +892,14 @@ class PredictionService:
 
         for oid, p50, p10, p90 in outlets_data:
             delivery = outlet_deliveries.get(oid)
-            if not ignore_fixed and delivery and delivery.fixed is not None:
+            if not ignore_fixed and delivery and delivery.fixed:
                 # Fixed outlets: committed at exactly the fixed amount, excluded from heap
                 qty = max(1, round(delivery.fixed))
                 delivered[oid] = qty
                 committed += qty
             else:
                 # Free outlets: start at minimum (or 0), participate in heap
-                minimum = round(delivery.minimum) if not ignore_minimum and delivery and delivery.minimum is not None else 0
+                minimum = round(delivery.minimum) if not ignore_minimum and delivery and delivery.minimum else 0
                 minimum = max(0, minimum)
                 delivered[oid] = minimum
                 committed += minimum
@@ -887,7 +922,7 @@ class PredictionService:
                 break
 
             delivery = outlet_deliveries.get(oid)
-            maximum = round(delivery.maximum) if not ignore_maximum and delivery and delivery.maximum is not None else None
+            maximum = round(delivery.maximum) if not ignore_maximum and delivery and delivery.maximum else None
 
             if maximum is not None and delivered[oid] >= maximum:
                 # Already at maximum (stale heap entry); discard and try next
@@ -1109,7 +1144,7 @@ class PredictionService:
 
         For each date in [start_date, end_date]:
           A) outlet_financial_date  — per-outlet override when a FinancialDate record
-             covers customer_id + weekday + date range
+             matches customer_id + exact date
           B) outlet_financials      — weekday-based per-outlet defaults
           C) customer_configuration — customer-wide defaults
           D) configuration          — global singleton defaults
@@ -1170,12 +1205,17 @@ class PredictionService:
             .where(
                 FinancialDate.customer_id == customer_id,
                 FinancialDate.active.is_(True),
-                FinancialDate.end_date >= start_date,
-                FinancialDate.start_date <= end_date,
+                FinancialDate.date >= start_date,
+                FinancialDate.date <= end_date,
             )
         )
         result = await self.session.execute(stmt)
         fd_rows = result.all()  # list of (FinancialDate, OutletFinancialDate | None)
+
+        # Build a fast lookup: date → (FinancialDate, OutletFinancialDate | None)
+        fd_by_date: dict[date, tuple] = {}
+        for fd, ofd in fd_rows:
+            fd_by_date[fd.date] = (fd, ofd)
 
         # Resolve cost and profit for every date in the range
         cost_map: dict[date, float] = {}
@@ -1187,13 +1227,14 @@ class PredictionService:
             # Level A: find a matching FinancialDate with an outlet-specific override
             override_cost: float | None = None
             override_profit: float | None = None
-            for fd, ofd in fd_rows:
-                if fd.weekday == weekday and fd.start_date <= current <= fd.end_date and ofd is not None:
+            fd_entry = fd_by_date.get(current)
+            if fd_entry is not None:
+                _, ofd = fd_entry
+                if ofd is not None:
                     if ofd.cost_per_unit is not None:
                         override_cost = ofd.cost_per_unit
                     if ofd.profit_per_unit is not None:
                         override_profit = ofd.profit_per_unit
-                    break
 
             cost = override_cost if override_cost is not None else weekday_cost.get(weekday, default_cost)
             profit = override_profit if override_profit is not None else weekday_profit.get(weekday, default_profit)
@@ -1268,8 +1309,8 @@ class PredictionService:
             select(FinancialDate).where(
                 FinancialDate.customer_id == customer_id,
                 FinancialDate.active.is_(True),
-                FinancialDate.end_date >= start_date,
-                FinancialDate.start_date <= end_date,
+                FinancialDate.date >= start_date,
+                FinancialDate.date <= end_date,
             )
         )
         fd_rows = result.scalars().all()
@@ -1288,8 +1329,8 @@ class PredictionService:
             for ofd in result.scalars():
                 ofd_by_outlet.setdefault(ofd.outlet_id, []).append(ofd)
 
-        # Build a fast lookup: financial_date_id → FinancialDate
-        fd_by_id = {fd.id: fd for fd in fd_rows}
+        # Build a fast lookup: date → FinancialDate
+        fd_by_date: dict[date, FinancialDate] = {fd.date: fd for fd in fd_rows}
 
         # Build covariates per outlet purely in Python
         output: dict[str, dict[str, dict[date, float]] | None] = {}
@@ -1297,7 +1338,7 @@ class PredictionService:
             weekday_cost = outlet_weekday_cost.get(outlet_id, {})
             weekday_profit = outlet_weekday_profit.get(outlet_id, {})
 
-            # Build outlet-specific override lookup: (fd_id) → OutletFinancialDate
+            # Build outlet-specific override lookup: fd_id → OutletFinancialDate
             ofd_by_fd_id: dict[str, OutletFinancialDate] = {
                 ofd.financial_date_id: ofd for ofd in ofd_by_outlet.get(outlet_id, [])
             }
@@ -1310,15 +1351,14 @@ class PredictionService:
 
                 override_cost: float | None = None
                 override_profit: float | None = None
-                for fd in fd_rows:
-                    if fd.weekday == weekday and fd.start_date <= current <= fd.end_date:
-                        ofd = ofd_by_fd_id.get(fd.id)
-                        if ofd is not None:
-                            if ofd.cost_per_unit is not None:
-                                override_cost = ofd.cost_per_unit
-                            if ofd.profit_per_unit is not None:
-                                override_profit = ofd.profit_per_unit
-                        break
+                fd = fd_by_date.get(current)
+                if fd is not None:
+                    ofd = ofd_by_fd_id.get(fd.id)
+                    if ofd is not None:
+                        if ofd.cost_per_unit is not None:
+                            override_cost = ofd.cost_per_unit
+                        if ofd.profit_per_unit is not None:
+                            override_profit = ofd.profit_per_unit
 
                 cost = override_cost if override_cost is not None else weekday_cost.get(weekday, default_cost)
                 profit = override_profit if override_profit is not None else weekday_profit.get(weekday, default_profit)
@@ -1415,6 +1455,35 @@ class PredictionService:
         if strategy.ignore_maximum:
             defaults["ignore_maximum"] = True
         return defaults
+
+    async def _apply_engine_parameters(
+        self,
+        engine: object,
+        engine_slug: str,
+    ) -> dict[str, str]:
+        """Load selected parameters from prediction_engine_parameter and apply them.
+
+        Returns the resolved parameter dict (empty if none configured).
+        """
+        result = await self.session.execute(
+            select(PredictionEngineParameter)
+            .join(
+                PredictionEngineModel,
+                PredictionEngineParameter.prediction_engine_id == PredictionEngineModel.id,
+            )
+            .where(
+                PredictionEngineModel.slug == engine_slug,
+                PredictionEngineParameter.selected.is_(True),
+                PredictionEngineParameter.active.is_(True),
+            )
+        )
+        rows = result.scalars().all()
+        if rows:
+            params = {row.name: row.value for row in rows}
+            logger.info("Applying engine parameters for '%s': %s", engine_slug, params)
+            engine.apply_parameters(params)
+            return params
+        return {}
 
     async def _resolve_engine(
         self,
@@ -1551,7 +1620,6 @@ class PredictionService:
         Successful tasks are joined to their prediction rows.
         Failed/cancelled tasks appear as rows with null prediction fields.
         """
-        from gorm_ai.database.models.prediction_strategy import PredictionStrategy as PSModel
         from gorm_ai.database.models.task_record import TaskRecord
 
         # Get all prediction task_records for this customer (success/failure/revoked)

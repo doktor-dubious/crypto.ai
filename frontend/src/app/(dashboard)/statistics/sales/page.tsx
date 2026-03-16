@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, ChevronDown, ChevronUp, ArrowUpDown, Filter, X, CalendarIcon,
+  Search, Star, ChevronDown, ChevronUp, ArrowUpDown, Filter, X, CalendarIcon, Focus,
 } from "lucide-react"
 import { format, differenceInCalendarDays } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -76,17 +76,23 @@ interface TableDataRow {
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
+const SS_PREFIX = "gorm:statsSales:"
+function loadSsV<T>(cid: string, k: string, fb: T): T { if (typeof window === "undefined") return fb; try { const r = localStorage.getItem(`${SS_PREFIX}${cid}:${k}`); return r ? JSON.parse(r) : fb } catch { return fb } }
+function saveSsV(cid: string, k: string, v: unknown) { if (typeof window !== "undefined") localStorage.setItem(`${SS_PREFIX}${cid}:${k}`, JSON.stringify(v)) }
+
 export default function StatisticsSalesPage() {
   const t = useTranslations("statisticsSales")
   const { activeCustomer } = useCustomer()
   const customerId = activeCustomer?.id
+  const cid = customerId ?? ""
 
-  // ── Filters ──────────────────────────────────────────────────────────────
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [weeks, setWeeks] = useState(8)
+  // ── Filters (persisted) ──────────────────────────────────────────────────
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(() => loadSsV<string | null>(cid, "groupId", null))
+  const [weeks, setWeeks] = useState(() => loadSsV<number>(cid, "weeks", 8))
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
-  const [weekday, setWeekday] = useState<string>("all")
+  const [weekday, setWeekday] = useState<string>(() => loadSsV<string>(cid, "weekday", "all"))
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set())
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
 
   // Info filter
   const [infoKey, setInfoKey] = useState("")
@@ -110,6 +116,13 @@ export default function StatisticsSalesPage() {
       return n
     })
   }
+
+  // ── Persist filters ────────────────────────────────────────────────────────
+  useEffect(() => { if (cid) saveSsV(cid, "groupId", selectedGroupId) }, [cid, selectedGroupId])
+  useEffect(() => { if (cid) saveSsV(cid, "weeks", weeks) }, [cid, weeks])
+  useEffect(() => { if (cid) saveSsV(cid, "weekday", weekday) }, [cid, weekday])
+  const prevCidRef = useRef(cid)
+  useEffect(() => { if (prevCidRef.current && cid && prevCidRef.current !== cid) { setSelectedGroupId(loadSsV<string | null>(cid, "groupId", null)); setWeeks(loadSsV(cid, "weeks", 8)); setWeekday(loadSsV(cid, "weekday", "all")) }; prevCidRef.current = cid }, [cid])
 
   function handleSort(field: SortField) {
     if (sortField === field) {
@@ -389,7 +402,7 @@ export default function StatisticsSalesPage() {
         {/* Date Range Picker */}
         <div className="flex flex-col gap-1">
           <label className="text-xs text-[var(--muted-foreground)]">{t("dateRange")}</label>
-          <Popover>
+          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
@@ -415,10 +428,13 @@ export default function StatisticsSalesPage() {
             <PopoverContent className="w-auto p-0" align="start">
               <Calendar
                 mode="range"
+                captionLayout="dropdown"
                 defaultMonth={dateRange?.from}
                 selected={dateRange}
                 onSelect={handleDateRangeChange}
                 numberOfMonths={2}
+                startMonth={new Date(2020, 0)}
+                endMonth={new Date(new Date().getFullYear() + 1, 11)}
               />
             </PopoverContent>
           </Popover>
@@ -522,7 +538,7 @@ export default function StatisticsSalesPage() {
       ) : chartData.length === 0 ? (
         <div className="flex items-center justify-center h-64 text-sm text-[var(--muted-foreground)]">{t("noData")}</div>
       ) : (
-        <ChartContainer config={chartConfig} className="h-80 w-full aspect-auto relative z-0">
+        <ChartContainer config={chartConfig} className={cn("h-80 w-full aspect-auto transition-opacity duration-200", datePickerOpen && "opacity-10")}>
           <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.4} />
             <XAxis
@@ -631,17 +647,6 @@ export default function StatisticsSalesPage() {
                 className="pl-8 h-8 text-xs"
               />
             </div>
-
-            {checked.size > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs cursor-pointer"
-                onClick={() => setShowOnlySelected(!showOnlySelected)}
-              >
-                {showOnlySelected ? t("showAll") : t("showSelected")}
-              </Button>
-            )}
 
             <ExportMenu
               data={filteredTable}
@@ -795,6 +800,20 @@ export default function StatisticsSalesPage() {
                 )}
               </TableBody>
             </Table>
+            {checked.size > 0 && (
+              <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--border)] bg-[var(--muted)]/30">
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {t("selectedCount", { selected: checked.size })}
+                </span>
+                <Button
+                  variant="ghost" size="icon" className="h-7 w-7 cursor-pointer"
+                  onClick={() => setShowOnlySelected((v) => !v)}
+                  title={showOnlySelected ? t("showAll") : t("showSelected")}
+                >
+                  <Focus className={cn("h-4 w-4", showOnlySelected && "text-primary")} />
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Pagination */}

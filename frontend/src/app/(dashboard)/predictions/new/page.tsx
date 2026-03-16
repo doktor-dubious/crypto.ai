@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
@@ -19,14 +19,32 @@ import {
 } from "@/components/predictions/prediction-calendar"
 import { cn } from "@/lib/utils"
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const PRED_STORAGE_PREFIX = "gorm:predNew:"
+
+function loadPredJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${PRED_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function savePredJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${PRED_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 export default function NewPredictionPage() {
   const t = useTranslations("predictions.new")
   const router = useRouter()
   const queryClient = useQueryClient()
   const { activeCustomer } = useCustomer()
+  const cid = activeCustomer?.id ?? ""
 
-  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set())
-  const [assignments, setAssignments] = useState<StrategyAssignment[]>([])
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(() => new Set(loadPredJson<string[]>(cid, "selectedDates", [])))
+  const [assignments, setAssignments] = useState<StrategyAssignment[]>(() => loadPredJson<StrategyAssignment[]>(cid, "assignments", []))
   const [strategySearch, setStrategySearch] = useState("")
 
   // ─── Data fetching ─────────────────────────────────────────────────────────
@@ -44,6 +62,20 @@ export default function NewPredictionPage() {
     queryFn: () => padsApi.list(activeCustomer!.id),
     enabled: !!activeCustomer,
   })
+
+  // ─── Persist state to localStorage ─────────────────────────────────────────
+
+  useEffect(() => { if (cid) savePredJson(cid, "selectedDates", [...selectedDates]) }, [cid, selectedDates])
+  useEffect(() => { if (cid) savePredJson(cid, "assignments", assignments) }, [cid, assignments])
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedDates(new Set(loadPredJson<string[]>(cid, "selectedDates", [])))
+      setAssignments(loadPredJson<StrategyAssignment[]>(cid, "assignments", []))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ─── Derived ───────────────────────────────────────────────────────────────
 

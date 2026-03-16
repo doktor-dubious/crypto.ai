@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.api.deps import TaskServiceDep, get_db
 from gorm_ai.schemas.simulation import (
+    AccuracyStatsResponse,
     CompletedSimulationListResponse,
     CompletedSimulationResponse,
     FilteredOverviewResponse,
@@ -52,6 +53,20 @@ async def get_simulation_zero_shot(
     if result is None:
         raise HTTPException(status_code=404, detail="Simulation not found")
     return ZeroShotResponse(**result)
+
+
+@router.get("/{simulation_id}/accuracy-stats", response_model=AccuracyStatsResponse)
+async def get_simulation_accuracy_stats(
+    simulation_id: str,
+    column: str = "delivered",
+    weekdays: list[int] | None = Query(default=None),
+    service: SimulationService = Depends(get_simulation_service),
+) -> AccuracyStatsResponse:
+    """Get statistical accuracy metrics (MAE, Bias, RMSE, MAPE, R²) for a simulation."""
+    result = await service.get_accuracy_stats(simulation_id, column=column, weekdays=weekdays)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return AccuracyStatsResponse(**result)
 
 
 @router.get("/{simulation_id}/model-fit", response_model=ModelFitResponse)

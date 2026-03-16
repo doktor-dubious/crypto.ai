@@ -11,12 +11,6 @@ from gorm_ai.schemas.customer_configuration import (
     CustomerConfigurationResponse,
     CustomerConfigurationUpdate,
 )
-from gorm_ai.schemas.draw_adjustment import (
-    AdjustmentType,
-    DrawAdjustmentCreate,
-    DrawAdjustmentResponse,
-    DrawAdjustmentUpdate,
-)
 from gorm_ai.schemas.outlet import (
     OutletCreate,
     OutletDeliveryCreate,
@@ -38,6 +32,12 @@ from gorm_ai.schemas.prediction import (
     PredictionResult,
     PredictionTaskStatus,
 )
+from gorm_ai.schemas.prediction_adjustment import (
+    AdjustmentType,
+    PredictionAdjustmentCreate,
+    PredictionAdjustmentResponse,
+    PredictionAdjustmentUpdate,
+)
 from gorm_ai.schemas.sales import (
     SalesBulkImport,
     SalesCreate,
@@ -56,9 +56,9 @@ __all__ = [
     "CustomerCreate",
     "CustomerResponse",
     "CustomerUpdate",
-    "DrawAdjustmentCreate",
-    "DrawAdjustmentResponse",
-    "DrawAdjustmentUpdate",
+    "PredictionAdjustmentCreate",
+    "PredictionAdjustmentResponse",
+    "PredictionAdjustmentUpdate",
     "OutletCreate",
     "OutletDeliveryCreate",
     "OutletDeliveryResponse",

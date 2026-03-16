@@ -1,10 +1,10 @@
 """Prediction API routes."""
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 
 from gorm_ai.api.deps import PredictionServiceDep, TaskServiceDep
-from datetime import date
-
 from gorm_ai.schemas.prediction import (
     CompletedPredictionListResponse,
     CompletedPredictionResponse,

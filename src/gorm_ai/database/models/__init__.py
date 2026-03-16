@@ -9,7 +9,8 @@ from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.currency import Currency
 from gorm_ai.database.models.customer import Customer
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
-from gorm_ai.database.models.draw_adjustment import DrawAdjustment
+from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
+from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_delivery import OutletDelivery
@@ -20,6 +21,7 @@ from gorm_ai.database.models.pad import Pad, PadDate
 from gorm_ai.database.models.predefined_pad import PredefinedPad, PredefinedPadDate
 from gorm_ai.database.models.prediction import Prediction
 from gorm_ai.database.models.prediction_engine import PredictionEngine
+from gorm_ai.database.models.prediction_engine_parameter import PredictionEngineParameter
 from gorm_ai.database.models.prediction_export_template import PredictionExportTemplate, PredictionExportTemplateElement
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
@@ -36,8 +38,10 @@ __all__ = [
     "Currency",
     "LastPrediction",
     "Customer",
+    "ImportTemplate",
+    "ImportTemplateElement",
     "CustomerConfiguration",
-    "DrawAdjustment",
+    "PredictionAdjustment",
     "FinancialDate",
     "OutletFinancialDate",
     "Outlet",
@@ -52,6 +56,7 @@ __all__ = [
     "PredefinedPadDate",
     "Prediction",
     "PredictionEngine",
+    "PredictionEngineParameter",
     "PredictionExportTemplate",
     "PredictionExportTemplateElement",
     "PredictionOutlet",

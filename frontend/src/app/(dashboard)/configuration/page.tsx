@@ -509,26 +509,39 @@ function WorkersTab({
 
 const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
 
+const CFG_PREFIX = "gorm:config:"
+function loadCfgV<T>(cid: string, k: string, fb: T): T { if (typeof window === "undefined") return fb; try { const r = localStorage.getItem(`${CFG_PREFIX}${cid}:${k}`); return r ? JSON.parse(r) : fb } catch { return fb } }
+function saveCfgV(cid: string, k: string, v: unknown) { if (typeof window !== "undefined") localStorage.setItem(`${CFG_PREFIX}${cid}:${k}`, JSON.stringify(v)) }
+
 export default function ConfigurationPage() {
   const t = useTranslations("configuration")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
+  const cid = activeCustomer?.id ?? ""
 
-  const [mode, setMode] = useState<"gorm" | "customer">("customer")
-  const [tab, setTab] = useState("details")
+  const [mode, setMode] = useState<"gorm" | "customer">(() => loadCfgV<"gorm" | "customer">(cid, "mode", "customer"))
+  const [tab, setTab] = useState(() => loadCfgV<string>(cid, "tab", "details"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
+
+  // ── Persist ────────────────────────────────────────────────────────────────
+  useEffect(() => { if (cid) saveCfgV(cid, "mode", mode) }, [cid, mode])
+  useEffect(() => { if (cid) saveCfgV(cid, "tab", tab) }, [cid, tab])
+  const prevCidRef = useRef(cid)
+  useEffect(() => { if (prevCidRef.current && cid && prevCidRef.current !== cid) { setMode(loadCfgV(cid, "mode", "customer")); setTab(loadCfgV(cid, "tab", "details")) }; prevCidRef.current = cid }, [cid])
 
   // ── Data Queries ──
   const { data: gormConfig } = useQuery({
     queryKey: ["configuration"],
     queryFn: configurationApi.get,
+    staleTime: 5 * 60 * 1000,
   })
 
   const { data: customerConfig } = useQuery({
     queryKey: ["customerConfiguration", activeCustomer?.id],
     queryFn: () => customerConfigurationApi.get(activeCustomer!.id),
     enabled: !!activeCustomer,
+    staleTime: 5 * 60 * 1000,
     retry: false,
   })
 
@@ -594,7 +607,10 @@ export default function ConfigurationPage() {
   }, [customerDraft, activeCustomer])
 
   const isConfigDirty = useMemo(() => {
-    if (!customerConfig) return false
+    if (!customerConfig) {
+      // No config exists yet — dirty if the user has set any non-null value
+      return Object.values(configDraft).some((v) => v != null)
+    }
     const source = customerConfig as unknown as Record<string, unknown>
     return Object.keys(configDraft).some((k) => configDraft[k] !== source[k])
   }, [configDraft, customerConfig])
@@ -624,7 +640,14 @@ export default function ConfigurationPage() {
 
   const configMutation = useMutation({
     mutationFn: () => {
-      if (!customerConfig) return Promise.resolve(null)
+      if (!customerConfig) {
+        // No config exists yet — create one
+        const data: Record<string, unknown> = {}
+        for (const k of Object.keys(configDraft)) {
+          if (configDraft[k] != null) data[k] = configDraft[k]
+        }
+        return customerConfigurationApi.create(activeCustomer!.id, data)
+      }
       const changes: Record<string, unknown> = {}
       const source = customerConfig as unknown as Record<string, unknown>
       for (const k of Object.keys(configDraft)) {

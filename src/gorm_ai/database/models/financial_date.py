@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class FinancialDate(Base):
-    """Date range configuration for overriding outlet financials on specific dates."""
+    """Per-date configuration for overriding outlet financials."""
 
     __tablename__ = "financial_dates"
 
@@ -25,9 +25,7 @@ class FinancialDate(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    weekday: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # 1=Monday, 7=Sunday
+    date: Mapped[date] = mapped_column(Date, nullable=False)
     method: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     copy_from_weekday: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # 1-7
 

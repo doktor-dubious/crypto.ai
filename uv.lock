@@ -1092,6 +1092,9 @@ dependencies = [
 autogluon = [
     { name = "autogluon-timeseries" },
 ]
+chronos = [
+    { name = "chronos-forecasting" },
+]
 dev = [
     { name = "aiosqlite" },
     { name = "httpx" },
@@ -1113,6 +1116,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "autogluon-timeseries", marker = "extra == 'autogluon'", specifier = ">=1.2.0" },
     { name = "celery", extras = ["redis"], specifier = ">=5.3.0" },
+    { name = "chronos-forecasting", marker = "extra == 'chronos'", specifier = ">=1.4.0" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "fastapi", specifier = ">=0.109.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26.0" },
@@ -1134,7 +1138,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27.0" },
 ]
-provides-extras = ["ml", "autogluon", "dev"]
+provides-extras = ["ml", "autogluon", "chronos", "dev"]
 
 [[package]]
 name = "graphviz"

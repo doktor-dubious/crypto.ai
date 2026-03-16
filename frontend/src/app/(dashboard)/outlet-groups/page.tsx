@@ -105,25 +105,44 @@ function OutletCompactList({
   )
 }
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const OG_STORAGE_PREFIX = "gorm:outletGroups:"
+
+function loadOgJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${OG_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function saveOgJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${OG_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OutletGroupsPage() {
   const t = useTranslations("outletGroups")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Master table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Master table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadOgJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadOgJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("name")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(() => loadOgJson<string | null>(cid, "selectedGroup", null))
   const [selected, setSelected] = useState<OutletGroupResponse | null>(null)
-  const [activeTab, setActiveTab] = useState("tab1")
+  const [activeTab, setActiveTab] = useState(() => loadOgJson<string>(cid, "activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -184,6 +203,37 @@ export default function OutletGroupsPage() {
     queryFn: () => outletsApi.list(activeCustomer!.id, { limit: 5000 }),
     enabled: !!activeCustomer,
   })
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) saveOgJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) saveOgJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) saveOgJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveOgJson(cid, "selectedGroup", selected?.id ?? null) }, [cid, selected?.id])
+
+  // ── Restore selected group from persisted ID when list loads ───────────────
+
+  useEffect(() => {
+    if (!groups.length || selected) return
+    if (selectedGroupId) {
+      const found = groups.find((g) => g.id === selectedGroupId)
+      if (found) setSelected(found)
+    }
+  }, [groups.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadOgJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadOgJson<string[]>(cid, "starred", [])))
+      setSelectedGroupId(loadOgJson<string | null>(cid, "selectedGroup", null))
+      setSelected(null)
+      setActiveTab(loadOgJson<string>(cid, "activeTab", "tab1"))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ─── Sync draft when selected changes ───────────────────────────────────
 

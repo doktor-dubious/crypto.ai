@@ -21,6 +21,12 @@ async def list_tasks(
     offset: int = Query(default=0, ge=0),
 ) -> TaskListResponse:
     """List task records from the database with optional filters."""
+    # Auto-clean pending tasks that were never picked up (e.g. worker
+    # restarted with --purge).  Runs cheaply on every poll — a single
+    # UPDATE … WHERE created_at < now()-5min that is a no-op most of
+    # the time.
+    await service.mark_stale_pending_revoked()
+
     items, total = await service.list_tasks(
         customer_id=customer_id,
         task_type=type,

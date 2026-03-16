@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -59,23 +59,42 @@ function buildPaginationPages(current: number, total: number): (number | "ellips
   return pages
 }
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const PP_STORAGE_PREFIX = "gorm:predefinedPads:"
+
+function loadPpJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${PP_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function savePpJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${PP_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PredefinedPadsPage() {
   const t = useTranslations("pads.predefined")
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadPpJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadPpJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("name")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedPadId, setSelectedPadId] = useState<string | null>(() => loadPpJson<string | null>(cid, "selectedPad", null))
   const [selected, setSelected] = useState<PredefinedPadResponse | null>(null)
   const [datesPage, setDatesPage] = useState(1)
 
@@ -104,6 +123,35 @@ export default function PredefinedPadsPage() {
   })
 
   const isLoading = isLoadingPads || isLoadingCustomerPads
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) savePpJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) savePpJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) savePpJson(cid, "selectedPad", selected?.id ?? null) }, [cid, selected?.id])
+
+  // ── Restore selected pad from persisted ID when list loads ─────────────────
+
+  useEffect(() => {
+    if (!predefinedPads.length || selected) return
+    if (selectedPadId) {
+      const found = predefinedPads.find((p) => p.id === selectedPadId)
+      if (found) setSelected(found)
+    }
+  }, [predefinedPads.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadPpJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadPpJson<string[]>(cid, "starred", [])))
+      setSelectedPadId(loadPpJson<string | null>(cid, "selectedPad", null))
+      setSelected(null)
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ── Applied set: predefined pad names that have a matching customer pad
   const appliedNames = useMemo(() => {

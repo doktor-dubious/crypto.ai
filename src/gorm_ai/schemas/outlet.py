@@ -31,6 +31,7 @@ class OutletDeliveryBase(BaseModel):
     """Base schema for outlet delivery."""
 
     weekday: int  # 1-7, Monday=1, Sunday=7
+    open: bool = False
     fixed: float | None = None
     minimum: float | None = None
     maximum: float | None = None
@@ -116,11 +117,39 @@ class OutletResponse(OutletBase):
     deliveries: list[OutletDeliveryResponse] = []
 
 
+class OutletConstraintWeekday(BaseModel):
+    """Constraint data for one weekday."""
+
+    weekday: int  # 1-7, Monday=1, Sunday=7
+    open: bool = False
+    cost_per_unit: float | None = None
+    profit_per_unit: float | None = None
+    fixed: float | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    add: float | None = None
+    add_pct: float | None = None
+
+
+class OutletConstraintsUpdate(BaseModel):
+    """Schema for updating outlet constraints."""
+
+    weekdays: list[OutletConstraintWeekday]
+
+
+class OutletConstraintsResponse(BaseModel):
+    """Schema for outlet constraints response."""
+
+    outlet_id: str
+    weekdays: list[OutletConstraintWeekday]
+
+
 class DeliveryAnalyticsWeekday(BaseModel):
     """Analytics for one weekday across all metrics."""
 
     weekday: int  # 1=Monday, 7=Sunday
-    sold_history: list[int | None]       # last 8, index 0 = most recent
+    dates: list[str]                      # last 8 dates, oldest first
+    sold_history: list[int | None]       # last 8, oldest first
     delivered_history: list[int | None]
     returned_history: list[int | None]   # delivered - sold, null when delivered is null
     raw_prediction: float | None         # trimmed mean of last 4 sold values
@@ -134,6 +163,7 @@ class DeliveryAnalyticsWeekday(BaseModel):
     weekday_correction: float | None = None  # weekday correction factor from last_prediction
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
+    open: bool = False
     fixed: float | None = None
     minimum: float | None = None
     maximum: float | None = None

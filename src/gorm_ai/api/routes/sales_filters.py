@@ -1,6 +1,6 @@
 """SalesFilter API routes."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 
 from gorm_ai.api.deps import SalesFilterServiceDep
 from gorm_ai.schemas.sales_filter import (

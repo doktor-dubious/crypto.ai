@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, SmallInteger
+from sqlalchemy import Boolean, ForeignKey, SmallInteger
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,7 @@ class OutletDelivery(Base):
         index=True,
     )
     weekday: Mapped[int] = mapped_column(SmallInteger)  # 1-7, Monday=1, Sunday=7
+    open: Mapped[bool] = mapped_column(Boolean, default=False)
     fixed: Mapped[float | None] = mapped_column(default=None)
     minimum: Mapped[float | None] = mapped_column(default=None)
     maximum: Mapped[float | None] = mapped_column(default=None)

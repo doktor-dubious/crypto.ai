@@ -20,6 +20,9 @@ from gorm_ai.database.models.sales import Sales
 from gorm_ai.schemas.outlet import (
     DeliveryAnalyticsResponse,
     DeliveryAnalyticsWeekday,
+    OutletConstraintWeekday,
+    OutletConstraintsResponse,
+    OutletConstraintsUpdate,
     OutletCreate,
     OutletDeliveryCreate,
     OutletInfoCreate,
@@ -176,6 +179,115 @@ class OutletService:
         )
         return list(result.scalars().all())
 
+    async def get_constraints(self, outlet_id: str) -> OutletConstraintsResponse | None:
+        """Get delivery constraints and financials per weekday."""
+        outlet = await self.session.get(Outlet, outlet_id)
+        if not outlet or not outlet.active:
+            return None
+
+        del_result = await self.session.execute(
+            select(OutletDelivery).where(
+                OutletDelivery.outlet_id == outlet_id,
+                OutletDelivery.active.is_(True),
+            )
+        )
+        deliveries_by_wd = {d.weekday: d for d in del_result.scalars().all()}
+
+        fin_result = await self.session.execute(
+            select(OutletFinancials).where(
+                OutletFinancials.outlet_id == outlet_id,
+                OutletFinancials.active.is_(True),
+            )
+        )
+        financials_by_wd = {f.weekday: f for f in fin_result.scalars().all()}
+
+        weekdays = []
+        for wd in range(1, 8):
+            dl = deliveries_by_wd.get(wd)
+            fin = financials_by_wd.get(wd)
+            weekdays.append(
+                OutletConstraintWeekday(
+                    weekday=wd,
+                    open=dl.open if dl else False,
+                    cost_per_unit=fin.cost_per_unit if fin else None,
+                    profit_per_unit=fin.profit_per_unit if fin else None,
+                    fixed=dl.fixed if dl else None,
+                    minimum=dl.minimum if dl else None,
+                    maximum=dl.maximum if dl else None,
+                    add=dl.add if dl else None,
+                    add_pct=dl.add_pct if dl else None,
+                )
+            )
+
+        return OutletConstraintsResponse(outlet_id=outlet_id, weekdays=weekdays)
+
+    async def update_constraints(
+        self, outlet_id: str, data: OutletConstraintsUpdate
+    ) -> OutletConstraintsResponse | None:
+        """Update delivery constraints and financials per weekday (upsert)."""
+        outlet = await self.session.get(Outlet, outlet_id)
+        if not outlet or not outlet.active:
+            return None
+
+        # Fetch existing records
+        del_result = await self.session.execute(
+            select(OutletDelivery).where(
+                OutletDelivery.outlet_id == outlet_id,
+                OutletDelivery.active.is_(True),
+            )
+        )
+        deliveries_by_wd = {d.weekday: d for d in del_result.scalars().all()}
+
+        fin_result = await self.session.execute(
+            select(OutletFinancials).where(
+                OutletFinancials.outlet_id == outlet_id,
+                OutletFinancials.active.is_(True),
+            )
+        )
+        financials_by_wd = {f.weekday: f for f in fin_result.scalars().all()}
+
+        for wd_data in data.weekdays:
+            wd = wd_data.weekday
+
+            # Upsert delivery
+            dl = deliveries_by_wd.get(wd)
+            if dl:
+                dl.open = wd_data.open
+                dl.fixed = wd_data.fixed
+                dl.minimum = wd_data.minimum
+                dl.maximum = wd_data.maximum
+                dl.add = wd_data.add
+                dl.add_pct = wd_data.add_pct
+            else:
+                dl = OutletDelivery(
+                    outlet_id=outlet_id,
+                    weekday=wd,
+                    open=wd_data.open,
+                    fixed=wd_data.fixed,
+                    minimum=wd_data.minimum,
+                    maximum=wd_data.maximum,
+                    add=wd_data.add,
+                    add_pct=wd_data.add_pct,
+                )
+                self.session.add(dl)
+
+            # Upsert financials
+            fin = financials_by_wd.get(wd)
+            if fin:
+                fin.cost_per_unit = wd_data.cost_per_unit
+                fin.profit_per_unit = wd_data.profit_per_unit
+            else:
+                fin = OutletFinancials(
+                    outlet_id=outlet_id,
+                    weekday=wd,
+                    cost_per_unit=wd_data.cost_per_unit,
+                    profit_per_unit=wd_data.profit_per_unit,
+                )
+                self.session.add(fin)
+
+        await self.session.flush()
+        return await self.get_constraints(outlet_id)
+
     async def get_delivery_analytics(self, outlet_id: str) -> DeliveryAnalyticsResponse | None:
         """Get delivery analytics per weekday for an outlet."""
         outlet = await self.session.get(Outlet, outlet_id)
@@ -265,6 +377,17 @@ class OutletService:
             f.weekday: f for f in fin_result.scalars().all()
         }
 
+        # Fetch outlet_deliveries keyed by weekday
+        del_result = await self.session.execute(
+            select(OutletDelivery).where(
+                OutletDelivery.outlet_id == outlet_id,
+                OutletDelivery.active.is_(True),
+            )
+        )
+        deliveries_by_wd: dict[int, OutletDelivery] = {
+            d.weekday: d for d in del_result.scalars().all()
+        }
+
         weekdays = []
         for wd in range(1, 8):  # 1=Monday ... 7=Sunday (ISO weekday)
             sales_result = await self.session.execute(
@@ -279,11 +402,14 @@ class OutletService:
             )
             sales = list(sales_result.scalars().all())
 
-            sold_history = [s.sold for s in sales]
-            delivered_history = [s.delivered for s in sales]
+            # Reverse so oldest is first (index 0) and most recent is last
+            sales_chrono = list(reversed(sales))
+            dates = [s.date.isoformat() for s in sales_chrono]
+            sold_history = [s.sold for s in sales_chrono]
+            delivered_history = [s.delivered for s in sales_chrono]
             returned_history = [
                 (s.delivered - s.sold) if s.delivered is not None else None
-                for s in sales
+                for s in sales_chrono
             ]
 
             # Trimmed mean of last 4 sold values
@@ -297,6 +423,7 @@ class OutletService:
                 raw_prediction = None
 
             lp = last_predictions.get(wd)
+            dl = deliveries_by_wd.get(wd)
             fin = financials_by_wd.get(wd)
             pad_avg = pad_avg_by_wd.get(wd)
             baseline_avg = baseline_avg_by_wd.get(wd)
@@ -310,6 +437,7 @@ class OutletService:
             weekdays.append(
                 DeliveryAnalyticsWeekday(
                     weekday=wd,
+                    dates=dates,
                     sold_history=sold_history,
                     delivered_history=delivered_history,
                     returned_history=returned_history,
@@ -327,6 +455,7 @@ class OutletService:
                     ),
                     cost_per_unit=fin.cost_per_unit if fin else None,
                     profit_per_unit=fin.profit_per_unit if fin else None,
+                    open=dl.open if dl else False,
                     fixed=lp.fixed if lp else None,
                     minimum=lp.minimum if lp else None,
                     maximum=lp.maximum if lp else None,

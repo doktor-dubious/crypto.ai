@@ -1,13 +1,14 @@
 """Sales service for business logic."""
 
-from datetime import date
-
 from collections import defaultdict
+from datetime import date
 
 from sqlalchemy import func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.models import Sales
+from gorm_ai.database.models.outlet import Outlet
+from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.sales_filter import SalesFilter
 from gorm_ai.schemas.sales import SalesBulkImport, SalesCreate, SalesQuery, SalesUpdate
 
@@ -235,7 +236,7 @@ class SalesService:
 
         sold_out = outlets where sold >= delivered on that date.
         """
-        from sqlalchemy import case, cast, Float
+        from sqlalchemy import case
 
         query = (
             select(
@@ -289,6 +290,147 @@ class SalesService:
                 "sold_out_count": sold_out_count,
             })
         return out
+
+    async def _load_financials_map(
+        self,
+        outlet_ids: list[str],
+    ) -> dict[str, dict[int, tuple[float | None, float | None]]]:
+        """Load outlet financials keyed by outlet_id -> weekday -> (cost, profit)."""
+        result = await self.session.execute(
+            select(OutletFinancials).where(
+                OutletFinancials.outlet_id.in_(outlet_ids),
+                OutletFinancials.active.is_(True),
+            )
+        )
+        fins = result.scalars().all()
+        out: dict[str, dict[int, tuple[float | None, float | None]]] = defaultdict(dict)
+        for f in fins:
+            out[f.outlet_id][f.weekday] = (f.cost_per_unit, f.profit_per_unit)
+        return dict(out)
+
+    async def get_financials_per_date(
+        self,
+        customer_id: str,
+        outlet_ids: list[str],
+        start_date: date,
+        end_date: date,
+        default_cost: float,
+        default_profit: float,
+    ) -> list[dict]:
+        """Compute revenue/cost/profit aggregated per date."""
+        # Fetch raw sales rows (lightweight columns only)
+        query = select(
+            Sales.outlet_id, Sales.date, Sales.sold, Sales.delivered,
+        ).where(
+            Sales.customer_id == customer_id,
+            Sales.outlet_id.in_(outlet_ids),
+            Sales.date >= start_date,
+            Sales.date <= end_date,
+            Sales.active.is_(True),
+        ).order_by(Sales.date)
+
+        result = await self.session.execute(query)
+        rows = result.all()
+
+        fins = await self._load_financials_map(outlet_ids)
+
+        # Aggregate per date
+        date_agg: dict[date, dict] = {}
+        for outlet_id, row_date, sold, delivered in rows:
+            if row_date not in date_agg:
+                date_agg[row_date] = {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "outlet_count": 0}
+            agg = date_agg[row_date]
+
+            # weekday 1=Monday..7=Sunday from Python's isoweekday()
+            weekday = row_date.isoweekday()
+            fin = fins.get(outlet_id, {}).get(weekday)
+            cpu = fin[0] if fin and fin[0] is not None else default_cost
+            ppu = fin[1] if fin and fin[1] is not None else default_profit
+
+            returned = (delivered - sold) if delivered is not None and delivered > sold else 0
+            revenue = ppu * sold
+            cost = cpu * returned
+            agg["revenue"] += revenue
+            agg["cost"] += cost
+            agg["profit"] += revenue - cost
+            agg["outlet_count"] += 1
+
+        return [
+            {
+                "date": d,
+                "revenue": round(v["revenue"], 2),
+                "cost": round(v["cost"], 2),
+                "profit": round(v["profit"], 2),
+                "avg_profit": round(v["profit"] / v["outlet_count"], 2) if v["outlet_count"] else 0,
+                "outlet_count": v["outlet_count"],
+            }
+            for d, v in sorted(date_agg.items())
+        ]
+
+    async def get_financials_per_outlet(
+        self,
+        customer_id: str,
+        outlet_ids: list[str],
+        start_date: date,
+        end_date: date,
+        default_cost: float,
+        default_profit: float,
+    ) -> list[dict]:
+        """Compute revenue/cost/profit per outlet over the period."""
+        query = select(
+            Sales.outlet_id, Sales.date, Sales.sold, Sales.delivered,
+        ).where(
+            Sales.customer_id == customer_id,
+            Sales.outlet_id.in_(outlet_ids),
+            Sales.date >= start_date,
+            Sales.date <= end_date,
+            Sales.active.is_(True),
+        )
+
+        result = await self.session.execute(query)
+        rows = result.all()
+
+        fins = await self._load_financials_map(outlet_ids)
+
+        # Aggregate per outlet
+        outlet_agg: dict[str, dict] = {}
+        for outlet_id, row_date, sold, delivered in rows:
+            if outlet_id not in outlet_agg:
+                outlet_agg[outlet_id] = {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "days": 0}
+            agg = outlet_agg[outlet_id]
+
+            weekday = row_date.isoweekday()
+            fin = fins.get(outlet_id, {}).get(weekday)
+            cpu = fin[0] if fin and fin[0] is not None else default_cost
+            ppu = fin[1] if fin and fin[1] is not None else default_profit
+
+            returned = (delivered - sold) if delivered is not None and delivered > sold else 0
+            revenue = ppu * sold
+            cost = cpu * returned
+            agg["revenue"] += revenue
+            agg["cost"] += cost
+            agg["profit"] += revenue - cost
+            agg["days"] += 1
+
+        # Fetch outlet names
+        outlet_result = await self.session.execute(
+            select(Outlet.id, Outlet.ext_id, Outlet.name).where(Outlet.id.in_(list(outlet_agg.keys())))
+        )
+        outlet_info = {r.id: (r.ext_id, r.name) for r in outlet_result.all()}
+
+        return [
+            {
+                "outlet_id": oid,
+                "ext_id": outlet_info.get(oid, ("", ""))[0],
+                "name": outlet_info.get(oid, ("", "Unknown"))[1],
+                "revenue": round(v["revenue"], 2),
+                "cost": round(v["cost"], 2),
+                "profit": round(v["profit"], 2),
+                "avg_profit": round(v["profit"] / v["days"], 2) if v["days"] else 0,
+                "days": v["days"],
+            }
+            for oid, v in outlet_agg.items()
+        ]
 
     async def delete(self, sales_id: str, hard_delete: bool = False) -> bool:
         """Delete a sales record (soft delete by default)."""

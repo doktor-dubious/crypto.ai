@@ -88,6 +88,23 @@ function StatRow({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const PREDC_STORAGE_PREFIX = "gorm:predCompleted:"
+
+function loadPredCJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${PREDC_STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function savePredCJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${PREDC_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PredictionsCompletedPage() {
@@ -96,19 +113,21 @@ export default function PredictionsCompletedPage() {
   const queryClient = useQueryClient()
   const searchParams = useSearchParams()
   const deepLinkTaskId = searchParams.get("task_id")
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadPredCJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadPredCJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("created_at")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [currentPage, setCurrentPage] = useState(1)
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedPredId, setSelectedPredId] = useState<string | null>(() => loadPredCJson<string | null>(cid, "selectedPred", null))
   const [selected, setSelected] = useState<CompletedPredictionResponse | null>(null)
-  const [activeTab, setActiveTab] = useState("tab1")
+  const [activeTab, setActiveTab] = useState(() => loadPredCJson<string>(cid, "activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -130,6 +149,37 @@ export default function PredictionsCompletedPage() {
   })
 
   const predictions = listData?.items ?? []
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) savePredCJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) savePredCJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) savePredCJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) savePredCJson(cid, "selectedPred", selected?.id ?? null) }, [cid, selected?.id])
+
+  // ── Restore selected prediction from persisted ID when list loads ──────────
+
+  useEffect(() => {
+    if (!predictions.length || selected || deepLinkTaskId) return
+    if (selectedPredId) {
+      const found = predictions.find((p) => p.id === selectedPredId)
+      if (found) setSelected(found)
+    }
+  }, [predictions.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadPredCJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadPredCJson<string[]>(cid, "starred", [])))
+      setSelectedPredId(loadPredCJson<string | null>(cid, "selectedPred", null))
+      setSelected(null)
+      setActiveTab(loadPredCJson<string>(cid, "activeTab", "tab1"))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ── Deep-link: select and focus prediction from task_id query param ─────────
   const handledTaskIdRef = useRef<string | null>(null)

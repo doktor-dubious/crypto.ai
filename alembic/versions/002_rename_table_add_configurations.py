@@ -80,9 +80,9 @@ def upgrade() -> None:
         "ix_customer_configuration_customer_id", "customer_configuration", ["customer_id"]
     )
 
-    # 6. Create draw_adjustment table
+    # 6. Create prediction_adjustment table
     op.create_table(
-        "draw_adjustment",
+        "prediction_adjustment",
         sa.Column("id", postgresql.UUID(as_uuid=False), primary_key=True),
         sa.Column("active", sa.Boolean(), nullable=False, default=True),
         sa.Column(
@@ -98,19 +98,17 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("name", sa.String(255), nullable=False),
-        sa.Column("start_date", sa.Date(), nullable=False),
-        sa.Column("end_date", sa.Date(), nullable=False),
-        sa.Column("day_of_week", sa.SmallInteger(), nullable=False),
+        sa.Column("date", sa.Date(), nullable=False),
         sa.Column("type", sa.SmallInteger(), nullable=False),
         sa.Column("value", sa.Float(), nullable=False),
     )
-    op.create_index("ix_draw_adjustment_active", "draw_adjustment", ["active"])
-    op.create_index("ix_draw_adjustment_group_id", "draw_adjustment", ["group_id"])
+    op.create_index("ix_prediction_adjustment_active", "prediction_adjustment", ["active"])
+    op.create_index("ix_prediction_adjustment_group_id", "prediction_adjustment", ["group_id"])
 
 
 def downgrade() -> None:
     # Drop new tables
-    op.drop_table("draw_adjustment")
+    op.drop_table("prediction_adjustment")
     op.drop_table("customer_configuration")
     op.drop_table("configuration")
 

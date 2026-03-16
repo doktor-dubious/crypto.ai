@@ -1,12 +1,13 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { customersApi, type CustomerResponse } from "@/lib/api"
 
 interface CustomerContextValue {
   customers: CustomerResponse[]
   sortedCustomers: CustomerResponse[]
+  recentCustomers: CustomerResponse[]
   activeCustomer: CustomerResponse | null
   setActiveCustomer: (customer: CustomerResponse) => void
 }
@@ -14,6 +15,7 @@ interface CustomerContextValue {
 const CustomerContext = createContext<CustomerContextValue>({
   customers: [],
   sortedCustomers: [],
+  recentCustomers: [],
   activeCustomer: null,
   setActiveCustomer: () => {},
 })
@@ -21,6 +23,7 @@ const CustomerContext = createContext<CustomerContextValue>({
 const STORAGE_KEY = "gorm:activeCustomerId"
 
 export function CustomerProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient()
   const { data: customers = [] } = useQuery({
     queryKey: ["customers"],
     queryFn: () => customersApi.list({ limit: 100 }),
@@ -44,6 +47,15 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
     [customers]
   )
 
+  const recentCustomers = useMemo(
+    () =>
+      [...customers]
+        .filter((c) => c.last_opened_at)
+        .sort((a, b) => new Date(b.last_opened_at!).getTime() - new Date(a.last_opened_at!).getTime())
+        .slice(0, 5),
+    [customers]
+  )
+
   const activeCustomer = useMemo(
     () => customers.find((c) => c.id === activeCustomerId) ?? customers[0] ?? null,
     [customers, activeCustomerId]
@@ -52,10 +64,14 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
   function setActiveCustomer(customer: CustomerResponse) {
     setActiveCustomerId(customer.id)
     localStorage.setItem(STORAGE_KEY, customer.id)
+    // Fire-and-forget: update last_opened_at on backend
+    customersApi.opened(customer.id).then(() => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] })
+    }).catch(() => {})
   }
 
   return (
-    <CustomerContext.Provider value={{ customers, sortedCustomers, activeCustomer, setActiveCustomer }}>
+    <CustomerContext.Provider value={{ customers, sortedCustomers, recentCustomers, activeCustomer, setActiveCustomer }}>
       {children}
     </CustomerContext.Provider>
   )

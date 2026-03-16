@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+
 from celery import Celery
 from celery.signals import task_postrun, task_prerun, worker_process_init
 
@@ -26,6 +27,24 @@ def init_worker_logging(**kwargs):
 
 # Per-task resource tracking: task_id -> (cpu_start, mem_rss_start)
 _task_start_metrics: dict[str, tuple[float, int]] = {}
+
+
+def get_current_metrics(task_id: str) -> tuple[float | None, float | None]:
+    """Return (peak_memory_mb, cpu_time_s) for a running task, or (None, None)."""
+    start = _task_start_metrics.get(task_id)
+    if start is None:
+        return None, None
+    try:
+        import psutil
+        proc = psutil.Process(os.getpid())
+        cpu_end = sum(proc.cpu_times()[:2])
+        mem_end = proc.memory_info().rss
+        cpu_start, mem_start = start
+        cpu_time_s = round(cpu_end - cpu_start, 2)
+        peak_memory_mb = round(max(mem_end, mem_start) / (1024 * 1024), 1)
+        return peak_memory_mb, cpu_time_s
+    except Exception:
+        return None, None
 
 
 @task_prerun.connect

@@ -34,24 +34,39 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+# Lazily-created engine for Celery tasks.  Each asyncio.run() call (= each
+# Celery task) gets its own event loop, so connections from a previous task's
+# loop can't be reused.  NullPool avoids stale-connection errors across tasks
+# while pool_pre_ping=True lets SQLAlchemy transparently reconnect if the
+# connection drops during a long-running inference step within a single task.
+_task_engine = None
+_task_factory = None
+
+
+def _get_task_factory() -> async_sessionmaker:
+    """Return (and lazily create) the task-scoped session factory."""
+    global _task_engine, _task_factory
+    if _task_engine is None:
+        _task_engine = create_async_engine(
+            get_settings().database_url,
+            echo=get_settings().database_echo,
+            poolclass=NullPool,
+            pool_pre_ping=True,
+        )
+        _task_factory = async_sessionmaker(
+            _task_engine, class_=AsyncSession, expire_on_commit=False
+        )
+    return _task_factory
+
+
 @asynccontextmanager
 async def task_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a DB session safe for use inside Celery tasks.
 
-    Celery prefork workers call asyncio.run() which creates a new event loop
-    per task. asyncpg connections from the shared pool are bound to the loop
-    that created them, causing 'Future attached to a different loop' errors.
-    NullPool disables pooling so every task_session() call gets a fresh
-    connection on the current event loop.
+    Uses NullPool with pool_pre_ping so each session gets a fresh connection
+    that is validated before use.  The engine is shared across task_session()
+    calls within the same asyncio.run() to avoid repeated engine creation.
     """
-    task_engine = create_async_engine(
-        get_settings().database_url,
-        echo=get_settings().database_echo,
-        poolclass=NullPool,
-    )
-    factory = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with factory() as session:
-            yield session
-    finally:
-        await task_engine.dispose()
+    factory = _get_task_factory()
+    async with factory() as session:
+        yield session

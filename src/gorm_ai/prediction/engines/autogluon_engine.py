@@ -1,6 +1,7 @@
 """AutoGluon Chronos-Bolt prediction engine."""
 
 import asyncio
+import gc
 import logging
 import shutil
 import tempfile
@@ -94,7 +95,7 @@ class AutoGluonEngine(PredictionEngine):
         items: list[dict],
         horizon: int,
         prediction_from: date,
-        batch_size: int = 64,
+        batch_size: int = 16,
         holding_rate: float = 0.25,
         protection_days: int = 7,
     ) -> list[list[PredictionResult]]:
@@ -137,6 +138,15 @@ class AutoGluonEngine(PredictionEngine):
                     sub_items, horizon, prediction_from, holding_rate, protection_days
                 )
             )
+            # Force garbage collection between sub-batches to reclaim AutoGluon/PyTorch
+            # memory before the next batch loads a fresh predictor + model weights.
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
         return output
 
     def _run_single_autogluon_batch(

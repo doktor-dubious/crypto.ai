@@ -4,13 +4,22 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
-from gorm_ai.api.deps import SalesServiceDep
+from gorm_ai.api.deps import (
+    ConfigurationServiceDep,
+    CustomerConfigurationServiceDep,
+    SalesServiceDep,
+)
 from gorm_ai.schemas.sales import (
     AggregatedSalesDataPoint,
     AggregatedSalesRequest,
     AggregatedSalesResponse,
     EfficiencyDataPoint,
     EfficiencyResponse,
+    FinancialsPerDateDataPoint,
+    FinancialsPerDateResponse,
+    FinancialsPerOutletDataPoint,
+    FinancialsPerOutletResponse,
+    FinancialsRequest,
     SalesBulkImport,
     SalesCreate,
     SalesQuery,
@@ -109,6 +118,75 @@ async def get_efficiency(
     return EfficiencyResponse(
         data=[EfficiencyDataPoint(**r) for r in rows],
         outlet_count=len(data.outlet_ids),
+    )
+
+
+async def _resolve_defaults(
+    customer_id: str,
+    cust_cfg_service: CustomerConfigurationServiceDep,
+    global_cfg_service: ConfigurationServiceDep,
+) -> tuple[float, float]:
+    """Resolve default cost/profit per unit from customer then global config."""
+    cust_cfg = await cust_cfg_service.get_by_customer(customer_id)
+    cost = cust_cfg.cost_per_unit if cust_cfg and cust_cfg.cost_per_unit is not None else None
+    profit = cust_cfg.profit_per_unit if cust_cfg and cust_cfg.profit_per_unit is not None else None
+
+    if cost is None or profit is None:
+        global_cfg = await global_cfg_service.get()
+        if cost is None:
+            cost = global_cfg.cost_per_unit if global_cfg and global_cfg.cost_per_unit is not None else 0.0
+        if profit is None:
+            profit = global_cfg.profit_per_unit if global_cfg and global_cfg.profit_per_unit is not None else 1.0
+
+    return cost, profit
+
+
+@router.post("/financials/per-date", response_model=FinancialsPerDateResponse)
+async def get_financials_per_date(
+    data: FinancialsRequest,
+    service: SalesServiceDep,
+    cust_cfg_service: CustomerConfigurationServiceDep,
+    global_cfg_service: ConfigurationServiceDep,
+) -> FinancialsPerDateResponse:
+    """Compute revenue/cost/profit aggregated per date."""
+    default_cost, default_profit = await _resolve_defaults(
+        data.customer_id, cust_cfg_service, global_cfg_service
+    )
+    rows = await service.get_financials_per_date(
+        customer_id=data.customer_id,
+        outlet_ids=data.outlet_ids,
+        start_date=data.start_date,
+        end_date=data.end_date,
+        default_cost=default_cost,
+        default_profit=default_profit,
+    )
+    return FinancialsPerDateResponse(
+        data=[FinancialsPerDateDataPoint(**r) for r in rows],
+        outlet_count=len(data.outlet_ids),
+    )
+
+
+@router.post("/financials/per-outlet", response_model=FinancialsPerOutletResponse)
+async def get_financials_per_outlet(
+    data: FinancialsRequest,
+    service: SalesServiceDep,
+    cust_cfg_service: CustomerConfigurationServiceDep,
+    global_cfg_service: ConfigurationServiceDep,
+) -> FinancialsPerOutletResponse:
+    """Compute revenue/cost/profit per outlet over the period."""
+    default_cost, default_profit = await _resolve_defaults(
+        data.customer_id, cust_cfg_service, global_cfg_service
+    )
+    rows = await service.get_financials_per_outlet(
+        customer_id=data.customer_id,
+        outlet_ids=data.outlet_ids,
+        start_date=data.start_date,
+        end_date=data.end_date,
+        default_cost=default_cost,
+        default_profit=default_profit,
+    )
+    return FinancialsPerOutletResponse(
+        data=[FinancialsPerOutletDataPoint(**r) for r in rows],
     )
 
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useEffect, useRef } from "react"
+import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -39,17 +39,35 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useCustomer } from "@/components/providers/customer-provider"
+import { Badge } from "@/components/ui/badge"
 import {
   outletsApi, outletGroupsApi, customerConfigurationApi, salesApi,
   type OutletResponse, type OutletUpdate, type DeliveryAnalyticsWeekday,
+  type OutletConstraintWeekday,
 } from "@/lib/api"
+import { ExportMenu } from "@/components/ui/export-menu"
+import type { ExportColumn } from "@/lib/export"
+import { useLock } from "@/components/providers/lock-provider"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
+const DATA_ITEMS_PER_PAGE = 10
 type SortField = "name" | "ext_id" | "starred"
+type DataSortField = "date" | "weekday" | "quantity" | "sold" | "returned" | "starred"
+
+const JS_WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+interface DataTableRow {
+  date: string
+  weekday: string
+  weekdayIndex: number
+  quantity: number | null
+  sold: number
+  returned: number | null
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -103,13 +121,19 @@ function DeliveryAnalyticsWeekdayRows({
   labels: [string, string, string]
 }) {
   const histories: (number | null)[][] = [wd.delivered_history, wd.sold_history, wd.returned_history]
+  const dates = wd.dates ?? []
 
   return (
     <>
       {([0, 1, 2] as const).map((rowIdx) => {
         const hist = histories[rowIdx] ?? []
-        // pad to 8
-        const cells = Array.from({ length: 8 }, (_, i) => hist[i] ?? null)
+        // pad to 8 (oldest first, most recent last)
+        const padLen = 8
+        const padCount = Math.max(0, padLen - hist.length)
+        const cells = [...Array.from({ length: padCount }, () => null), ...hist]
+        const cellDates = [...Array.from({ length: padCount }, () => ""), ...dates]
+        // Highlight the 4 most recent sold values
+        const recentStart = padLen - Math.min(hist.length, 4)
 
         return (
           <tr
@@ -132,8 +156,9 @@ function DeliveryAnalyticsWeekdayRows({
                 key={i}
                 className={cn(
                   "py-0.5 px-1.5 text-center tabular-nums",
-                  rowIdx === 1 && i < 4 && val != null && "text-red-500",
+                  rowIdx === 1 && i >= recentStart && val != null && "text-red-500",
                 )}
+                title={cellDates[i] || undefined}
               >
                 {val ?? "—"}
               </td>
@@ -175,11 +200,11 @@ function DeliveryAnalyticsWeekdayRows({
                 </td>
                 <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle whitespace-nowrap">
                   {[
-                    wd.fixed    != null ? `=${fmtNum(wd.fixed)}`         : null,
-                    wd.minimum  != null ? `>${fmtNum(wd.minimum)}`       : null,
-                    wd.maximum  != null ? `<${fmtNum(wd.maximum)}`       : null,
-                    wd.add      != null ? `+${fmtNum(wd.add)}`           : null,
-                    wd.add_pct  != null ? `+%${fmtNum(wd.add_pct)}`      : null,
+                    wd.fixed    ? `=${fmtNum(wd.fixed)}`         : null,
+                    wd.minimum  ? `>${fmtNum(wd.minimum)}`       : null,
+                    wd.maximum  ? `<${fmtNum(wd.maximum)}`       : null,
+                    wd.add      ? `+${fmtNum(wd.add)}`           : null,
+                    wd.add_pct  ? `+%${fmtNum(wd.add_pct)}`      : null,
                   ].filter(Boolean).join(" ") || "—"}
                 </td>
               </>
@@ -193,14 +218,33 @@ function DeliveryAnalyticsWeekdayRows({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+
+const STORAGE_PREFIX = "gorm:outlets:"
+
+function loadJson<T>(customerId: string, key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX}${customerId}:${key}`)
+    return raw ? JSON.parse(raw) : fallback
+  } catch { return fallback }
+}
+
+function saveJson(customerId: string, key: string, value: unknown) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
 export default function OutletsListPage() {
   const t = useTranslations("outlets.list")
   const { activeCustomer } = useCustomer()
+  const { isLocked } = useLock()
   const queryClient = useQueryClient()
+  const cid = activeCustomer?.id ?? ""
 
-  // ── Table state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  // ── Table state (persisted)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadJson<string[]>(cid, "checked", [])))
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
   const [sortField, setSortField] = useState<SortField>("name")
@@ -208,9 +252,10 @@ export default function OutletsListPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [groupFilter, setGroupFilter] = useState<"active" | "all">("active")
 
-  // ── Detail pane state
+  // ── Detail pane state (persisted)
+  const [selectedOutletId, setSelectedOutletId] = useState<string | null>(() => loadJson<string | null>(cid, "selectedOutlet", null))
   const [selected, setSelected] = useState<OutletResponse | null>(null)
-  const [activeTab, setActiveTab] = useState("tab1")
+  const [activeTab, setActiveTab] = useState(() => loadJson<string>(cid, "activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -229,6 +274,15 @@ export default function OutletsListPage() {
       return n
     })
   }
+
+  // ── Data tab state
+  const [dataSearch, setDataSearch] = useState("")
+  const [dataPage, setDataPage] = useState(1)
+  const [dataSortField, setDataSortField] = useState<DataSortField>("date")
+  const [dataSortDir, setDataSortDir] = useState<"asc" | "desc">("desc")
+  const [dataChecked, setDataChecked] = useState<Set<string>>(new Set())
+  const [dataStarred, setDataStarred] = useState<Set<string>>(new Set())
+  const [dataShowOnlySelected, setDataShowOnlySelected] = useState(false)
 
   // ── Info tab state
   const [addInfoMode, setAddInfoMode] = useState(false)
@@ -287,7 +341,7 @@ export default function OutletsListPage() {
   const { data: salesData = [], isLoading: salesLoading } = useQuery({
     queryKey: ["outlet-sales", selected?.id, statsStartDate, statsEndDate],
     queryFn: () => salesApi.query({ outlet_id: selected!.id, start_date: statsStartDate, end_date: statsEndDate, limit: 1000 }),
-    enabled: !!selected && activeTab === "tab5",
+    enabled: !!selected && (activeTab === "tab5" || activeTab === "tab7"),
     retry: false,
   })
 
@@ -297,6 +351,56 @@ export default function OutletsListPage() {
     enabled: !!selected && activeTab === "tab6",
     retry: false,
   })
+
+  // ── Constraints tab state ─────────────────────────────────────────────────
+  const { data: constraintsData, isLoading: constraintsLoading } = useQuery({
+    queryKey: ["outlet-constraints", selected?.id],
+    queryFn: () => outletsApi.getConstraints(selected!.id),
+    enabled: !!selected && activeTab === "tab8",
+    retry: false,
+  })
+
+  const [constraintsDraft, setConstraintsDraft] = useState<OutletConstraintWeekday[]>([])
+  const [constraintsDraftInit, setConstraintsDraftInit] = useState(false)
+
+  useEffect(() => {
+    if (constraintsData) {
+      setConstraintsDraft(constraintsData.weekdays.map((w) => ({ ...w })))
+      setConstraintsDraftInit(true)
+    }
+  }, [constraintsData])
+
+  // Reset constraints draft when selection changes
+  useEffect(() => {
+    setConstraintsDraftInit(false)
+    setConstraintsDraft([])
+  }, [selected?.id])
+
+  const constraintsDirty = useMemo(() => {
+    if (!constraintsDraftInit || !constraintsData) return false
+    return JSON.stringify(constraintsDraft) !== JSON.stringify(constraintsData.weekdays)
+  }, [constraintsDraft, constraintsData, constraintsDraftInit])
+
+  const constraintsMutation = useMutation({
+    mutationFn: ({ id, weekdays }: { id: string; weekdays: OutletConstraintWeekday[] }) =>
+      outletsApi.updateConstraints(id, { weekdays }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["outlet-constraints", selected?.id] })
+      queryClient.invalidateQueries({ queryKey: ["outlet-delivery-analytics", selected?.id] })
+      toast.success(t("constraintsSaved"))
+    },
+    onError: () => toast.error(t("constraintsSaveError")),
+  })
+
+  function updateConstraintField(weekday: number, field: keyof Omit<OutletConstraintWeekday, "weekday">, value: string) {
+    setConstraintsDraft((prev) =>
+      prev.map((w) =>
+        w.weekday === weekday
+          ? { ...w, [field]: value === "" ? null : parseFloat(value) }
+          : w
+      )
+    )
+  }
 
   // Filter by weekday and shape for chart
   const WEEKDAY_JS: Record<string, number[]> = {
@@ -330,6 +434,122 @@ export default function OutletsListPage() {
     sold:     { label: "Sold",     color: "hsl(0 72% 51%)" },
     returned: { label: "Returned", color: "hsl(38 92% 50%)" },
   }
+
+  // ── Data tab table ──────────────────────────────────────────────────────────
+
+  const dataTableRows: DataTableRow[] = useMemo(() => {
+    return salesData
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((s) => {
+        const d = new Date(s.date + "T00:00:00")
+        return {
+          date: s.date,
+          weekday: JS_WEEKDAY_NAMES[d.getDay()],
+          weekdayIndex: d.getDay(),
+          quantity: s.delivered,
+          sold: s.sold,
+          returned: s.delivered != null ? s.delivered - s.sold : null,
+        }
+      })
+  }, [salesData])
+
+  const dataFilteredTable = useMemo(() => {
+    let rows = dataTableRows
+    if (dataSearch) {
+      const q = dataSearch.toLowerCase()
+      rows = rows.filter((r) => r.date.includes(q) || r.weekday.toLowerCase().includes(q))
+    }
+    if (dataShowOnlySelected && dataChecked.size > 0) {
+      rows = rows.filter((r) => dataChecked.has(r.date))
+    }
+    rows = [...rows].sort((a, b) => {
+      const dir = dataSortDir === "asc" ? 1 : -1
+      if (dataSortField === "starred") {
+        return ((dataStarred.has(a.date) ? 1 : 0) - (dataStarred.has(b.date) ? 1 : 0)) * dir
+      }
+      if (dataSortField === "date") return a.date.localeCompare(b.date) * dir
+      if (dataSortField === "weekday") return (a.weekdayIndex - b.weekdayIndex) * dir
+      const av = a[dataSortField] ?? 0
+      const bv = b[dataSortField] ?? 0
+      return (av - bv) * dir
+    })
+    return rows
+  }, [dataTableRows, dataSearch, dataShowOnlySelected, dataChecked, dataSortField, dataSortDir, dataStarred])
+
+  const dataTotalPages = Math.max(1, Math.ceil(dataFilteredTable.length / DATA_ITEMS_PER_PAGE))
+  const dataSafePage = Math.min(dataPage, dataTotalPages)
+  const dataPagedRows = dataFilteredTable.slice((dataSafePage - 1) * DATA_ITEMS_PER_PAGE, dataSafePage * DATA_ITEMS_PER_PAGE)
+  const dataPaginationPages = buildPaginationPages(dataSafePage, dataTotalPages)
+  const dataAllChecked = dataPagedRows.length > 0 && dataPagedRows.every((r) => dataChecked.has(r.date))
+
+  const toggleDataCheck = useCallback((date: string) => {
+    setDataChecked((prev) => { const n = new Set(prev); n.has(date) ? n.delete(date) : n.add(date); return n })
+  }, [])
+
+  const toggleDataStar = useCallback((date: string) => {
+    setDataStarred((prev) => { const n = new Set(prev); n.has(date) ? n.delete(date) : n.add(date); return n })
+  }, [])
+
+  const toggleDataAllChecked = useCallback(() => {
+    setDataChecked((prev) => {
+      const n = new Set(prev)
+      if (dataAllChecked) { dataPagedRows.forEach((r) => n.delete(r.date)) }
+      else { dataPagedRows.forEach((r) => n.add(r.date)) }
+      return n
+    })
+  }, [dataAllChecked, dataPagedRows])
+
+  function handleDataSort(field: DataSortField) {
+    if (dataSortField === field) { setDataSortDir((d) => (d === "asc" ? "desc" : "asc")) }
+    else { setDataSortField(field); setDataSortDir("desc") }
+    setDataPage(1)
+  }
+
+  const dataExportColumns: ExportColumn[] = useMemo(() => [
+    { header: t("dataDate"), accessor: "date" },
+    { header: t("dataWeekday"), accessor: "weekday" },
+    { header: t("dataQuantity"), accessor: (r: any) => r.quantity != null ? String(r.quantity) : "" },
+    { header: t("dataSold"), accessor: (r: any) => String(r.sold) },
+    { header: t("dataReturned"), accessor: (r: any) => r.returned != null ? String(r.returned) : "" },
+  ], [t])
+
+  function DataSortIcon({ field }: { field: DataSortField }) {
+    if (dataSortField !== field) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />
+    return dataSortDir === "asc"
+      ? <ChevronUp className="h-3 w-3 ml-1" />
+      : <ChevronDown className="h-3 w-3 ml-1" />
+  }
+
+  // ── Persist state to localStorage ──────────────────────────────────────────
+
+  useEffect(() => { if (cid) saveJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
+  useEffect(() => { if (cid) saveJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
+  useEffect(() => { if (cid) saveJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveJson(cid, "selectedOutlet", selected?.id ?? null) }, [cid, selected?.id])
+
+  // ── Restore selected outlet from persisted ID when outlets load ───────────
+
+  useEffect(() => {
+    if (!outlets.length || selected) return
+    if (selectedOutletId) {
+      const found = outlets.find((o) => o.id === selectedOutletId)
+      if (found) setSelected(found)
+    }
+  }, [outlets.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Reset persisted state when customer changes ───────────────────────────
+
+  const prevCidRef = useRef(cid)
+  useEffect(() => {
+    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+      setSelectedIds(new Set(loadJson<string[]>(cid, "checked", [])))
+      setStarredIds(new Set(loadJson<string[]>(cid, "starred", [])))
+      setSelectedOutletId(loadJson<string | null>(cid, "selectedOutlet", null))
+      setSelected(null)
+      setActiveTab(loadJson<string>(cid, "activeTab", "tab1"))
+    }
+    prevCidRef.current = cid
+  }, [cid])
 
   // ── Sync selected with latest data after mutations ─────────────────────────
 
@@ -431,6 +651,23 @@ export default function OutletsListPage() {
     onError: () => toast.error(t("toastInfoDeleteError")),
   })
 
+  // ── Production toggle mutation ───────────────────────────────────────────
+  const productionToggleMutation = useMutation({
+    mutationFn: async ({ outletId, inGroup }: { outletId: string; inGroup: boolean }) => {
+      if (!groupId) return
+      if (inGroup) {
+        await outletGroupsApi.removeOutlet(groupId, outletId)
+      } else {
+        await outletGroupsApi.addOutlet(groupId, outletId)
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["outlet-group-outlets", groupId] })
+      toast.success(t("productionToggled"))
+    },
+    onError: () => toast.error(t("productionToggleError")),
+  })
+
   // ── Derived / filtering / sorting / pagination ─────────────────────────────
 
   const filtered = useMemo(() => {
@@ -492,6 +729,11 @@ export default function OutletsListPage() {
   function handleRowClick(outlet: OutletResponse) {
     setSelected(outlet)
     setActiveTab("tab1")
+    setDataChecked(new Set())
+    setDataStarred(new Set())
+    setDataSearch("")
+    setDataPage(1)
+    setDataShowOnlySelected(false)
   }
 
   function handleCancelDraft() {
@@ -751,10 +993,12 @@ export default function OutletsListPage() {
               <div className="relative w-full">
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab8">{t("tabConstraints")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabLocation")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabInformation")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabStatistics")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabDeliveryAnalytics")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab7">{t("tabData")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabActions")}</TabsTrigger>
                 </TabsList>
                 <div
@@ -767,6 +1011,35 @@ export default function OutletsListPage() {
 
                 {/* ─ Details ─ */}
                 <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 px-4">
+                  <div>
+                    {groupId ? (
+                      groupOutletIds.has(selected.id) ? (
+                        <Badge
+                          variant="default"
+                          className={cn("text-xs", !isLocked && "cursor-pointer hover:opacity-80")}
+                          onClick={() => {
+                            if (!isLocked && groupId) {
+                              productionToggleMutation.mutate({ outletId: selected.id, inGroup: true })
+                            }
+                          }}
+                        >
+                          {t("inProduction")}
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="secondary"
+                          className={cn("text-xs", !isLocked && "cursor-pointer hover:opacity-80")}
+                          onClick={() => {
+                            if (!isLocked && groupId) {
+                              productionToggleMutation.mutate({ outletId: selected.id, inGroup: false })
+                            }
+                          }}
+                        >
+                          {t("notInProduction")}
+                        </Badge>
+                      )
+                    ) : null}
+                  </div>
                   <FieldRow label={t("fieldId")}>
                     <Input
                       value={selected.id}
@@ -778,12 +1051,14 @@ export default function OutletsListPage() {
                     <Input
                       value={draft.ext_id ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, ext_id: e.target.value }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldName")}>
                     <Input
                       value={draft.name ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldDescription")}>
@@ -792,6 +1067,7 @@ export default function OutletsListPage() {
                       onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value || null }))}
                       rows={3}
                       className="resize-none"
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldNotes")}>
@@ -800,6 +1076,28 @@ export default function OutletsListPage() {
                       onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value || null }))}
                       rows={3}
                       className="resize-none"
+                      disabled={isLocked}
+                    />
+                  </FieldRow>
+                  <FieldRow label={t("fieldCreated")}>
+                    <Input
+                      value={selected.created_at ? new Date(selected.created_at).toLocaleDateString() : "—"}
+                      readOnly
+                      className="opacity-50 cursor-default"
+                    />
+                  </FieldRow>
+                  <FieldRow label={t("fieldStartDate")}>
+                    <Input
+                      value={selected.start_date ?? "—"}
+                      readOnly
+                      className="opacity-50 cursor-default"
+                    />
+                  </FieldRow>
+                  <FieldRow label={t("fieldEndDate")}>
+                    <Input
+                      value={selected.end_date ?? "—"}
+                      readOnly
+                      className="opacity-50 cursor-default"
                     />
                   </FieldRow>
                 </TabsContent>
@@ -810,32 +1108,126 @@ export default function OutletsListPage() {
                     <Input
                       value={draft.address ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, address: e.target.value || null }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldCity")}>
                     <Input
                       value={draft.city ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, city: e.target.value || null }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldZip")}>
                     <Input
                       value={draft.zip ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, zip: e.target.value || null }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldState")}>
                     <Input
                       value={draft.state ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, state: e.target.value || null }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
                   <FieldRow label={t("fieldCountry")}>
                     <Input
                       value={draft.country ?? ""}
                       onChange={(e) => setDraft((d) => ({ ...d, country: e.target.value || null }))}
+                      disabled={isLocked}
                     />
                   </FieldRow>
+                </TabsContent>
+
+                {/* ─ Constraints ─ */}
+                <TabsContent value="tab8" className="mt-4 px-2">
+                  {constraintsLoading ? (
+                    <div className="flex items-center justify-center h-48 text-sm text-[var(--muted-foreground)]">Loading…</div>
+                  ) : constraintsDraft.length === 0 ? (
+                    <div className="flex items-center justify-center h-48 text-sm text-[var(--muted-foreground)]">{t("constraintsNoData")}</div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="border border-[var(--border)] rounded-lg overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="hover:bg-transparent">
+                              <TableHead className="text-xs w-28">{t("constraintsWeekday")}</TableHead>
+                              <TableHead className="text-xs text-center w-20">{t("constraintsStatus")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsCost")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsProfit")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsFixed")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsMinimum")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsMaximum")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsAdded")}</TableHead>
+                              <TableHead className="text-xs text-right">{t("constraintsAddedPct")}</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {constraintsDraft.map((wd) => (
+                              <TableRow key={wd.weekday}>
+                                <TableCell className="text-xs font-medium">{WEEKDAY_NAMES[wd.weekday]}</TableCell>
+                                <TableCell className="text-center p-1">
+                                  <Badge
+                                    variant={wd.open ? "default" : "secondary"}
+                                    className={cn(
+                                      "text-xs",
+                                      !isLocked && "cursor-pointer hover:opacity-80",
+                                    )}
+                                    onClick={() => {
+                                      if (!isLocked) {
+                                        setConstraintsDraft((prev) =>
+                                          prev.map((w) =>
+                                            w.weekday === wd.weekday ? { ...w, open: !w.open } : w
+                                          )
+                                        )
+                                      }
+                                    }}
+                                  >
+                                    {wd.open ? t("constraintsOpen") : t("constraintsClosed")}
+                                  </Badge>
+                                </TableCell>
+                                {(["cost_per_unit", "profit_per_unit", "fixed", "minimum", "maximum", "add", "add_pct"] as const).map((field) => (
+                                  <TableCell key={field} className="p-1 text-right">
+                                    <Input
+                                      type="number"
+                                      step="any"
+                                      value={wd[field] ?? ""}
+                                      onChange={(e) => updateConstraintField(wd.weekday, field, e.target.value)}
+                                      className="h-7 text-xs text-right tabular-nums w-24 ml-auto bg-transparent border-none shadow-none"
+                                      disabled={isLocked}
+                                    />
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      {constraintsDirty && !isLocked && (
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="secondary" size="sm" className="cursor-pointer"
+                            onClick={() => {
+                              if (constraintsData) setConstraintsDraft(constraintsData.weekdays.map((w) => ({ ...w })))
+                            }}
+                          >
+                            {t("cancelChanges")}
+                          </Button>
+                          <Button
+                            size="sm" className="cursor-pointer"
+                            disabled={constraintsMutation.isPending}
+                            onClick={() => {
+                              if (selected) constraintsMutation.mutate({ id: selected.id, weekdays: constraintsDraft })
+                            }}
+                          >
+                            {constraintsMutation.isPending ? t("saving") : t("saveChanges")}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </TabsContent>
 
                 {/* ─ Information ─ */}
@@ -852,19 +1244,21 @@ export default function OutletsListPage() {
                       >
                         <span className="text-xs font-medium text-[var(--muted-foreground)] w-40 shrink-0 truncate">{info.key}</span>
                         <span className="text-sm flex-1 truncate">{info.value ?? "—"}</span>
-                        <button
-                          onClick={() => setDeleteInfoId(info.id)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-[var(--muted-foreground)] hover:text-destructive cursor-pointer"
-                          aria-label="Remove field"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {!isLocked && (
+                          <button
+                            onClick={() => setDeleteInfoId(info.id)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-[var(--muted-foreground)] hover:text-destructive cursor-pointer"
+                            aria-label="Remove field"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
 
                   {/* Add info inline form */}
-                  {addInfoMode ? (
+                  {!isLocked && addInfoMode ? (
                     <div className="rounded-md border border-border p-3 space-y-3">
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">
@@ -901,7 +1295,7 @@ export default function OutletsListPage() {
                         </Button>
                       </div>
                     </div>
-                  ) : (
+                  ) : !isLocked ? (
                     <Button
                       variant="outline" size="sm" className="h-7 gap-1.5 text-xs cursor-pointer"
                       onClick={() => setAddInfoMode(true)}
@@ -909,7 +1303,7 @@ export default function OutletsListPage() {
                       <Plus className="h-3 w-3" />
                       {t("addInfoButton")}
                     </Button>
-                  )}
+                  ) : null}
                 </TabsContent>
 
                 {/* ─ Statistics ─ */}
@@ -1096,6 +1490,216 @@ export default function OutletsListPage() {
                   </TooltipProvider>
                 </TabsContent>
 
+                {/* ─ Data ─ */}
+                <TabsContent value="tab7" className="mt-4 px-2">
+                  {salesLoading ? (
+                    <div className="flex items-center justify-center h-48 text-sm text-[var(--muted-foreground)]">Loading…</div>
+                  ) : dataTableRows.length === 0 ? (
+                    <div className="flex items-center justify-center h-48 text-sm text-[var(--muted-foreground)]">{t("dataNoData")}</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {/* Table toolbar */}
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <div className="relative flex-1 max-w-xs">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                          <Input
+                            value={dataSearch}
+                            onChange={(e) => { setDataSearch(e.target.value); setDataPage(1) }}
+                            placeholder={t("dataSearchPlaceholder")}
+                            className="pl-8 h-8 text-xs"
+                          />
+                        </div>
+
+                        <ExportMenu
+                          data={dataFilteredTable}
+                          columns={dataExportColumns}
+                          filename={`outlet-data-${selected?.name ?? "outlet"}`}
+                        />
+
+                        <span className="text-xs text-[var(--muted-foreground)] ml-auto">
+                          {dataChecked.size > 0 && (
+                            <span className="mr-3">{t("dataSelectedCount", { selected: dataChecked.size })}</span>
+                          )}
+                          {t("dataShowing", {
+                            from: (dataSafePage - 1) * DATA_ITEMS_PER_PAGE + 1,
+                            to: Math.min(dataSafePage * DATA_ITEMS_PER_PAGE, dataFilteredTable.length),
+                            total: dataFilteredTable.length,
+                          })}
+                        </span>
+                      </div>
+
+                      {/* Data table */}
+                      <div className="border border-[var(--border)] rounded-lg overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="hover:bg-transparent">
+                              <TableHead className="w-10 px-3">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <div className="flex items-center cursor-pointer">
+                                      <Checkbox
+                                        checked={dataAllChecked}
+                                        onCheckedChange={toggleDataAllChecked}
+                                        className="cursor-pointer"
+                                      />
+                                      <ChevronDown className="h-3 w-3 ml-0.5 opacity-50" />
+                                    </div>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="start" className="min-w-[140px]">
+                                    <DropdownMenuItem onClick={toggleDataAllChecked} className="cursor-pointer text-xs">
+                                      {t("dataSelectAll")}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const n = new Set(dataChecked)
+                                        dataFilteredTable.filter((r) => dataStarred.has(r.date)).forEach((r) => n.add(r.date))
+                                        setDataChecked(n)
+                                      }}
+                                      className="cursor-pointer text-xs"
+                                    >
+                                      {t("dataStarred")}
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </TableHead>
+                              <TableHead className="cursor-pointer select-none text-xs" onClick={() => handleDataSort("date")}>
+                                <span className="flex items-center">{t("dataDate")}<DataSortIcon field="date" /></span>
+                              </TableHead>
+                              <TableHead className="cursor-pointer select-none text-xs" onClick={() => handleDataSort("weekday")}>
+                                <span className="flex items-center">{t("dataWeekday")}<DataSortIcon field="weekday" /></span>
+                              </TableHead>
+                              <TableHead className="cursor-pointer select-none text-xs text-right" onClick={() => handleDataSort("quantity")}>
+                                <span className="flex items-center justify-end">{t("dataQuantity")}<DataSortIcon field="quantity" /></span>
+                              </TableHead>
+                              <TableHead className="cursor-pointer select-none text-xs text-right" onClick={() => handleDataSort("sold")}>
+                                <span className="flex items-center justify-end">{t("dataSold")}<DataSortIcon field="sold" /></span>
+                              </TableHead>
+                              <TableHead className="cursor-pointer select-none text-xs text-right" onClick={() => handleDataSort("returned")}>
+                                <span className="flex items-center justify-end">{t("dataReturned")}<DataSortIcon field="returned" /></span>
+                              </TableHead>
+                              <TableHead className="w-10 px-3" />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {dataPagedRows.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={7} className="text-center text-xs text-[var(--muted-foreground)] py-8">
+                                  {t("dataNoResults")}
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              dataPagedRows.map((row) => {
+                                const isChecked = dataChecked.has(row.date)
+                                const isStarred = dataStarred.has(row.date)
+                                return (
+                                  <TableRow
+                                    key={row.date}
+                                    className={cn(
+                                      "cursor-pointer",
+                                      isChecked && "bg-[var(--accent)]/30",
+                                    )}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault()
+                                      toggleDataStar(row.date)
+                                    }}
+                                  >
+                                    <TableCell className="px-3">
+                                      <Checkbox
+                                        checked={isChecked}
+                                        onCheckedChange={() => toggleDataCheck(row.date)}
+                                        className="cursor-pointer"
+                                      />
+                                    </TableCell>
+                                    <TableCell className="text-xs font-medium">{row.date}</TableCell>
+                                    <TableCell className="text-xs">{row.weekday}</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                      {row.quantity != null ? row.quantity.toLocaleString() : "\u2014"}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                      {row.sold.toLocaleString()}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                      {row.returned != null ? row.returned.toLocaleString() : "\u2014"}
+                                    </TableCell>
+                                    <TableCell className="px-3">
+                                      <button
+                                        onClick={() => toggleDataStar(row.date)}
+                                        className="cursor-pointer"
+                                      >
+                                        <Star
+                                          className={cn(
+                                            "h-3.5 w-3.5 transition-colors",
+                                            isStarred
+                                              ? "fill-amber-400 text-amber-400"
+                                              : "text-[var(--muted-foreground)] hover:text-amber-400",
+                                          )}
+                                        />
+                                      </button>
+                                    </TableCell>
+                                  </TableRow>
+                                )
+                              })
+                            )}
+                          </TableBody>
+                        </Table>
+                        {dataChecked.size > 0 && (
+                          <div className="flex items-center justify-between px-4 py-2 border-t border-[var(--border)] bg-[var(--muted)]/30">
+                            <span className="text-xs text-[var(--muted-foreground)]">
+                              {t("dataSelectedCount", { selected: dataChecked.size })}
+                            </span>
+                            <Button
+                              variant="ghost" size="icon" className="h-7 w-7 cursor-pointer"
+                              onClick={() => setDataShowOnlySelected((v) => !v)}
+                              title={dataShowOnlySelected ? t("dataShowAll") : t("dataShowSelected")}
+                            >
+                              <Focus className={cn("h-4 w-4", dataShowOnlySelected && "text-primary")} />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Pagination */}
+                      {dataTotalPages > 1 && (
+                        <div className="flex justify-center">
+                          <Pagination>
+                            <PaginationContent>
+                              <PaginationItem>
+                                <PaginationPrevious
+                                  onClick={() => setDataPage(Math.max(1, dataSafePage - 1))}
+                                  className={cn("cursor-pointer", dataSafePage === 1 && "pointer-events-none opacity-50")}
+                                />
+                              </PaginationItem>
+                              {dataPaginationPages.map((p, i) =>
+                                p === "ellipsis" ? (
+                                  <PaginationItem key={`e-${i}`}>
+                                    <PaginationEllipsis />
+                                  </PaginationItem>
+                                ) : (
+                                  <PaginationItem key={p}>
+                                    <PaginationLink
+                                      onClick={() => setDataPage(p)}
+                                      isActive={p === dataSafePage}
+                                      className="cursor-pointer"
+                                    >
+                                      {p}
+                                    </PaginationLink>
+                                  </PaginationItem>
+                                ),
+                              )}
+                              <PaginationItem>
+                                <PaginationNext
+                                  onClick={() => setDataPage(Math.min(dataTotalPages, dataSafePage + 1))}
+                                  className={cn("cursor-pointer", dataSafePage === dataTotalPages && "pointer-events-none opacity-50")}
+                                />
+                              </PaginationItem>
+                            </PaginationContent>
+                          </Pagination>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </TabsContent>
+
                 {/* ─ Actions ─ */}
                 <TabsContent value="tab4" className="max-w-2xl mt-6 px-4">
                   <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
@@ -1106,6 +1710,7 @@ export default function OutletsListPage() {
                     <Button
                       variant="destructive" size="sm" className="shrink-0 cursor-pointer"
                       onClick={openDeleteDialog}
+                      disabled={isLocked}
                     >
                       <Trash2 className="h-3.5 w-3.5 mr-1.5" />
                       {t("deleteButton")}
@@ -1118,7 +1723,7 @@ export default function OutletsListPage() {
           </div>
 
           {/* ── Save bar ── */}
-          {isDirty && (
+          {isDirty && !isLocked && (
             <div className="shrink-0 border-t flex items-center justify-end gap-2 px-4 py-2 bg-background">
               <Button variant="secondary" size="sm" onClick={handleCancelDraft} className="cursor-pointer">
                 {t("cancelChanges")}

@@ -65,6 +65,22 @@ class EngineRegistry:
         except ImportError:
             pass  # AutoGluon not available
 
+        # Register direct Chronos 2.0 engine (no AutoGluon wrapper)
+        try:
+            from gorm_ai.prediction.engines.chronos2_direct_engine import Chronos2DirectEngine
+
+            self.register(PredictionEngineEnum.CHRONOS2, Chronos2DirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
+        # Register direct Chronos-Bolt engine (no AutoGluon wrapper)
+        try:
+            from gorm_ai.prediction.engines.chronos_bolt_direct_engine import ChronosBoltDirectEngine
+
+            self.register(PredictionEngineEnum.CHRONOS_BOLT, ChronosBoltDirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
 
     def register(
         self,
