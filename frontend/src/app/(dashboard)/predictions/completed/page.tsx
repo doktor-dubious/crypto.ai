@@ -7,6 +7,8 @@ import { useTranslations } from "next-intl"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -74,6 +76,33 @@ function formatDateTime(iso: string) {
   })
 }
 
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  })
+}
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  if (min < 60) return sec > 0 ? `${min}m ${sec}s` : `${min}m`
+  const hr = Math.floor(min / 60)
+  const remMin = min % 60
+  return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`
+}
+
+function formatExecutionPeriod(startedAt: string | null, completedAt: string | null) {
+  if (!startedAt && !completedAt) return "—"
+  const start = startedAt ? formatTime(startedAt) : "?"
+  const end = completedAt ? formatTime(completedAt) : "?"
+  const period = startedAt && completedAt
+    ? ` (${formatDuration(new Date(completedAt).getTime() - new Date(startedAt).getTime())})`
+    : ""
+  return `${start} – ${end}${period}`
+}
+
 function formatNumber(n: number | null | undefined): string {
   if (n == null) return "—"
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n)
@@ -125,6 +154,7 @@ export default function PredictionsCompletedPage() {
   const [currentPage, setCurrentPage] = useState(1)
 
   // ── Detail pane state (persisted)
+  const [detailMaximized, setDetailMaximized] = useState(() => loadPredCJson<boolean>(cid, "detailMaximized", false))
   const [selectedPredId, setSelectedPredId] = useState<string | null>(() => loadPredCJson<string | null>(cid, "selectedPred", null))
   const [selected, setSelected] = useState<CompletedPredictionResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadPredCJson<string>(cid, "activeTab", "tab1"))
@@ -155,6 +185,7 @@ export default function PredictionsCompletedPage() {
   useEffect(() => { if (cid) savePredCJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
   useEffect(() => { if (cid) savePredCJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) savePredCJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) savePredCJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
   useEffect(() => { if (cid) savePredCJson(cid, "selectedPred", selected?.id ?? null) }, [cid, selected?.id])
 
   // ── Restore selected prediction from persisted ID when list loads ──────────
@@ -327,7 +358,7 @@ export default function PredictionsCompletedPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-end px-4 py-2 shrink-0 bg-background">
           <div className="relative">
@@ -425,7 +456,7 @@ export default function PredictionsCompletedPage() {
                       {prediction.strategy_name ?? <span className="text-[var(--muted-foreground)] italic">{t("noStrategy")}</span>}
                     </TableCell>
                     <TableCell className="text-sm">{prediction.date ? formatDate(prediction.date) : "—"}</TableCell>
-                    <TableCell className="text-sm text-[var(--muted-foreground)]">{formatDateTime(prediction.created_at)}</TableCell>
+                    <TableCell className="text-sm text-[var(--muted-foreground)]">{formatExecutionPeriod(prediction.started_at, prediction.completed_at)}</TableCell>
                     <TableCell>
                       {isDowngrade(prediction)
                         ? <Badge variant="warning" className="text-xs">{t("statusDowngrade")}</Badge>
@@ -523,6 +554,13 @@ export default function PredictionsCompletedPage() {
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabAnalytics")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabSpecs")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabActions")}</TabsTrigger>
+                <div
+                  className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setDetailMaximized((v) => !v)}
+                  aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                >
+                  {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                </div>
               </TabsList>
               <div
                 className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
@@ -550,7 +588,7 @@ export default function PredictionsCompletedPage() {
                 <StatRow label={t("fieldOutletGroup")} value={selected.outlet_group_name ?? "—"} />
                 <StatRow label={t("fieldStrategyName")} value={selected.strategy_name ?? <span className="italic text-[var(--muted-foreground)]">{t("noStrategy")}</span>} />
                 <StatRow label={t("fieldPredictionDate")} value={selected.date ? formatDate(selected.date) : "—"} />
-                <StatRow label={t("fieldRunDate")} value={formatDateTime(selected.created_at)} />
+                <StatRow label={t("fieldRunDate")} value={formatExecutionPeriod(selected.started_at, selected.completed_at)} />
               </TabsContent>
 
               {/* ─ Analytics ─ */}

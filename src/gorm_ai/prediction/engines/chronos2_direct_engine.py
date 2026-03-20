@@ -8,7 +8,7 @@ regression on residuals (same approach as TimesFM).
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -60,17 +60,45 @@ class Chronos2DirectEngine(PredictionEngine):
         self._batch_size: int = BATCH_SIZE
         self._precision: str = "bfloat16"
 
+    # Maps short model names (as stored in DB) to full HuggingFace model IDs.
+    _MODEL_ALIASES: dict[str, str] = {
+        "chronos-t5-tiny": "amazon/chronos-t5-tiny",
+        "chronos-t5-mini": "amazon/chronos-t5-mini",
+        "chronos-t5-small": "amazon/chronos-t5-small",
+        "chronos-t5-base": "amazon/chronos-t5-base",
+        "chronos-t5-large": "amazon/chronos-t5-large",
+        "chronos-bolt-tiny": "amazon/chronos-bolt-tiny",
+        "chronos-bolt-mini": "amazon/chronos-bolt-mini",
+        "chronos-bolt-small": "amazon/chronos-bolt-small",
+        "chronos-bolt-base": "amazon/chronos-bolt-base",
+    }
+
+    def _resolve_model_id(self, value: str) -> str:
+        """Resolve a DB parameter value to a HuggingFace model ID.
+
+        Handles formats like:
+          "amazon/chronos-t5-tiny"       → passed through
+          "chronos-t5-tiny"              → "amazon/chronos-t5-tiny"
+          "chronos-t5-tiny (8M)"         → "amazon/chronos-t5-tiny"
+        """
+        # Strip parenthetical suffix: "chronos-t5-tiny (8M)" → "chronos-t5-tiny"
+        name = value.split("(")[0].strip()
+        if "/" in name:
+            return name
+        return self._MODEL_ALIASES.get(name, f"amazon/{name}")
+
     def apply_parameters(self, params: dict[str, str]) -> None:
         """Apply DB-driven parameters before the first prediction.
 
-        Supported parameter names (case-insensitive):
-          model      – HuggingFace model ID (e.g. "amazon/chronos-t5-base")
-          samples    – number of Monte-Carlo sample paths (int)
-          precision  – torch dtype: float32 | bfloat16 | float16
-          batch_size – outlets per forward pass (int)
+        Supported parameter names:
+          model / submodel – HuggingFace model ID or short name
+          samples          – number of Monte-Carlo sample paths (int)
+          precision        – torch dtype: float32 | bfloat16 | float16
+          batch_size       – outlets per forward pass (int)
         """
-        if "model" in params:
-            self._model_id = params["model"]
+        model_value = params.get("model") or params.get("submodel")
+        if model_value:
+            self._model_id = self._resolve_model_id(model_value)
         if "samples" in params:
             self._num_samples = int(params["samples"])
         if "precision" in params:
@@ -274,15 +302,28 @@ class Chronos2DirectEngine(PredictionEngine):
                     preds, quantiles, item["historical_data"], future_dates,
                     strength=wpc.get("strength", 1.0) if isinstance(wpc, dict) else 1.0,
                     threshold=wpc.get("threshold", 0.0) if isinstance(wpc, dict) else 0.0,
+                    method=wpc.get("method", 1) if isinstance(wpc, dict) else 1,
                 )
                 lower = quantiles[:, 0]
                 upper = quantiles[:, -1]
+
+            va = item.get("variation_adjustment", {})
+            weekday_cvs = None
+            if va.get("enabled") if isinstance(va, dict) else va:
+                days = (
+                    va.get("history_days", 365)
+                    if isinstance(va, dict) else 365
+                )
+                weekday_cvs = self._compute_weekday_cvs(
+                    item["historical_data"], days,
+                )
 
             day_results = []
             for idx, pred_date in enumerate(future_dates):
                 economic_optimal = self._compute_economic_optimal(
                     pred_date, idx, quantiles,
                     item.get("covariates"), holding_rate, protection_days,
+                    weekday_cvs=weekday_cvs,
                 )
                 day_results.append(PredictionResult(
                     date=pred_date,
@@ -291,6 +332,8 @@ class Chronos2DirectEngine(PredictionEngine):
                     upper_bound=float(upper[idx]),
                     confidence=0.80,
                     economic_optimal=economic_optimal,
+                    quantiles=[float(quantiles[idx, j]) for j in range(quantiles.shape[1])],
+                    cv=weekday_cvs.get(pred_date.weekday()) if weekday_cvs else None,
                 ))
             output.append(day_results)
 
@@ -443,8 +486,14 @@ class Chronos2DirectEngine(PredictionEngine):
         future_dates: list[date],
         strength: float = 1.0,
         threshold: float = 0.0,
+        method: int = 1,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Redistribute weekly total to match historical weekday proportions."""
+        """Redistribute weekly total to match historical weekday proportions.
+
+        Args:
+            method: 1 = additive (shift quantiles by same offset as point prediction,
+                    preserving spread); 2 = multiplicative (scale everything by ratio).
+        """
         from collections import defaultdict
 
         recent = historical_data[-56:]
@@ -494,8 +543,13 @@ class Chronos2DirectEngine(PredictionEngine):
                 continue
             ratio = 1.0 + strength * (raw_ratio - 1.0)
             for idx in indices:
-                corrected_pred[idx] *= ratio
-                corrected_q[idx] *= ratio
+                if method == 2:
+                    corrected_pred[idx] *= ratio
+                    corrected_q[idx] *= ratio
+                else:
+                    offset = predictions[idx] * (ratio - 1.0)
+                    corrected_pred[idx] += offset
+                    corrected_q[idx] += offset
 
         return corrected_pred, corrected_q
 
@@ -509,8 +563,13 @@ class Chronos2DirectEngine(PredictionEngine):
         covariates: dict[str, dict[date, float]] | None,
         holding_rate: float,
         protection_days: int,
+        weekday_cvs: dict[int, float] | None = None,
     ) -> float | None:
-        """Newsvendor-optimal draw using critical fractile."""
+        """Newsvendor-optimal draw using critical fractile.
+
+        When weekday_cvs is provided, τ is adjusted upward for
+        high-variation weekdays to protect against stockouts.
+        """
         if all_quantiles is None or covariates is None:
             return None
         selling_price = covariates.get("profit_per_unit", {}).get(pred_date, 0.0)
@@ -518,5 +577,41 @@ class Chronos2DirectEngine(PredictionEngine):
         if selling_price <= 0 or production_cost <= 0 or selling_price <= production_cost:
             return None
         tau = (selling_price - production_cost) / selling_price
+
+        if weekday_cvs is not None:
+            cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
+            tau = tau + cv * (1.0 - tau)
+
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(all_quantiles[day_index, nearest_idx])
+
+    @staticmethod
+    def _compute_weekday_cvs(
+        historical_data: list[dict],
+        history_days: int = 365,
+    ) -> dict[int, float]:
+        """Compute coefficient of variation per weekday from recent history."""
+        from collections import defaultdict
+
+        if not historical_data:
+            return {}
+
+        cutoff = historical_data[-1]["date"] - timedelta(days=history_days)
+        recent = [r for r in historical_data if r["date"] > cutoff]
+
+        by_dow: dict[int, list[float]] = defaultdict(list)
+        for r in recent:
+            by_dow[r["date"].weekday()].append(float(r["value"]))
+
+        cvs: dict[int, float] = {}
+        for dow, vals in by_dow.items():
+            if len(vals) < 2:
+                cvs[dow] = 0.0
+                continue
+            arr = np.array(vals)
+            mean = float(np.mean(arr))
+            if mean <= 0:
+                cvs[dow] = 0.0
+                continue
+            cvs[dow] = float(np.std(arr, ddof=1) / mean)
+        return cvs

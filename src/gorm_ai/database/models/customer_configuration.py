@@ -51,6 +51,23 @@ class CustomerConfiguration(Base):
     weekday_profile_correction: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     weekday_profile_correction_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
     weekday_profile_correction_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 1=additive, 2=multiplicative; None = inherit
+    weekday_profile_correction_method: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    variation_adjustment: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True,
+    )
+    variation_history_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    open_monday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_tuesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_wednesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_thursday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_friday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_saturday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    open_sunday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     prediction_engine_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("prediction_engine.id", ondelete="SET NULL"),

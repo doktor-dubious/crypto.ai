@@ -5,8 +5,12 @@ import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon,
 } from "lucide-react"
+import { format } from "date-fns"
+import type { DateRange } from "react-day-picker"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -27,13 +31,15 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { simulationsApi, customerConfigurationApi, type CompletedSimulationResponse, type ZeroShotResponse, type ModelFitOutlet, type ModelFitResponse, type FilteredOverviewResponse, type AccuracyStatsResponse } from "@/lib/api"
+import { simulationsApi, customerConfigurationApi, outletGroupsApi, type CompletedSimulationResponse, type ZeroShotResponse, type ModelFitOutlet, type ModelFitResponse, type FilteredOverviewResponse, type AccuracyStatsResponse, type DataDumpRow, type DataDumpResponse } from "@/lib/api"
 import {
   Tooltip as UiTooltip,
   TooltipContent as UiTooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
@@ -221,12 +227,13 @@ interface OverviewSectionData {
   g4: number | null
 }
 
-function OverviewSection({ label, data, t, currencySymbol, actual }: {
+function OverviewSection({ label, data, t, currencySymbol, actual, pct }: {
   label: string
   data: OverviewSectionData
   t: TFunc
   currencySymbol: string
   actual?: { delivered: number | null; sold: number | null; returned: number | null } | null
+  pct?: { sold_out_pct: number | null; actual_sold_out_pct: number | null; default_cost: number | null; default_profit: number | null } | null
 }) {
   const thBase = "px-2 py-1.5 text-center text-[11px] font-medium text-[var(--muted-foreground)] border border-border/40 whitespace-nowrap"
   const tdBase = "px-2 py-1.5 text-center text-sm tabular-nums border border-border/40"
@@ -247,149 +254,178 @@ function OverviewSection({ label, data, t, currencySymbol, actual }: {
   const actualSellThrough = actual?.delivered && actual.delivered > 0
     ? ((actual.sold ?? 0) / actual.delivered * 100).toFixed(1)
     : null
+  const idealReturnRate = pct?.default_cost != null && pct?.default_profit != null && pct.default_profit > 0
+    ? (pct.default_cost / pct.default_profit * 100).toFixed(1)
+    : null
+
+  const thInfo = (label: string, info: string) => (
+    <span className="inline-flex items-center gap-0.5 justify-center">
+      {label}
+      <UiTooltip>
+        <TooltipTrigger asChild>
+          <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
+        </TooltipTrigger>
+        <UiTooltipContent side="top" className="max-w-xs text-xs">
+          {info}
+        </UiTooltipContent>
+      </UiTooltip>
+    </span>
+  )
 
   return (
-    <div className="space-y-3">
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr>
-              <th className={cn(thBase, "text-left w-12")} />
-              <th colSpan={3} className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewUnits")}</th>
-              <th colSpan={4} className={cn(thBase, "bg-[var(--muted)]/20")}>{t("overviewProfit")}</th>
-            </tr>
-            <tr>
-              <th className={cn(thBase, "text-left")} />
-              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColDelivered")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColSold")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColReturned")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG1")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG2")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG3")}</th>
-              <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG4")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {actual && (
+    <div>
+      <TooltipProvider delayDuration={200}>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead>
               <tr>
-                <td className={tdLabel}>{t("overviewRowActual")}</td>
-                <td className={tdBase}>{formatNumber(actual.delivered)}</td>
-                <td className={tdBase}>{formatNumber(actual.sold)}</td>
-                <td className={tdBase}>{formatNumber(actual.returned)}</td>
+                <th className={cn(thBase, "text-left w-12")} />
+                <th colSpan={3} className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewUnits")}</th>
+                <th colSpan={4} className={cn(thBase, "bg-[var(--muted)]/10")}>{t("overviewPct")}</th>
+                <th colSpan={4} className={cn(thBase, "bg-[var(--muted)]/20")}>{t("overviewProfit")}</th>
+              </tr>
+              <tr>
+                <th className={cn(thBase, "text-left")} />
+                <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColDelivered")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColSold")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/40")}>{t("overviewColReturned")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/10")}>{thInfo(t("overviewColSoldOut"), t("overviewColSoldOutInfo"))}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/10")}>{thInfo(t("overviewSellThrough"), t("overviewSellThroughInfo"))}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/10")}>{thInfo(t("overviewReturnRate"), t("overviewReturnRateInfo"))}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/10")}>{thInfo(t("overviewColIdealReturn"), t("overviewColIdealReturnInfo"))}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG1")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG2")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG3")}</th>
+                <th className={cn(thBase, "bg-[var(--muted)]/20 max-w-[120px] whitespace-normal leading-tight")}>{t("overviewColG4")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {actual && (
+                <tr>
+                  <td className={tdLabel}>{t("overviewRowActual")}</td>
+                  <td className={tdBase}>{formatNumber(actual.delivered)}</td>
+                  <td className={tdBase}>{formatNumber(actual.sold)}</td>
+                  <td className={tdBase}>{formatNumber(actual.returned)}</td>
+                  <td className={tdBase}>{pct?.actual_sold_out_pct != null ? `${pct.actual_sold_out_pct}%` : "—"}</td>
+                  <td className={tdBase}>{actualSellThrough != null ? `${actualSellThrough}%` : "—"}</td>
+                  <td className={tdBase}>{actualReturnRate != null ? `${actualReturnRate}%` : "—"}</td>
+                  <td className={tdBase}>{idealReturnRate != null ? `${idealReturnRate}%` : "—"}</td>
+                  <td className={tdBase} />
+                  <td className={tdBase} />
+                  <td className={tdBase} />
+                  <td className={tdBase} />
+                </tr>
+              )}
+              <tr>
+                <td className={tdLabel}>{t("overviewRowTotal")}</td>
+                <td className={tdBase}>{formatNumber(data.total_delivered)}</td>
+                <td className={tdBase}>{formatNumber(data.total_sold)}</td>
+                <td className={tdBase}>{formatNumber(data.total_returned)}</td>
+                <td className={tdBase}>{pct?.sold_out_pct != null ? `${pct.sold_out_pct}%` : "—"}</td>
+                <td className={tdBase}>{sellThrough != null ? `${sellThrough}%` : "—"}</td>
+                <td className={tdBase}>{returnRate != null ? `${returnRate}%` : "—"}</td>
+                <td className={tdBase}>{idealReturnRate != null ? `${idealReturnRate}%` : "—"}</td>
+                <td className={cn(tdBase, data.g1 != null && data.g1 < 0 && "text-red-500")}>{formatCurrency(data.g1, currencySymbol)}</td>
+                <td className={cn(tdBase, data.g2 != null && data.g2 < 0 && "text-red-500")}>{formatCurrency(data.g2, currencySymbol)}</td>
+                <td className={cn(tdBase, data.g3 != null && data.g3 < 0 && "text-red-500")}>{formatCurrency(data.g3, currencySymbol)}</td>
+                <td className={cn(tdBase, data.g4 != null && data.g4 < 0 && "text-red-500")}>{formatCurrency(data.g4, currencySymbol)}</td>
+              </tr>
+              <tr>
+                <td className={tdLabel}>{t("overviewRowDelta")}</td>
+                <td className={tdBase}>{formatNumber(data.diff_delivered)}</td>
+                <td className={cn(tdBase, "text-red-500 font-medium")}>{formatNumber(data.lost_sale)}</td>
+                <td className={tdBase}>{formatNumber(data.diff_return)}</td>
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
                 <td className={tdBase} />
                 <td className={tdBase} />
                 <td className={tdBase} />
                 <td className={tdBase} />
               </tr>
-            )}
-            <tr>
-              <td className={tdLabel}>{t("overviewRowTotal")}</td>
-              <td className={tdBase}>{formatNumber(data.total_delivered)}</td>
-              <td className={tdBase}>{formatNumber(data.total_sold)}</td>
-              <td className={tdBase}>{formatNumber(data.total_returned)}</td>
-              <td className={cn(tdBase, data.g1 != null && data.g1 < 0 && "text-red-500")}>{formatCurrency(data.g1, currencySymbol)}</td>
-              <td className={cn(tdBase, data.g2 != null && data.g2 < 0 && "text-red-500")}>{formatCurrency(data.g2, currencySymbol)}</td>
-              <td className={cn(tdBase, data.g3 != null && data.g3 < 0 && "text-red-500")}>{formatCurrency(data.g3, currencySymbol)}</td>
-              <td className={cn(tdBase, data.g4 != null && data.g4 < 0 && "text-red-500")}>{formatCurrency(data.g4, currencySymbol)}</td>
-            </tr>
-            <tr>
-              <td className={tdLabel}>{t("overviewRowDelta")}</td>
-              <td className={tdBase}>{formatNumber(data.diff_delivered)}</td>
-              <td className={cn(tdBase, "text-red-500 font-medium")}>{formatNumber(data.lost_sale)}</td>
-              <td className={tdBase}>{formatNumber(data.diff_return)}</td>
-              <td className={tdBase} />
-              <td className={tdBase} />
-              <td className={tdBase} />
-              <td className={tdBase} />
-            </tr>
-            <tr>
-              <td className={tdLabel}>{t("overviewRowDelta")}</td>
-              <td className={tdBase} />
-              <td className={tdBase}>{formatNumber(data.more_sale)}</td>
-              <td className={tdBase} />
-              <td className={tdBase} />
-              <td className={tdBase} />
-              <td className={tdBase} />
-              <td className={tdBase} />
-            </tr>
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-border/60">
-              <td colSpan={4} className={cn(tdLabel, "text-right font-semibold border-t-2 border-border/60")}>
-                {t("overviewRowResult")}
-              </td>
-              <td colSpan={4} className={cn(tdBase, "text-right font-semibold border-t-2 border-border/60", hasAny && total < 0 && "text-red-500")}>
-                {hasAny ? formatCurrency(total, currencySymbol) : "—"}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      {(returnRate || actualReturnRate) && (
-        <TooltipProvider delayDuration={200}>
-          <div className="flex flex-col gap-1 text-xs text-[var(--muted-foreground)]">
-            {(actualReturnRate || actualSellThrough) && (
-              <div className="flex items-center gap-4">
-                {actualReturnRate && (
-                  <span>{t("overviewActualReturnRate")}: <span className="font-medium text-foreground">{actualReturnRate}%</span></span>
-                )}
-                {actualSellThrough && (
-                  <span>{t("overviewActualSellThrough")}: <span className="font-medium text-foreground">{actualSellThrough}%</span></span>
-                )}
-              </div>
-            )}
-            <div className="flex items-center gap-4">
-              {returnRate && (
-                <span className="inline-flex items-center gap-1">
-                  {t("overviewReturnRate")}
-                  <UiTooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
-                    </TooltipTrigger>
-                    <UiTooltipContent side="top" className="max-w-xs text-xs">
-                      {t("overviewReturnRateInfo")}
-                    </UiTooltipContent>
-                  </UiTooltip>
-                  : <span className="font-medium text-foreground">{returnRate}%</span>
-                </span>
-              )}
-              {sellThrough && (
-                <span className="inline-flex items-center gap-1">
-                  {t("overviewSellThrough")}
-                  <UiTooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" />
-                    </TooltipTrigger>
-                    <UiTooltipContent side="top" className="max-w-xs text-xs">
-                      {t("overviewSellThroughInfo")}
-                    </UiTooltipContent>
-                  </UiTooltip>
-                  : <span className="font-medium text-foreground">{sellThrough}%</span>
-                </span>
-              )}
-            </div>
-          </div>
-        </TooltipProvider>
-      )}
+              <tr>
+                <td className={tdLabel}>{t("overviewRowDelta")}</td>
+                <td className={tdBase} />
+                <td className={tdBase}>{formatNumber(data.more_sale)}</td>
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+                <td className={tdBase} />
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-border/60">
+                <td colSpan={8} className={cn(tdLabel, "text-right font-semibold border-t-2 border-border/60")}>
+                  {t("overviewRowResult")}
+                </td>
+                <td colSpan={4} className={cn(tdBase, "text-right font-semibold border-t-2 border-border/60", hasAny && total < 0 && "text-red-500")}>
+                  {hasAny ? formatCurrency(total, currencySymbol) : "—"}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </TooltipProvider>
     </div>
   )
 }
 
 // ─── Model Fit ────────────────────────────────────────────────────────────────
 
-type ModelFitSeriesKey = "delivered" | "eo" | "predicted" | "upper_bound" | "lower_bound"
+type ModelFitSeriesKey =
+  | "delivered" | "eo" | "predicted" | "upper_bound" | "lower_bound"
+  | "sim_sold" | "sim_returned" | "sim_profit"
+  | "actual_delivered" | "actual_sold" | "actual_returned" | "actual_profit"
+  | "diff_delivered" | "diff_sold" | "diff_returned" | "diff_profit"
 
-const MODEL_FIT_SERIES: { key: ModelFitSeriesKey; label: string; color: string }[] = [
-  { key: "delivered",   label: "Delivered",          color: "hsl(var(--chart-2, 160 60% 45%))" },
-  { key: "eo",          label: "Economical Optimal",  color: "hsl(var(--chart-3, 30 80% 55%))"  },
-  { key: "predicted",   label: "Predicted",           color: "hsl(var(--chart-4, 280 65% 60%))" },
-  { key: "upper_bound", label: "Upper Bound",         color: "hsl(var(--chart-5, 0 72% 51%))"   },
-  { key: "lower_bound", label: "Lower Bound",         color: "hsl(var(--chart-6, 200 70% 50%))" },
+type ModelFitSeriesGroup = { label: string; items: { key: ModelFitSeriesKey; label: string; color: string }[] }
+
+const MODEL_FIT_SERIES_GROUPS: ModelFitSeriesGroup[] = [
+  {
+    label: "Simulation",
+    items: [
+      { key: "delivered",    label: "Delivered",          color: "hsl(var(--chart-2, 160 60% 45%))" },
+      { key: "eo",           label: "Economical Optimal", color: "hsl(var(--chart-3, 30 80% 55%))"  },
+      { key: "predicted",    label: "Predicted",          color: "hsl(var(--chart-4, 280 65% 60%))" },
+      { key: "upper_bound",  label: "Upper Bound",        color: "hsl(var(--chart-5, 0 72% 51%))"   },
+      { key: "lower_bound",  label: "Lower Bound",        color: "hsl(var(--chart-6, 200 70% 50%))" },
+      { key: "sim_sold",     label: "Sold",               color: "hsl(140 50% 55%)" },
+      { key: "sim_returned", label: "Returned",           color: "hsl(140 50% 70%)" },
+      { key: "sim_profit",   label: "Profit",             color: "hsl(100 60% 40%)" },
+    ],
+  },
+  {
+    label: "Actual",
+    items: [
+      { key: "actual_delivered", label: "Actual Delivered", color: "hsl(220 60% 45%)" },
+      { key: "actual_sold",      label: "Actual Sold",      color: "hsl(220 60% 60%)" },
+      { key: "actual_returned",  label: "Actual Returned",  color: "hsl(220 60% 75%)" },
+      { key: "actual_profit",    label: "Actual Profit",    color: "hsl(260 50% 55%)" },
+    ],
+  },
+  {
+    label: "Difference",
+    items: [
+      { key: "diff_delivered", label: "Diff Delivered", color: "hsl(35 90% 50%)" },
+      { key: "diff_sold",     label: "Diff Sold",      color: "hsl(35 70% 60%)" },
+      { key: "diff_returned", label: "Diff Returned",  color: "hsl(35 50% 70%)" },
+      { key: "diff_profit",   label: "Diff Profit",    color: "hsl(15 80% 50%)" },
+    ],
+  },
 ]
+
+const MODEL_FIT_ALL_SERIES = MODEL_FIT_SERIES_GROUPS.flatMap((g) => g.items)
 
 const MODEL_FIT_CHART_CONFIG: ChartConfig = {
   actual_sale: { label: "Actual Sale", color: "hsl(var(--chart-1, 220 70% 50%))" },
-  ...Object.fromEntries(MODEL_FIT_SERIES.map((s) => [s.key, { label: s.label, color: s.color }])),
+  _zero: { label: "Zero", color: "hsl(var(--muted-foreground))" },
+  ...Object.fromEntries(MODEL_FIT_ALL_SERIES.map((s) => [s.key, { label: s.label, color: s.color }])),
 }
 
 const OUTLET_PAGE_SIZE = 10
@@ -409,9 +445,9 @@ function ModelFitSeriesCombobox({
 
   const label = value.size === 0
     ? "No series"
-    : value.size === MODEL_FIT_SERIES.length
+    : value.size === MODEL_FIT_ALL_SERIES.length
     ? "All series"
-    : MODEL_FIT_SERIES.filter((s) => value.has(s.key)).map((s) => s.label).join(", ")
+    : MODEL_FIT_ALL_SERIES.filter((s) => value.has(s.key)).map((s) => s.label).join(", ")
 
   return (
     <DropdownMenu>
@@ -421,21 +457,28 @@ function ModelFitSeriesCombobox({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {MODEL_FIT_SERIES.map((s) => (
-          <DropdownMenuItem key={s.key} onSelect={(e) => { e.preventDefault(); toggle(s.key) }} className="flex items-center gap-2 cursor-pointer">
-            <div
-              className={cn(
-                "h-3.5 w-3.5 rounded-sm border flex items-center justify-center shrink-0",
-                value.has(s.key) ? "border-transparent" : "border-input"
-              )}
-              style={value.has(s.key) ? { backgroundColor: s.color } : undefined}
-            >
-              {value.has(s.key) && <span className="text-white text-[10px] leading-none">✓</span>}
+      <DropdownMenuContent align="start" className="w-auto">
+        <div className="flex divide-x divide-border">
+          {MODEL_FIT_SERIES_GROUPS.map((group) => (
+            <div key={group.label} className="min-w-[160px]">
+              <div className="px-2 py-1.5 text-xs font-semibold text-[var(--muted-foreground)]">{group.label}</div>
+              {group.items.map((s) => (
+                <DropdownMenuItem key={s.key} onSelect={(e) => { e.preventDefault(); toggle(s.key) }} className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={cn(
+                      "h-3.5 w-3.5 rounded-sm border flex items-center justify-center shrink-0",
+                      value.has(s.key) ? "border-transparent" : "border-input"
+                    )}
+                    style={value.has(s.key) ? { backgroundColor: s.color } : undefined}
+                  >
+                    {value.has(s.key) && <span className="text-white text-[10px] leading-none">✓</span>}
+                  </div>
+                  {s.label}
+                </DropdownMenuItem>
+              ))}
             </div>
-            {s.label}
-          </DropdownMenuItem>
-        ))}
+          ))}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -478,22 +521,24 @@ function ModelFitStatsBar({ stats, t }: { stats: AccuracyStatsResponse | undefin
   )
 }
 
-function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, onWeekdayChange }: {
+function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, onWeekdayChange, selectedOutletIds, setSelectedOutletIds, allSelected, setAllSelected }: {
   simulationId: string
   simFrom: string | null
   simTo: string | null
   weekdays: number[] | null
   weekdayFilter: WeekdayFilter
   onWeekdayChange: (v: WeekdayFilter) => void
+  selectedOutletIds: Set<string>
+  setSelectedOutletIds: React.Dispatch<React.SetStateAction<Set<string>>>
+  allSelected: boolean
+  setAllSelected: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   const t = useTranslations("simulations.completed")
   const [fromDate, setFromDate] = useState(simFrom ?? "")
   const [toDate, setToDate]     = useState(simTo ?? "")
-  const [selectedSeries, setSelectedSeries] = useState<Set<ModelFitSeriesKey>>(new Set(["delivered"]))
+  const [selectedSeries, setSelectedSeries] = useState<Set<ModelFitSeriesKey>>(new Set(["delivered", "predicted", "actual_sold"]))
   const [outletSearch, setOutletSearch] = useState("")
   const [outletPage, setOutletPage]     = useState(1)
-  const [selectedOutletIds, setSelectedOutletIds] = useState<Set<string>>(new Set())
-  const [allSelected, setAllSelected] = useState(true)
 
   // Fetch the base data (all outlets, full date range) to get the outlet list
   const { data: baseData } = useQuery({
@@ -546,17 +591,31 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
   // Whether to show confidence band
   const showBand = selectedSeries.has("upper_bound") && selectedSeries.has("lower_bound")
 
-  // Add derived _band_base and _band_range for stacked area confidence band
+  // Whether any difference series is selected
+  const showDiff = selectedSeries.has("diff_delivered") || selectedSeries.has("diff_sold") || selectedSeries.has("diff_returned") || selectedSeries.has("diff_profit")
+  const diffKeys: Set<ModelFitSeriesKey> = useMemo(() => new Set(["diff_delivered", "diff_sold", "diff_returned", "diff_profit"]), [])
+  const onlyDiffSelected = selectedSeries.size > 0 && [...selectedSeries].every((k) => diffKeys.has(k))
+
+  // Add derived _band_base and _band_range for stacked area confidence band + difference series
   const chartData = useMemo(() => {
-    if (!showBand) return rawChartData
+    if (!showBand && !showDiff && !onlyDiffSelected) return rawChartData
     return rawChartData.map((d) => ({
       ...d,
-      _band_base: d.lower_bound ?? 0,
-      _band_range: d.upper_bound != null && d.lower_bound != null
-        ? Math.max(0, d.upper_bound - d.lower_bound)
-        : 0,
+      ...(showBand ? {
+        _band_base: d.lower_bound ?? 0,
+        _band_range: d.upper_bound != null && d.lower_bound != null
+          ? Math.max(0, d.upper_bound - d.lower_bound)
+          : 0,
+      } : {}),
+      ...(showDiff ? {
+        diff_delivered: d.delivered != null && d.actual_delivered != null ? d.delivered - d.actual_delivered : null,
+        diff_sold: d.sim_sold != null && d.actual_sold != null ? d.sim_sold - d.actual_sold : null,
+        diff_returned: d.sim_returned != null && d.actual_returned != null ? d.sim_returned - d.actual_returned : null,
+        diff_profit: d.sim_profit != null && d.actual_profit != null ? d.sim_profit - d.actual_profit : null,
+      } : {}),
+      ...(onlyDiffSelected ? { _zero: 0 } : {}),
     }))
-  }, [rawChartData, showBand])
+  }, [rawChartData, showBand, showDiff, onlyDiffSelected])
 
   function toggleOutlet(id: string) {
     setAllSelected(false)
@@ -652,61 +711,99 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
           <div className="flex-1 flex items-center justify-center text-sm text-[var(--muted-foreground)]">No data</div>
         ) : (
           <ChartContainer config={MODEL_FIT_CHART_CONFIG} className="flex-1 min-h-0">
-            <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
-              <XAxis dataKey="date" tickFormatter={xFormatter} tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} width={40} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {showBand && (
-                <>
-                  <Area
-                    type="monotone"
-                    dataKey="_band_base"
-                    stackId="confidence"
-                    stroke="none"
-                    fill="transparent"
-                    connectNulls
-                    legendType="none"
-                    name="_band_base"
-                    isAnimationActive={false}
+            {(() => {
+              const profitKeys: Set<ModelFitSeriesKey> = new Set(["sim_profit", "actual_profit", "diff_profit"])
+              const showProfitAxis = !onlyDiffSelected && MODEL_FIT_ALL_SERIES.some((s) => profitKeys.has(s.key) && selectedSeries.has(s.key))
+              const showBothProfits = selectedSeries.has("sim_profit") && selectedSeries.has("actual_profit")
+              const profitLossMap = showBothProfits
+                ? new Map(chartData.map((d) => [d.date, d.actual_profit != null && d.sim_profit != null && d.actual_profit > d.sim_profit]))
+                : null
+              return (
+                <ComposedChart data={chartData} margin={{ top: 4, right: showProfitAxis ? 8 : 8, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
+                  <XAxis
+                    dataKey="date"
+                    tick={profitLossMap ? (props: { x: number; y: number; payload: { value: string } }) => {
+                      const isLoss = profitLossMap.get(props.payload.value)
+                      return (
+                        <text x={props.x} y={props.y + 12} textAnchor="middle" fontSize={11} fill={isLoss ? "hsl(0 72% 51%)" : "currentColor"} fontWeight={isLoss ? 600 : 400}>
+                          {xFormatter(props.payload.value)}
+                        </text>
+                      )
+                    } : { fontSize: 11 }}
+                    tickFormatter={profitLossMap ? undefined : xFormatter}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="_band_range"
-                    stackId="confidence"
-                    stroke="none"
-                    fill="hsl(var(--chart-5, 0 72% 51%))"
-                    fillOpacity={0.12}
-                    connectNulls
-                    legendType="none"
-                    name="Confidence Band"
-                    isAnimationActive={false}
-                  />
-                </>
-              )}
-              <Line
-                type="monotone"
-                dataKey="actual_sale"
-                name="Actual Sale"
-                stroke="var(--color-actual_sale)"
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-              />
-              {MODEL_FIT_SERIES.filter((s) => selectedSeries.has(s.key)).map((s) => (
-                <Line
-                  key={s.key}
-                  type="monotone"
-                  dataKey={s.key}
-                  name={s.label}
-                  stroke={s.color}
-                  strokeWidth={2}
-                  dot={false}
-                  connectNulls
-                />
-              ))}
-            </ComposedChart>
+                  <YAxis yAxisId="left" tick={{ fontSize: 11 }} width={40} />
+                  {showProfitAxis && (
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} width={50} />
+                  )}
+                  <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => {
+                    const key = MODEL_FIT_ALL_SERIES.find((s) => s.label === name)?.key
+                    if (key && (profitKeys.has(key) || diffKeys.has(key)) && typeof value === "number") return value.toFixed(2)
+                    return String(value)
+                  }} />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {showBand && (
+                    <>
+                      <Area
+                        type="monotone"
+                        dataKey="_band_base"
+                        stackId="confidence"
+                        stroke="none"
+                        fill="transparent"
+                        connectNulls
+                        legendType="none"
+                        name="_band_base"
+                        isAnimationActive={false}
+                        yAxisId="left"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="_band_range"
+                        stackId="confidence"
+                        stroke="none"
+                        fill="hsl(var(--chart-5, 0 72% 51%))"
+                        fillOpacity={0.12}
+                        connectNulls
+                        legendType="none"
+                        name="Confidence Band"
+                        isAnimationActive={false}
+                        yAxisId="left"
+                      />
+                    </>
+                  )}
+                  {onlyDiffSelected && (
+                    <Line
+                      type="linear"
+                      dataKey="_zero"
+                      stroke="hsl(var(--muted-foreground))"
+                      strokeWidth={1}
+                      strokeDasharray="4 4"
+                      strokeOpacity={0.5}
+                      dot={false}
+                      activeDot={false}
+                      legendType="none"
+                      tooltipType="none"
+                      isAnimationActive={false}
+                      yAxisId="left"
+                    />
+                  )}
+                  {MODEL_FIT_ALL_SERIES.filter((s) => selectedSeries.has(s.key)).map((s) => (
+                    <Line
+                      key={s.key}
+                      type="monotone"
+                      dataKey={s.key}
+                      name={s.label}
+                      stroke={s.color}
+                      strokeWidth={2}
+                      dot={false}
+                      connectNulls
+                      yAxisId={profitKeys.has(s.key) && !onlyDiffSelected ? "right" : "left"}
+                    />
+                  ))}
+                </ComposedChart>
+              )
+            })()}
           </ChartContainer>
         )}
       </div>
@@ -743,6 +840,637 @@ function WeekdayCombobox({ value, onChange, className }: { value: WeekdayFilter;
     </select>
   )
 }
+
+// ─── Data Dump ──────────────────────────────────────────────────────────────
+
+const DUMP_PAGE_SIZE = 25
+type DumpSortField = "outlet_name" | "date" | "profit" | "scenario_delivery" | "actual_delivered" | "starred"
+
+function GTooltipHead({ label, info }: { label: string; info: string }) {
+  return (
+    <TooltipProvider delayDuration={200}>
+      <UiTooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help border-b border-dotted border-current">{label}</span>
+        </TooltipTrigger>
+        <UiTooltipContent side="top" className="max-w-xs text-xs">{info}</UiTooltipContent>
+      </UiTooltip>
+    </TooltipProvider>
+  )
+}
+
+function DataDumpTab({
+  simulationId,
+  customerId,
+  simFrom,
+  simTo,
+  currencySymbol,
+  selectedOutletIds: ddSelectedOutletIds,
+  setSelectedOutletIds: setDdSelectedOutletIds,
+  allSelected: ddAllOutlets,
+  setAllSelected: setDdAllOutlets,
+}: {
+  simulationId: string
+  customerId: string
+  simFrom: string | null
+  simTo: string | null
+  currencySymbol: string
+  selectedOutletIds: Set<string>
+  setSelectedOutletIds: React.Dispatch<React.SetStateAction<Set<string>>>
+  allSelected: boolean
+  setAllSelected: React.Dispatch<React.SetStateAction<boolean>>
+}) {
+  const t = useTranslations("simulations.completed")
+
+  // ── Filter state
+  const [ddScenario, setDdScenario] = useState<ScenarioColumn>("delivered")
+  const [ddDateRange, setDdDateRange] = useState<DateRange | undefined>(() => {
+    const from = simFrom ? new Date(simFrom + "T00:00:00") : undefined
+    const to = simTo ? new Date(simTo + "T00:00:00") : undefined
+    return from && to ? { from, to } : undefined
+  })
+  const [ddDatePickerOpen, setDdDatePickerOpen] = useState(false)
+  const [ddGroupId, setDdGroupId] = useState<string | null>(null)
+  const [ddOutletSearch, setDdOutletSearch] = useState("")
+  const [ddOutletPage, setDdOutletPage] = useState(1)
+
+  // Derive ISO strings from date range
+  const ddFromDate = ddDateRange?.from ? format(ddDateRange.from, "yyyy-MM-dd") : ""
+  const ddToDate = ddDateRange?.to ? format(ddDateRange.to, "yyyy-MM-dd") : ""
+
+  // ── Table state
+  const [search, setSearch] = useState("")
+  const [sortField, setSortField] = useState<DumpSortField>("date")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  const [showOnlyChecked, setShowOnlyChecked] = useState(false)
+
+  // ── Outlet groups
+  const { data: groups } = useQuery({
+    queryKey: ["outlet-groups", customerId],
+    queryFn: () => outletGroupsApi.list(customerId),
+    staleTime: 5 * 60_000,
+  })
+
+  // ── Outlet list (from model-fit-base)
+  const { data: baseData } = useQuery({
+    queryKey: ["simulation-model-fit-base", simulationId],
+    queryFn: () => simulationsApi.getModelFit(simulationId),
+    staleTime: 5 * 60_000,
+  })
+
+  // ── Outlet group members
+  const { data: groupOutlets } = useQuery({
+    queryKey: ["outlet-group-outlets", ddGroupId],
+    queryFn: () => outletGroupsApi.getOutlets(ddGroupId!),
+    enabled: !!ddGroupId,
+    staleTime: 5 * 60_000,
+  })
+
+  // ── Determine effective outlet IDs from group + individual selection
+  const resolvedOutletIds = useMemo(() => {
+    let ids: string[] | undefined = undefined
+    if (ddGroupId && groupOutlets) {
+      const groupIds = new Set(groupOutlets.map((o) => o.id))
+      if (!ddAllOutlets) {
+        ids = Array.from(ddSelectedOutletIds).filter((id) => groupIds.has(id))
+      } else {
+        ids = Array.from(groupIds)
+      }
+    } else if (!ddAllOutlets && ddSelectedOutletIds.size > 0) {
+      ids = Array.from(ddSelectedOutletIds)
+    }
+    return ids
+  }, [ddGroupId, groupOutlets, ddAllOutlets, ddSelectedOutletIds])
+
+  // ── Debounced search for server-side filtering
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(id)
+  }, [search])
+
+  // Reset to page 1 when filters change
+  useEffect(() => { setCurrentPage(1) }, [ddScenario, resolvedOutletIds, ddFromDate, ddToDate, debouncedSearch, sortField, sortDir])
+
+  // Map client sort fields to server sort fields (profit/starred are client-only)
+  const serverSortBy = (sortField === "profit" || sortField === "starred") ? "date" : sortField
+  const serverSortDir = (sortField === "profit" || sortField === "starred") ? "asc" : sortDir
+
+  // ── Fetch data dump (server-side paginated)
+  const { data: dumpData, isLoading } = useQuery({
+    queryKey: ["simulation-data-dump", simulationId, ddScenario, resolvedOutletIds, ddFromDate, ddToDate, currentPage, serverSortBy, serverSortDir, debouncedSearch],
+    queryFn: () => simulationsApi.getDataDump(simulationId, {
+      column: ddScenario,
+      outletIds: resolvedOutletIds,
+      fromDate: ddFromDate || undefined,
+      toDate: ddToDate || undefined,
+      limit: DUMP_PAGE_SIZE,
+      offset: (currentPage - 1) * DUMP_PAGE_SIZE,
+      sortBy: serverSortBy,
+      sortDir: serverSortDir,
+      search: debouncedSearch || undefined,
+    }),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  })
+
+  const allRows = dumpData?.rows ?? []
+  const totalCount = dumpData?.total_count ?? 0
+
+  const rowKey = (r: DataDumpRow) => `${r.outlet_id}::${r.date}`
+  const rowProfit = (r: DataDumpRow) => r.g1 ?? r.g2 ?? r.g3 ?? r.g4 ?? null
+
+  // ── Outlet selector list
+  const outlets: ModelFitOutlet[] = baseData?.outlets ?? []
+  const filteredOutlets = useMemo(() => {
+    const q = ddOutletSearch.toLowerCase()
+    let list = outlets
+    if (ddGroupId && groupOutlets) {
+      const groupIds = new Set(groupOutlets.map((o) => o.id))
+      list = list.filter((o) => groupIds.has(o.id))
+    }
+    return list.filter((o) => !q || o.name.toLowerCase().includes(q))
+  }, [outlets, ddOutletSearch, ddGroupId, groupOutlets])
+  const outletTotalPages = Math.max(1, Math.ceil(filteredOutlets.length / OUTLET_PAGE_SIZE))
+  const outletSafePage = Math.min(ddOutletPage, outletTotalPages)
+  const pagedOutlets = filteredOutlets.slice((outletSafePage - 1) * OUTLET_PAGE_SIZE, outletSafePage * OUTLET_PAGE_SIZE)
+
+  // ── Rows come pre-sorted and pre-paginated from the server.
+  // Client-side sort only for profit/starred (not available server-side).
+  const displayRows = useMemo(() => {
+    let items = showOnlyChecked
+      ? allRows.filter((r) => checkedIds.has(rowKey(r)))
+      : allRows
+
+    if (sortField === "profit" || sortField === "starred") {
+      return [...items].sort((a, b) => {
+        let va: number, vb: number
+        if (sortField === "profit") {
+          va = rowProfit(a) ?? 0; vb = rowProfit(b) ?? 0
+        } else {
+          va = starredIds.has(rowKey(a)) ? 1 : 0; vb = starredIds.has(rowKey(b)) ? 1 : 0
+        }
+        return sortDir === "asc" ? va - vb : vb - va
+      })
+    }
+    return items
+  }, [allRows, sortField, sortDir, showOnlyChecked, checkedIds, starredIds])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / DUMP_PAGE_SIZE))
+  const safePage = Math.min(currentPage, totalPages)
+  const pageItems = displayRows
+
+  // ── Handlers
+  function handleSort(field: DumpSortField) {
+    if (sortField === field) setSortDir((d) => d === "asc" ? "desc" : "asc")
+    else { setSortField(field); setSortDir("asc") }
+  }
+
+  const allPageChecked = pageItems.length > 0 && pageItems.every((r) => checkedIds.has(rowKey(r)))
+  const somePageChecked = pageItems.some((r) => checkedIds.has(rowKey(r)))
+
+  function handleHeaderCheckbox() {
+    if (allPageChecked) {
+      setCheckedIds((prev) => { const n = new Set(prev); pageItems.forEach((r) => n.delete(rowKey(r))); return n })
+    } else {
+      setCheckedIds((prev) => { const n = new Set(prev); pageItems.forEach((r) => n.add(rowKey(r))); return n })
+    }
+  }
+
+  function handleStar(key: string) {
+    setStarredIds((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+  }
+
+  function toggleOutlet(id: string) {
+    setDdAllOutlets(false)
+    setDdSelectedOutletIds((prev) => {
+      const n = new Set(prev)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+
+  function handleDateRangeChange(range: DateRange | undefined) {
+    setDdDateRange(range)
+    setCurrentPage(1)
+    if (range?.to) setDdDatePickerOpen(false)
+  }
+
+  function DumpSortHeader({ field, label }: { field: DumpSortField; label: string }) {
+    const active = sortField === field
+    return (
+      <button
+        onClick={() => handleSort(field)}
+        className="flex items-center gap-1 font-medium hover:text-foreground transition-colors text-left whitespace-nowrap"
+      >
+        {label}
+        {active
+          ? (sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)
+          : <ArrowUpDown className="h-3 w-3 opacity-40" />}
+      </button>
+    )
+  }
+
+  const scenarioLabel = SCENARIO_OPTIONS.find((o) => o.value === ddScenario)?.label ?? "Delivered"
+  const fmtN = (n: number | null | undefined) => n != null ? formatNumber(n) : "—"
+  const fmtC = (n: number | null | undefined) => n != null ? formatCurrency(n, currencySymbol) : "—"
+  const fmtQ = (n: number | null | undefined) => n != null ? n.toFixed(1) : "—"
+  const delta = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null || b == null) return null
+    return a - b
+  }
+  const fmtDelta = (d: number | null) => {
+    if (d == null) return "—"
+    const sign = d > 0 ? "+" : ""
+    return `${sign}${formatNumber(d)}`
+  }
+
+  return (
+    <div className="flex gap-4 h-full">
+      {/* ── Left: filters ── */}
+      <div className="w-52 shrink-0 flex flex-col gap-2">
+        {/* Scenario */}
+        <ScenarioCombobox value={ddScenario} onChange={(v) => { setDdScenario(v); setCurrentPage(1) }} />
+
+        {/* Date range picker */}
+        <Popover open={ddDatePickerOpen} onOpenChange={setDdDatePickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              className={cn(
+                "h-8 justify-start text-left text-xs font-normal w-full cursor-pointer",
+                !ddDateRange?.from && "text-[var(--muted-foreground)]",
+              )}
+            >
+              <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
+              {ddDateRange?.from ? (
+                ddDateRange.to ? (
+                  <>{format(ddDateRange.from, "MMM d, yyyy")} – {format(ddDateRange.to, "MMM d, yyyy")}</>
+                ) : (
+                  format(ddDateRange.from, "MMM d, yyyy")
+                )
+              ) : (
+                "Pick date range"
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar
+              mode="range"
+              captionLayout="dropdown"
+              defaultMonth={ddDateRange?.from}
+              selected={ddDateRange}
+              onSelect={handleDateRangeChange}
+              numberOfMonths={2}
+              startMonth={new Date(2020, 0)}
+              endMonth={new Date(new Date().getFullYear() + 1, 11)}
+            />
+          </PopoverContent>
+        </Popover>
+        {ddDateRange && (ddFromDate !== (simFrom ?? "") || ddToDate !== (simTo ?? "")) && (
+          <button
+            onClick={() => {
+              const from = simFrom ? new Date(simFrom + "T00:00:00") : undefined
+              const to = simTo ? new Date(simTo + "T00:00:00") : undefined
+              setDdDateRange(from && to ? { from, to } : undefined)
+              setCurrentPage(1)
+            }}
+            className="text-xs text-[var(--muted-foreground)] hover:text-foreground underline self-start"
+          >Reset</button>
+        )}
+
+        {/* Outlet group */}
+        {groups && groups.length > 0 && (
+          <select
+            value={ddGroupId ?? ""}
+            onChange={(e) => { setDdGroupId(e.target.value || null); setCurrentPage(1) }}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+          >
+            <option value="">{t("dumpAllGroups")}</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>{g.name} ({g.outlet_count})</option>
+            ))}
+          </select>
+        )}
+
+        {/* Outlet selector */}
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+          <Input
+            placeholder="Filter outlets…"
+            value={ddOutletSearch}
+            onChange={(e) => { setDdOutletSearch(e.target.value); setDdOutletPage(1) }}
+            className="h-7 pl-7 text-xs"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto border rounded-md divide-y divide-border/40 text-xs">
+          <button
+            onClick={() => { setDdAllOutlets(true); setDdSelectedOutletIds(new Set()); setCurrentPage(1) }}
+            className={cn(
+              "w-full text-left px-3 py-1.5 hover:bg-[var(--muted)]/40 transition-colors flex items-center gap-2",
+              ddAllOutlets && "bg-[var(--muted)]/60 font-medium"
+            )}
+          >
+            <span className={cn("w-2 h-2 rounded-full shrink-0", ddAllOutlets ? "bg-primary" : "bg-transparent border border-border")} />
+            All outlets
+          </button>
+          {pagedOutlets.map((o) => {
+            const sel = !ddAllOutlets && ddSelectedOutletIds.has(o.id)
+            return (
+              <button
+                key={o.id}
+                onClick={() => { toggleOutlet(o.id); setCurrentPage(1) }}
+                className={cn(
+                  "w-full text-left px-3 py-1.5 hover:bg-[var(--muted)]/40 transition-colors flex items-center gap-2 truncate",
+                  sel && "bg-[var(--muted)]/60"
+                )}
+              >
+                <span className={cn("w-2 h-2 rounded-full shrink-0", sel ? "bg-primary" : "bg-transparent border border-border")} />
+                <span className="truncate">{o.name}</span>
+              </button>
+            )
+          })}
+        </div>
+        {outletTotalPages > 1 && (
+          <div className="flex items-center justify-between text-xs text-[var(--muted-foreground)]">
+            <button onClick={() => setDdOutletPage((p) => Math.max(1, p - 1))} disabled={outletSafePage === 1} className="hover:text-foreground disabled:opacity-30">‹</button>
+            <span>{outletSafePage} / {outletTotalPages}</span>
+            <button onClick={() => setDdOutletPage((p) => Math.min(outletTotalPages, p + 1))} disabled={outletSafePage === outletTotalPages} className="hover:text-foreground disabled:opacity-30">›</button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Right: table ── */}
+      <div className="flex-1 flex flex-col min-w-0 gap-2">
+        {/* Toolbar */}
+        <div className="flex items-center justify-end">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+            <Input
+              placeholder={t("searchPlaceholder")}
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setCurrentPage(1) }}
+              className="h-7 pl-8 w-52 text-xs"
+            />
+          </div>
+        </div>
+
+        {/* Table */}
+        {isLoading ? (
+          <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">Loading…</div>
+        ) : allRows.length === 0 ? (
+          <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">No data</div>
+        ) : (
+          <div className="overflow-auto flex-1">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10 pl-4 sticky left-0 bg-background z-10">
+                    <div className="flex items-center gap-0.5">
+                      <Checkbox
+                        checked={allPageChecked ? true : somePageChecked ? "indeterminate" : false}
+                        onCheckedChange={handleHeaderCheckbox}
+                      />
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="h-5 w-4 flex items-center justify-center hover:text-foreground transition-colors cursor-pointer">
+                            <ChevronDown className="h-3 w-3" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.map((r) => rowKey(r))))}>
+                            {t("selectAll")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => starredIds.has(rowKey(r))).map((r) => rowKey(r))))}>
+                            {t("starred")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { const sorted = [...displayRows].filter((r) => rowProfit(r) != null).sort((a, b) => (rowProfit(b) ?? 0) - (rowProfit(a) ?? 0)); setCheckedIds(new Set(sorted.slice(0, 20).map((r) => rowKey(r)))) }}>
+                            {t("selectTopProfitable")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { const sorted = [...displayRows].filter((r) => rowProfit(r) != null).sort((a, b) => (rowProfit(a) ?? 0) - (rowProfit(b) ?? 0)); setCheckedIds(new Set(sorted.slice(0, 20).map((r) => rowKey(r)))) }}>
+                            {t("selectBottomProfitable")}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g1 != null).map((r) => rowKey(r))))}>
+                            {t("selectG1")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g2 != null).map((r) => rowKey(r))))}>
+                            {t("selectG2")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g3 != null).map((r) => rowKey(r))))}>
+                            {t("selectG3")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g4 != null).map((r) => rowKey(r))))}>
+                            {t("selectG4")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </TableHead>
+                  <TableHead><DumpSortHeader field="outlet_name" label={t("dumpColOutlet")} /></TableHead>
+                  <TableHead><DumpSortHeader field="date" label={t("dumpColDate")} /></TableHead>
+                  <TableHead className="text-right"><DumpSortHeader field="profit" label={t("dumpColProfit")} /></TableHead>
+                  <TableHead className="text-right">
+                    <DumpSortHeader field="scenario_delivery" label={scenarioLabel} />
+                  </TableHead>
+                  <TableHead className="text-right">{t("dumpColSold")}</TableHead>
+                  <TableHead className="text-right">{t("dumpColReturned")}</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q10</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q20</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q30</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q40</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q50</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q60</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q70</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q80</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Q90</TableHead>
+                  <TableHead className="text-right"><GTooltipHead label="G1" info={t("overviewColG1")} /></TableHead>
+                  <TableHead className="text-right"><GTooltipHead label="G2" info={t("overviewColG2")} /></TableHead>
+                  <TableHead className="text-right"><GTooltipHead label="G3" info={t("overviewColG3")} /></TableHead>
+                  <TableHead className="text-right"><GTooltipHead label="G4" info={t("overviewColG4")} /></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">{t("dumpColCV")}</TableHead>
+                  <TableHead className="w-10 text-center">
+                    <button
+                      onClick={() => handleSort("starred")}
+                      className="flex items-center gap-1 font-medium hover:text-foreground transition-colors cursor-pointer"
+                    >
+                      <Star className={cn("h-4 w-4", sortField === "starred" ? "" : "opacity-40")} />
+                      {sortField === "starred" && (sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                    </button>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pageItems.map((row) => {
+                  const key = rowKey(row)
+                  const dDelivery = delta(row.scenario_delivery, row.actual_delivered)
+                  const dSold = delta(row.scenario_sold, row.actual_sold)
+                  const dReturned = delta(row.scenario_returned, row.actual_returned)
+                  return (
+                    <TableRow
+                      key={key}
+                      onContextMenu={(e) => { e.preventDefault(); handleStar(key) }}
+                    >
+                      <TableCell className="pl-4 sticky left-0 bg-background z-10" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={checkedIds.has(key)}
+                          onCheckedChange={(c) => setCheckedIds((prev) => { const n = new Set(prev); c ? n.add(key) : n.delete(key); return n })}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium max-w-[180px] truncate">{row.outlet_name}</TableCell>
+                      <TableCell className="text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">{formatDate(row.date)}</TableCell>
+                      <TableCell className={cn("text-right tabular-nums", (() => { const p = rowProfit(row); return p != null && p > 0 ? "text-green-500" : p != null && p < 0 ? "text-red-500" : "" })())}>{fmtC(rowProfit(row))}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <div>{fmtN(row.scenario_delivery)}</div>
+                        <div className="text-xs text-[var(--muted-foreground)]">{fmtN(row.actual_delivered)}</div>
+                        <div className={cn("text-xs", dDelivery != null && dDelivery < 0 ? "text-red-500" : dDelivery != null && dDelivery > 0 ? "text-green-500" : "text-[var(--muted-foreground)]")}>{fmtDelta(dDelivery)}</div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <div>{fmtN(row.scenario_sold)}</div>
+                        <div className="text-xs text-[var(--muted-foreground)]">{fmtN(row.actual_sold)}</div>
+                        <div className={cn("text-xs", dSold != null && dSold < 0 ? "text-red-500" : dSold != null && dSold > 0 ? "text-green-500" : "text-[var(--muted-foreground)]")}>{fmtDelta(dSold)}</div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <div>{fmtN(row.scenario_returned)}</div>
+                        <div className="text-xs text-[var(--muted-foreground)]">{fmtN(row.actual_returned)}</div>
+                        <div className={cn("text-xs", dReturned != null && dReturned < 0 ? "text-green-500" : dReturned != null && dReturned > 0 ? "text-red-500" : "text-[var(--muted-foreground)]")}>{fmtDelta(dReturned)}</div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q10)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q20)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q30)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q40)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q50)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q60)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q70)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q80)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q90)}</TableCell>
+                      <TableCell className={cn("text-right tabular-nums", row.g1 != null && row.g1 > 0 && "text-green-500")}>{fmtC(row.g1)}</TableCell>
+                      <TableCell className={cn("text-right tabular-nums", row.g2 != null && row.g2 < 0 && "text-red-500")}>{fmtC(row.g2)}</TableCell>
+                      <TableCell className={cn("text-right tabular-nums", row.g3 != null && row.g3 < 0 && "text-red-500")}>{fmtC(row.g3)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.g4 != null ? (
+                          <TooltipProvider delayDuration={200}>
+                            <UiTooltip>
+                              <TooltipTrigger asChild>
+                                <div className="cursor-help">
+                                  <div className={cn(row.g4 > 0 && "text-green-500")}>{fmtC(row.g4)}</div>
+                                  <div className="text-xs text-[var(--muted-foreground)]">
+                                    {row.g4_extra_sales != null
+                                      ? `E[extra] = ${row.g4_extra_sales.toFixed(2)}`
+                                      : "—"}
+                                  </div>
+                                  <div className="text-xs text-[var(--muted-foreground)]">
+                                    {row.g4_extra_sales != null && row.g4_profit_unit != null
+                                      ? `${row.g4_extra_sales.toFixed(2)} × ${currencySymbol}${row.g4_profit_unit.toFixed(2)}`
+                                      : "—"}
+                                  </div>
+                                </div>
+                              </TooltipTrigger>
+                              <UiTooltipContent side="left" className="max-w-sm text-xs font-mono">
+                                {row.g4_unit_probs && row.g4_unit_probs.length > 0 ? (
+                                  <>
+                                    <p className="font-sans font-medium mb-1">Per-unit survival probabilities:</p>
+                                    <div className="max-h-40 overflow-y-auto space-y-0.5">
+                                      {row.g4_unit_probs.map(([unit, prob]) => (
+                                        <div key={unit} className="flex justify-between gap-4">
+                                          <span>P(demand ≥ {unit})</span>
+                                          <span>= {prob.toFixed(4)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="border-t border-border/40 pt-1 mt-1 flex justify-between gap-4 font-medium">
+                                      <span>E[extra sales]</span>
+                                      <span>= {row.g4_extra_sales?.toFixed(4)}</span>
+                                    </div>
+                                    <div className="flex justify-between gap-4">
+                                      <span>Profit</span>
+                                      <span>= {row.g4_extra_sales?.toFixed(4)} × {currencySymbol}{row.g4_profit_unit?.toFixed(2)} = {fmtC(row.g4)}</span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <p>No quantile data available</p>
+                                )}
+                              </UiTooltipContent>
+                            </UiTooltip>
+                          </TooltipProvider>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-xs text-[var(--muted-foreground)]">
+                        {row.cv != null ? row.cv.toFixed(2) : "—"}
+                      </TableCell>
+                      <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => handleStar(key)} className="hover:text-amber-400 transition-colors cursor-pointer" aria-label="Toggle star">
+                          <Star className={cn("h-4 w-4", starredIds.has(key) ? "fill-amber-400 text-amber-400" : "text-[var(--muted-foreground)]")} />
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* Pagination + selection bar */}
+        {totalCount > 0 && (
+          <div className="shrink-0 border-t bg-background">
+            <div className="flex items-center justify-between px-4 py-1.5">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {t("showing", {
+                  from: (safePage - 1) * DUMP_PAGE_SIZE + 1,
+                  to: Math.min(safePage * DUMP_PAGE_SIZE, totalCount),
+                  total: totalCount,
+                })}
+              </span>
+              {totalPages > 1 && (
+                <Pagination className="w-auto mx-0">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} />
+                    </PaginationItem>
+                    {buildPaginationPages(safePage, totalPages).map((p, i) =>
+                      p === "ellipsis" ? (
+                        <PaginationItem key={`e${i}`}><PaginationEllipsis /></PaginationItem>
+                      ) : (
+                        <PaginationItem key={p}>
+                          <PaginationLink isActive={safePage === p} onClick={() => setCurrentPage(p)}>{p}</PaginationLink>
+                        </PaginationItem>
+                      )
+                    )}
+                    <PaginationItem>
+                      <PaginationNext onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              )}
+            </div>
+
+            {checkedIds.size > 0 && (
+              <div className="flex items-center justify-between px-4 py-2 border-t bg-[var(--muted)]/30">
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {t("selectedCount", { selected: checkedIds.size, total: totalCount })}
+                </span>
+                <Button
+                  variant="ghost" size="sm" className="h-7 gap-1.5 px-2 cursor-pointer"
+                  onClick={() => setShowOnlyChecked((v) => !v)}
+                  title={showOnlyChecked ? "Show all" : "Show only selected"}
+                >
+                  <Focus className={cn("h-3.5 w-3.5", showOnlyChecked && "text-primary")} />
+                  {showOnlyChecked && <span className="text-xs">Show all</span>}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Scenario overview data ─────────────────────────────────────────────────
 
 function scenarioOverviewData(sim: CompletedSimulationResponse, scenario: ScenarioColumn): OverviewSectionData | null {
   switch (scenario) {
@@ -822,6 +1550,14 @@ export default function SimulationsCompletedPage() {
   const [weekday, setWeekday] = useState<WeekdayFilter>("all")
   const weekdayDays = WEEKDAY_OPTIONS.find((o) => o.value === weekday)?.days ?? null
 
+  // ── Shared outlet filter (Overview, Model Fit, Data Dump)
+  const [sharedOutletIds, setSharedOutletIds] = useState<Set<string>>(new Set())
+  const [sharedAllOutlets, setSharedAllOutlets] = useState(true)
+
+  // ── Overview outlet filter (search/page are local to the tab)
+  const [ovOutletSearch, setOvOutletSearch] = useState("")
+  const [ovOutletPage, setOvOutletPage] = useState(1)
+
   // ── Delete dialogs
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteUnderstood, setDeleteUnderstood] = useState(false)
@@ -829,6 +1565,9 @@ export default function SimulationsCompletedPage() {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
   const [bulkDeleteUnderstood, setBulkDeleteUnderstood] = useState(false)
   const [bulkDeleteConfirmText, setBulkDeleteConfirmText] = useState("")
+
+  // ── Detail maximize state (persisted)
+  const [detailMaximized, setDetailMaximized] = useState(() => loadSimJson<boolean>(cid, "detailMaximized", false))
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -863,10 +1602,30 @@ export default function SimulationsCompletedPage() {
     staleTime: 60_000,
   })
 
+  // Fetch outlet list for overview tab (reuse model-fit-base which returns outlets)
+  const { data: ovBaseData } = useQuery({
+    queryKey: ["simulation-model-fit-base", selected?.simulation_id],
+    queryFn: () => simulationsApi.getModelFit(selected!.simulation_id!),
+    enabled: !!selected?.simulation_id && (activeTab === "tab2" || activeTab === "tab5"),
+    staleTime: 5 * 60_000,
+  })
+
+  const ovOutlets: ModelFitOutlet[] = ovBaseData?.outlets ?? []
+  const ovFilteredOutlets = useMemo(() => {
+    const q = ovOutletSearch.toLowerCase()
+    return ovOutlets.filter((o) => !q || o.name.toLowerCase().includes(q))
+  }, [ovOutlets, ovOutletSearch])
+  const ovOutletTotalPages = Math.max(1, Math.ceil(ovFilteredOutlets.length / OUTLET_PAGE_SIZE))
+  const ovSafePage = Math.min(ovOutletPage, ovOutletTotalPages)
+  const ovPagedOutlets = ovFilteredOutlets.slice((ovSafePage - 1) * OUTLET_PAGE_SIZE, ovSafePage * OUTLET_PAGE_SIZE)
+
+  const sharedActiveOutletIds = sharedAllOutlets ? undefined : Array.from(sharedOutletIds)
+  const needsOverviewApi = weekdayDays != null || sharedActiveOutletIds != null
+
   const { data: overviewFiltered } = useQuery({
-    queryKey: ["simulation-overview-filtered", selected?.simulation_id, scenario, weekday],
-    queryFn: () => simulationsApi.getOverview(selected!.simulation_id!, scenario, weekdayDays ?? undefined),
-    enabled: !!selected?.simulation_id && activeTab === "tab2" && weekdayDays != null,
+    queryKey: ["simulation-overview-filtered", selected?.simulation_id, scenario, weekday, sharedActiveOutletIds],
+    queryFn: () => simulationsApi.getOverview(selected!.simulation_id!, scenario, weekdayDays ?? undefined, sharedActiveOutletIds),
+    enabled: !!selected?.simulation_id && activeTab === "tab2",
     staleTime: 30_000,
   })
 
@@ -878,6 +1637,7 @@ export default function SimulationsCompletedPage() {
   useEffect(() => { if (cid) saveSimJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveSimJson(cid, "activeTab", activeTab) }, [cid, activeTab])
   useEffect(() => { if (cid) saveSimJson(cid, "selectedSim", selected?.id ?? null) }, [cid, selected?.id])
+  useEffect(() => { if (cid) saveSimJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
 
   // ── Restore selected simulation from persisted ID when list loads ──────────
 
@@ -1044,7 +1804,7 @@ export default function SimulationsCompletedPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-end px-4 py-2 shrink-0 bg-background">
           <div className="relative">
@@ -1242,7 +2002,15 @@ export default function SimulationsCompletedPage() {
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabStats")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabZeroShot")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabModelFit")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tabDump">{t("tabDataDump")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
+                <div
+                  className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setDetailMaximized((v) => !v)}
+                  aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                >
+                  {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                </div>
               </TabsList>
               <div
                 className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
@@ -1325,50 +2093,110 @@ export default function SimulationsCompletedPage() {
                     Stats are only available for completed simulations.
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <ScenarioCombobox value={scenario} onChange={setScenario} />
-                      <WeekdayCombobox value={weekday} onChange={setWeekday} />
-                    </div>
-                    {weekdayDays != null ? (
-                      !overviewFiltered ? (
-                        <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
-                      ) : (
-                        <OverviewSection
-                          label={SCENARIO_OPTIONS.find((o) => o.value === scenario)?.label ?? ""}
-                          t={t}
-                          currencySymbol={currencySymbol}
-                          data={overviewFiltered}
-                          actual={overviewFiltered.actual_total_sale != null ? {
-                            delivered: overviewFiltered.actual_total_delivered,
-                            sold: overviewFiltered.actual_total_sale,
-                            returned: overviewFiltered.actual_total_returned,
-                          } : null}
+                  <div className="flex gap-4">
+                    {/* ── Left: outlet selector ── */}
+                    <div className="w-52 shrink-0 flex flex-col gap-2">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                        <Input
+                          placeholder="Filter outlets…"
+                          value={ovOutletSearch}
+                          onChange={(e) => { setOvOutletSearch(e.target.value); setOvOutletPage(1) }}
+                          className="h-7 pl-7 text-xs"
                         />
-                      )
-                    ) : (
-                      (() => {
-                        const overviewData = scenarioOverviewData(selected, scenario)
-                        if (!overviewData) return (
-                          <div className="text-sm text-[var(--muted-foreground)] italic">
-                            No data available for this scenario.
-                          </div>
-                        )
-                        return (
+                      </div>
+                      <div className="flex-1 overflow-y-auto border rounded-md divide-y divide-border/40 text-xs">
+                        <button
+                          onClick={() => { setSharedAllOutlets(true); setSharedOutletIds(new Set()) }}
+                          className={cn(
+                            "w-full text-left px-3 py-1.5 hover:bg-[var(--muted)]/40 transition-colors flex items-center gap-2",
+                            sharedAllOutlets && "bg-[var(--muted)]/60 font-medium"
+                          )}
+                        >
+                          <span className={cn("w-2 h-2 rounded-full shrink-0", sharedAllOutlets ? "bg-primary" : "bg-transparent border border-border")} />
+                          All outlets
+                        </button>
+                        {ovPagedOutlets.map((o) => {
+                          const sel = !sharedAllOutlets && sharedOutletIds.has(o.id)
+                          return (
+                            <button
+                              key={o.id}
+                              onClick={() => {
+                                setSharedAllOutlets(false)
+                                setSharedOutletIds((prev) => {
+                                  const n = new Set(prev)
+                                  n.has(o.id) ? n.delete(o.id) : n.add(o.id)
+                                  return n
+                                })
+                              }}
+                              className={cn(
+                                "w-full text-left px-3 py-1.5 hover:bg-[var(--muted)]/40 transition-colors flex items-center gap-2 truncate",
+                                sel && "bg-[var(--muted)]/60"
+                              )}
+                            >
+                              <span className={cn("w-2 h-2 rounded-full shrink-0", sel ? "bg-primary" : "bg-transparent border border-border")} />
+                              <span className="truncate">{o.name}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {ovOutletTotalPages > 1 && (
+                        <div className="flex items-center justify-between text-xs text-[var(--muted-foreground)]">
+                          <button onClick={() => setOvOutletPage((p) => Math.max(1, p - 1))} disabled={ovSafePage === 1} className="hover:text-foreground disabled:opacity-30">‹</button>
+                          <span>{ovSafePage} / {ovOutletTotalPages}</span>
+                          <button onClick={() => setOvOutletPage((p) => Math.min(ovOutletTotalPages, p + 1))} disabled={ovSafePage === ovOutletTotalPages} className="hover:text-foreground disabled:opacity-30">›</button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Right: scenario + weekday + overview table ── */}
+                    <div className="flex-1 min-w-0 space-y-4">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <ScenarioCombobox value={scenario} onChange={setScenario} />
+                        <WeekdayCombobox value={weekday} onChange={setWeekday} />
+                      </div>
+                      {needsOverviewApi ? (
+                        !overviewFiltered ? (
+                          <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
+                        ) : (
                           <OverviewSection
                             label={SCENARIO_OPTIONS.find((o) => o.value === scenario)?.label ?? ""}
                             t={t}
                             currencySymbol={currencySymbol}
-                            data={overviewData}
-                            actual={selected.actual_total_sale != null ? {
-                              delivered: selected.actual_total_delivered,
-                              sold: selected.actual_total_sale,
-                              returned: selected.actual_total_returned,
+                            data={overviewFiltered}
+                            actual={overviewFiltered.actual_total_sale != null ? {
+                              delivered: overviewFiltered.actual_total_delivered,
+                              sold: overviewFiltered.actual_total_sale,
+                              returned: overviewFiltered.actual_total_returned,
                             } : null}
+                            pct={overviewFiltered}
                           />
                         )
-                      })()
-                    )}
+                      ) : (
+                        (() => {
+                          const overviewData = scenarioOverviewData(selected, scenario)
+                          if (!overviewData) return (
+                            <div className="text-sm text-[var(--muted-foreground)] italic">
+                              No data available for this scenario.
+                            </div>
+                          )
+                          return (
+                            <OverviewSection
+                              label={SCENARIO_OPTIONS.find((o) => o.value === scenario)?.label ?? ""}
+                              t={t}
+                              currencySymbol={currencySymbol}
+                              data={overviewData}
+                              actual={selected.actual_total_sale != null ? {
+                                delivered: selected.actual_total_delivered,
+                                sold: selected.actual_total_sale,
+                                returned: selected.actual_total_returned,
+                              } : null}
+                              pct={overviewFiltered}
+                            />
+                          )
+                        })()
+                      )}
+                    </div>
                   </div>
                 )}
               </TabsContent>
@@ -1438,7 +2266,7 @@ export default function SimulationsCompletedPage() {
               </TabsContent>
 
               {/* ─ Model Fit ─ */}
-              <TabsContent value="tab5" className="mt-4 px-4 h-full">
+              <TabsContent value="tab5" className="pt-4 px-4 h-[calc(100%-1rem)] overflow-hidden">
                 {!selected.simulation_id ? (
                   <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)] italic">No data</div>
                 ) : (
@@ -1449,6 +2277,29 @@ export default function SimulationsCompletedPage() {
                     weekdays={weekdayDays}
                     weekdayFilter={weekday}
                     onWeekdayChange={setWeekday}
+                    selectedOutletIds={sharedOutletIds}
+                    setSelectedOutletIds={setSharedOutletIds}
+                    allSelected={sharedAllOutlets}
+                    setAllSelected={setSharedAllOutlets}
+                  />
+                )}
+              </TabsContent>
+
+              {/* ─ Data Dump ─ */}
+              <TabsContent value="tabDump" className="mt-4 px-4 h-full">
+                {!selected.simulation_id ? (
+                  <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)] italic">No data</div>
+                ) : (
+                  <DataDumpTab
+                    simulationId={selected.simulation_id}
+                    customerId={selected.customer_id}
+                    simFrom={selected.simulation_from}
+                    simTo={selected.simulation_to}
+                    currencySymbol={currencySymbol}
+                    selectedOutletIds={sharedOutletIds}
+                    setSelectedOutletIds={setSharedOutletIds}
+                    allSelected={sharedAllOutlets}
+                    setAllSelected={setSharedAllOutlets}
                   />
                 )}
               </TabsContent>

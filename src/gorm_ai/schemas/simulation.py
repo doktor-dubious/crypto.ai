@@ -165,13 +165,13 @@ class SimulationRecordResponse(BaseModel):
     engine: str | None
 
     # Delivered scenario
-    d_total_delivered: int | None
-    d_total_sold: int | None
-    d_total_returned: int | None
-    d_diff_delivered: int | None
-    d_diff_return: int | None
-    d_lost_sale: int | None
-    d_more_sale: int | None
+    d_total_delivered: float | None
+    d_total_sold: float | None
+    d_total_returned: float | None
+    d_diff_delivered: float | None
+    d_diff_return: float | None
+    d_lost_sale: float | None
+    d_more_sale: float | None
     d_g1: float | None
     d_g2: float | None
     d_g3: float | None
@@ -181,10 +181,10 @@ class SimulationRecordResponse(BaseModel):
     p_total_delivered: float | None
     p_total_sold: float | None
     p_total_returned: float | None
-    p_diff_delivered: int | None
-    p_diff_return: int | None
-    p_lost_sale: int | None
-    p_more_sale: int | None
+    p_diff_delivered: float | None
+    p_diff_return: float | None
+    p_lost_sale: float | None
+    p_more_sale: float | None
     p_g1: float | None
     p_g2: float | None
     p_g3: float | None
@@ -194,10 +194,10 @@ class SimulationRecordResponse(BaseModel):
     eo_total_delivered: float | None
     eo_total_sold: float | None
     eo_total_returned: float | None
-    eo_diff_delivered: int | None
-    eo_diff_return: int | None
-    eo_lost_sale: int | None
-    eo_more_sale: int | None
+    eo_diff_delivered: float | None
+    eo_diff_return: float | None
+    eo_lost_sale: float | None
+    eo_more_sale: float | None
     eo_g1: float | None
     eo_g2: float | None
     eo_g3: float | None
@@ -236,13 +236,13 @@ class CompletedSimulationResponse(BaseModel):
     actual_total_sale: float | None = None
     actual_total_returned: float | None = None
     # Summary stats (null for non-success rows)
-    d_total_delivered: int | None = None
-    d_total_sold: int | None = None
-    d_total_returned: int | None = None
-    d_diff_delivered: int | None = None
-    d_diff_return: int | None = None
-    d_lost_sale: int | None = None
-    d_more_sale: int | None = None
+    d_total_delivered: float | None = None
+    d_total_sold: float | None = None
+    d_total_returned: float | None = None
+    d_diff_delivered: float | None = None
+    d_diff_return: float | None = None
+    d_lost_sale: float | None = None
+    d_more_sale: float | None = None
     d_g1: float | None = None
     d_g2: float | None = None
     d_g3: float | None = None
@@ -250,10 +250,10 @@ class CompletedSimulationResponse(BaseModel):
     p_total_delivered: float | None = None
     p_total_sold: float | None = None
     p_total_returned: float | None = None
-    p_diff_delivered: int | None = None
-    p_diff_return: int | None = None
-    p_lost_sale: int | None = None
-    p_more_sale: int | None = None
+    p_diff_delivered: float | None = None
+    p_diff_return: float | None = None
+    p_lost_sale: float | None = None
+    p_more_sale: float | None = None
     p_g1: float | None = None
     p_g2: float | None = None
     p_g3: float | None = None
@@ -261,10 +261,10 @@ class CompletedSimulationResponse(BaseModel):
     eo_total_delivered: float | None = None
     eo_total_sold: float | None = None
     eo_total_returned: float | None = None
-    eo_diff_delivered: int | None = None
-    eo_diff_return: int | None = None
-    eo_lost_sale: int | None = None
-    eo_more_sale: int | None = None
+    eo_diff_delivered: float | None = None
+    eo_diff_return: float | None = None
+    eo_lost_sale: float | None = None
+    eo_more_sale: float | None = None
     eo_g1: float | None = None
     eo_g2: float | None = None
     eo_g3: float | None = None
@@ -316,6 +316,14 @@ class ModelFitDataPoint(BaseModel):
     predicted: float | None
     lower_bound: float | None
     upper_bound: float | None
+    sim_delivered: float | None = None
+    sim_sold: float | None = None
+    sim_returned: float | None = None
+    sim_profit: float | None = None
+    actual_delivered: float | None = None
+    actual_sold: float | None = None
+    actual_returned: float | None = None
+    actual_profit: float | None = None
 
 
 class ModelFitResponse(BaseModel):
@@ -351,3 +359,45 @@ class FilteredOverviewResponse(BaseModel):
     g2: float | None = None
     g3: float | None = None
     g4: float | None = None
+    sold_out_pct: float | None = None
+    actual_sold_out_pct: float | None = None
+    default_cost: float | None = None
+    default_profit: float | None = None
+
+
+class DataDumpRow(BaseModel):
+    """Single prediction-outlet row for the data dump view."""
+
+    outlet_id: str
+    outlet_name: str
+    date: date
+    scenario_delivery: float | None
+    scenario_sold: float | None
+    scenario_returned: float | None
+    actual_delivered: float | None
+    actual_sold: float | None
+    actual_returned: float | None
+    q10: float | None = None
+    q20: float | None = None
+    q30: float | None = None
+    q40: float | None = None
+    q50: float | None = None
+    q60: float | None = None
+    q70: float | None = None
+    q80: float | None = None
+    q90: float | None = None
+    g1: float | None = None
+    g2: float | None = None
+    g3: float | None = None
+    g4: float | None = None
+    g4_extra_sales: float | None = None
+    g4_profit_unit: float | None = None
+    g4_unit_probs: list[tuple[int, float]] | None = None
+    cv: float | None = None
+
+
+class DataDumpResponse(BaseModel):
+    """Paginated prediction-outlet rows for a simulation."""
+
+    rows: list[DataDumpRow]
+    total_count: int

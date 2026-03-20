@@ -10,6 +10,7 @@ from gorm_ai.schemas.simulation import (
     AccuracyStatsResponse,
     CompletedSimulationListResponse,
     CompletedSimulationResponse,
+    DataDumpResponse,
     FilteredOverviewResponse,
     ModelFitResponse,
     SimulationRequest,
@@ -90,13 +91,58 @@ async def get_simulation_overview_filtered(
     simulation_id: str,
     column: str = "delivered",
     weekdays: list[int] | None = Query(default=None),
+    outlet_ids: list[str] | None = Query(default=None),
     service: SimulationService = Depends(get_simulation_service),
 ) -> FilteredOverviewResponse:
-    """Get re-aggregated overview stats for a simulation, optionally filtered by weekday."""
-    result = await service.get_overview_filtered(simulation_id, column=column, weekdays=weekdays)
+    """Get overview stats, optionally filtered by weekday/outlet."""
+    result = await service.get_overview_filtered(
+        simulation_id, column=column, weekdays=weekdays,
+        outlet_ids=outlet_ids,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Simulation not found")
     return FilteredOverviewResponse(**result)
+
+
+@router.get(
+    "/{simulation_id}/data-dump",
+    response_model=DataDumpResponse,
+)
+async def get_simulation_data_dump(
+    simulation_id: str,
+    column: str = "delivered",
+    outlet_ids: list[str] | None = Query(default=None),
+    weekdays: list[int] | None = Query(default=None),
+    from_date: date | None = None,
+    to_date: date | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    sort_by: str = "date",
+    sort_dir: str = "asc",
+    search: str | None = None,
+    group: str | None = None,
+    service: SimulationService = Depends(get_simulation_service),
+) -> DataDumpResponse:
+    """Get per-row prediction-outlet data for a simulation."""
+    result = await service.get_data_dump(
+        simulation_id,
+        column=column,
+        outlet_ids=outlet_ids,
+        from_date=from_date,
+        to_date=to_date,
+        weekdays=weekdays,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        search=search,
+        group=group,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail="Simulation not found",
+        )
+    return DataDumpResponse(**result)
 
 
 @router.delete("/records/{record_id}", status_code=204)

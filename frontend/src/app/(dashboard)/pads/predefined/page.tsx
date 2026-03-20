@@ -6,6 +6,8 @@ import { useTranslations } from "next-intl"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Plus, Minus,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -97,6 +99,7 @@ export default function PredefinedPadsPage() {
   const [selectedPadId, setSelectedPadId] = useState<string | null>(() => loadPpJson<string | null>(cid, "selectedPad", null))
   const [selected, setSelected] = useState<PredefinedPadResponse | null>(null)
   const [datesPage, setDatesPage] = useState(1)
+  const [detailMaximized, setDetailMaximized] = useState(() => loadPpJson<boolean>(cid, "detailMaximized", false))
 
   // ── Confirmation dialogs
   const [applyDialogPad, setApplyDialogPad] = useState<PredefinedPadResponse | null>(null)
@@ -129,6 +132,7 @@ export default function PredefinedPadsPage() {
   useEffect(() => { if (cid) savePpJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
   useEffect(() => { if (cid) savePpJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) savePpJson(cid, "selectedPad", selected?.id ?? null) }, [cid, selected?.id])
+  useEffect(() => { if (cid) savePpJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
 
   // ── Restore selected pad from persisted ID when list loads ─────────────────
 
@@ -306,7 +310,7 @@ export default function PredefinedPadsPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-end px-4 py-2 shrink-0 bg-background">
           <div className="relative">
@@ -509,12 +513,21 @@ export default function PredefinedPadsPage() {
       </div>
 
       {/* ── Detail pane ── */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden border-t">
+      <div className={cn("flex-1 flex flex-col min-h-0 overflow-hidden", !detailMaximized && "border-t")}>
         {selected ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 max-w-2xl">
-            <p className="text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide">
-              {t("datesHeading")} ({selectedDates.length})
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide">
+                {t("datesHeading")} ({selectedDates.length})
+              </p>
+              <div
+                className="flex items-center cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setDetailMaximized((v) => !v)}
+                aria-label={detailMaximized ? "Minimize" : "Maximize"}
+              >
+                {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+              </div>
+            </div>
             {selectedDates.length === 0 ? (
               <p className="text-sm text-[var(--muted-foreground)]">{t("noDates")}</p>
             ) : (

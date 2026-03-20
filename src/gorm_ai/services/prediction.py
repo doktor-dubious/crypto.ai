@@ -148,6 +148,51 @@ class PredictionService:
         # Resolve weekday correction flags once for all outlets in this prediction run.
         weekday_correction = await self._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._resolve_weekday_profile_correction(request.customer_id)
+        variation_params = await self._resolve_variation_adjustment(request.customer_id)
+
+        # Filter closed-day data from historical series so that engines don't
+        # see artificial zeros on days the customer is closed.
+        open_days = await self._resolve_open_days(request.customer_id)
+        if not all(open_days):
+            all_sales = {
+                oid: [(d, v) for d, v in sales if open_days[d.weekday()]]
+                for oid, sales in all_sales.items()
+            }
+
+        # --- Per-outlet open-day filtering ---
+        # An outlet may be closed on certain weekdays even when the customer
+        # is open (e.g. an outlet that only operates on Saturdays).  The
+        # OutletDelivery.open flag records this per outlet per weekday.
+        #
+        # If we don't filter here, the engine sees zeros on the outlet's
+        # closed days, which drags the forecast down — the same problem that
+        # customer-level open_days filtering solves, but at outlet granularity.
+        #
+        # outlet_closed_days: {outlet_id: set of python weekdays (0-6) that
+        #                      are CLOSED for this outlet}
+        # Only outlets that have at least one explicitly closed day AND at
+        # least one explicitly open day are included — if an outlet has no
+        # delivery config at all, we assume all (customer-open) days are open.
+        delivery_map_early = await self._load_outlet_deliveries(outlet_ids)
+        outlet_closed_days: dict[str, set[int]] = {}
+        for oid, wd_map in delivery_map_early.items():
+            # OutletDelivery.weekday uses 1-7 (Mon=1, Sun=7).
+            # Python date.weekday() uses 0-6 (Mon=0, Sun=6).
+            # Convert: python_wd = db_wd - 1
+            closed = {wd - 1 for wd, od in wd_map.items() if not od.open}
+            has_open = any(od.open for od in wd_map.values())
+            # Only filter if the outlet has at least one open day defined
+            # (otherwise the open flags may not be configured at all).
+            if closed and has_open:
+                outlet_closed_days[oid] = closed
+
+        if outlet_closed_days:
+            for oid, closed_wds in outlet_closed_days.items():
+                if oid in all_sales:
+                    all_sales[oid] = [
+                        (d, v) for d, v in all_sales[oid]
+                        if d.weekday() not in closed_wds
+                    ]
 
         # Collect per-outlet inputs (pure in-memory, no DB calls).
         # Skip outlets with insufficient history — passing empty or near-empty
@@ -170,6 +215,7 @@ class PredictionService:
                 "pad_dates": pad_covariates,
                 "weekday_correction": weekday_correction,
                 "weekday_profile_correction": weekday_profile_params,
+                "variation_adjustment": variation_params,
                 **(request.engine_params or {}),
             })
             valid_outlet_ids.append(outlet_id)
@@ -220,6 +266,47 @@ class PredictionService:
                     if wo_res:
                         all_results[outlet_idx[wo_oid]][ri] = wo_res[0]
 
+        # Zero out predictions on closed days — the customer is not open.
+        if not all(open_days):
+            future_dates_od = DataPreprocessor.generate_future_dates(request.prediction_from, horizon)
+            for results in all_results:
+                for i, d in enumerate(future_dates_od):
+                    if not open_days[d.weekday()] and i < len(results):
+                        r = results[i]
+                        n_q = len(r.quantiles) if r.quantiles else 0
+                        results[i] = PredictionResult(
+                            date=d,
+                            predicted_value=0,
+                            lower_bound=0,
+                            upper_bound=0,
+                            economic_optimal=0,
+                            quantiles=[0.0] * n_q if n_q else None,
+                        )
+
+        # --- Per-outlet closed-day zeroing ---
+        # Same as customer-level zeroing above, but applied per-outlet using
+        # the OutletDelivery.open flags.  An outlet that is closed on a
+        # given weekday should produce zero predictions for that day,
+        # regardless of the customer-level open_days setting.
+        if outlet_closed_days:
+            future_dates_od2 = DataPreprocessor.generate_future_dates(request.prediction_from, horizon)
+            for oid, results in zip(valid_outlet_ids, all_results):
+                closed_wds = outlet_closed_days.get(oid)
+                if not closed_wds:
+                    continue
+                for i, d in enumerate(future_dates_od2):
+                    if d.weekday() in closed_wds and i < len(results):
+                        r = results[i]
+                        n_q = len(r.quantiles) if r.quantiles else 0
+                        results[i] = PredictionResult(
+                            date=d,
+                            predicted_value=0,
+                            lower_bound=0,
+                            upper_bound=0,
+                            economic_optimal=0,
+                            quantiles=[0.0] * n_q if n_q else None,
+                        )
+
         ridge_results = getattr(engine, "_last_ridge_results", None)
         weekday_corrections: dict[str, dict[int, float]] = {}
         if ridge_results:
@@ -257,6 +344,7 @@ class PredictionService:
             default_cost=default_cost,
             default_profit=default_profit,
             weekday_corrections=weekday_corrections,
+            engine_params=resolved_engine_params or None,
         )
 
         if on_progress:
@@ -295,6 +383,7 @@ class PredictionService:
         default_cost: float | None = None,
         default_profit: float | None = None,
         weekday_corrections: "dict[str, dict[int, float]] | None" = None,
+        engine_params: dict | None = None,
     ) -> None:
         """Persist one Prediction + N PredictionOutlet rows for each date in the window."""
         # Load delivery constraints for all outlets (weekday → OutletDelivery)
@@ -348,7 +437,7 @@ class PredictionService:
                 delay=request.delay,
                 engine=engine,
                 requested_engine=requested_engine,
-                engine_params=resolved_engine_params or None,
+                engine_params=engine_params,
                 use_financials=request.use_financials,
                 use_pad=request.use_pad,
                 batch_size=request.batch_size,
@@ -462,6 +551,7 @@ class PredictionService:
             for outlet_id, r in outlet_results.items():
                 ap = outlet_applied.get(outlet_id, {})
                 oc = (weekday_corrections or {}).get(outlet_id, {})
+                q = r.quantiles  # [P10..P90] or None
                 self.session.add(PredictionOutlet(
                     prediction_id=prediction.id,
                     outlet_id=outlet_id,
@@ -470,8 +560,16 @@ class PredictionService:
                     upper_bound=r.upper_bound,
                     confidence=r.confidence,
                     eo=r.economic_optimal,
+                    cv=r.cv,
                     delivered=outlet_delivered[outlet_id],
                     actual_sale=actuals.get((pred_date, outlet_id)),
+                    q20=q[1] if q else None,
+                    q30=q[2] if q else None,
+                    q40=q[3] if q else None,
+                    q50=q[4] if q else None,
+                    q60=q[5] if q else None,
+                    q70=q[6] if q else None,
+                    q80=q[7] if q else None,
                     fixed=ap.get("fixed"),
                     minimum=ap.get("minimum"),
                     maximum=ap.get("maximum"),
@@ -507,6 +605,7 @@ class PredictionService:
                 lp.prediction_id = prediction.id
                 lp.predicted = r.predicted_value
                 lp.economic_optimal = r.economic_optimal
+                lp.cv = r.cv
                 lp.delivered = float(outlet_delivered[outlet_id])
                 lp.lower_bound = r.lower_bound
                 lp.upper_bound = r.upper_bound
@@ -1074,6 +1173,35 @@ class PredictionService:
                 flags.append(False)
         return flags
 
+    async def _resolve_open_days(self, customer_id: str) -> list[bool]:
+        """Resolve open_* flags [Mon..Sun]: customer_configuration → configuration → True."""
+        _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
+        )
+        gc = result.scalar_one_or_none()
+
+        flags = []
+        for day in _DAYS:
+            col = f"open_{day}"
+            cc_val = getattr(cc, col, None) if cc else None
+            if cc_val is not None:
+                flags.append(cc_val)
+            elif gc is not None:
+                flags.append(getattr(gc, col, True))
+            else:
+                flags.append(True)
+        return flags
+
     async def _resolve_weekday_profile_correction(self, customer_id: str) -> dict:
         """Resolve weekday profile correction params: customer_configuration → configuration → defaults.
 
@@ -1104,6 +1232,42 @@ class PredictionService:
             "enabled": _resolve("weekday_profile_correction", False),
             "strength": _resolve("weekday_profile_correction_strength", 1.0),
             "threshold": _resolve("weekday_profile_correction_threshold", 0.0),
+            "method": _resolve("weekday_profile_correction_method", 1),
+        }
+
+    async def _resolve_variation_adjustment(
+        self, customer_id: str,
+    ) -> dict:
+        """Resolve variation adjustment params.
+
+        Returns dict with keys: enabled (bool), history_days (int).
+        """
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+
+        def _resolve(attr: str, default):
+            cc_val = getattr(cc, attr, None) if cc else None
+            if cc_val is not None:
+                return cc_val
+            if gc is not None:
+                return getattr(gc, attr, default)
+            return default
+
+        return {
+            "enabled": _resolve("variation_adjustment", False),
+            "history_days": _resolve("variation_history_days", 365),
         }
 
     async def _resolve_rounding(self, customer_id: str) -> int:
@@ -1479,7 +1643,7 @@ class PredictionService:
         )
         rows = result.scalars().all()
         if rows:
-            params = {row.name: row.value for row in rows}
+            params = {row.name: (row.parameter if row.parameter else row.value) for row in rows}
             logger.info("Applying engine parameters for '%s': %s", engine_slug, params)
             engine.apply_parameters(params)
             return params
@@ -1700,6 +1864,8 @@ class PredictionService:
                         "outlet_count": outlet_counts.get(p.id, 0),
                         "error": None,
                         "created_at": tr.completed_at or tr.created_at,
+                        "started_at": tr.started_at,
+                        "completed_at": tr.completed_at,
                     })
             else:
                 # Failed / cancelled task — no prediction rows
@@ -1723,6 +1889,8 @@ class PredictionService:
                     "outlet_count": 0,
                     "error": tr.error,
                     "created_at": tr.completed_at or tr.created_at,
+                    "started_at": tr.started_at,
+                    "completed_at": tr.completed_at,
                 })
 
         return items, total

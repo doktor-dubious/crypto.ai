@@ -29,6 +29,7 @@ class PredictionEngineParameterService:
             prediction_engine_id=engine_id,
             name=data.name,
             value=data.value,
+            parameter=data.parameter,
             description=data.description,
             sort_order=data.sort_order,
         )

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
   BarChart3,
-  Blocks,
   ChevronDown,
   ChevronUp,
   CheckCircle,
@@ -40,6 +39,8 @@ import {
   FileSpreadsheet,
   ScrollText,
   Brain,
+  Server,
+  Container,
 } from "lucide-react"
 import { signOut, useSession } from "@/lib/auth-client"
 import {
@@ -67,6 +68,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { SidebarTasks } from "@/components/layout/sidebar-tasks"
 import { ThemeToggle } from "@/components/layout/theme-toggle"
 import { useCustomer } from "@/components/providers/customer-provider"
+import { BlocksIcon, type BlocksIconHandle } from "@/components/animate-ui/icons/blocks"
 
 function getInitials(name: string): string {
   return name
@@ -144,6 +146,12 @@ const AI_MODELS_SUBNAV_ITEMS = [
   { href: "/ai-models", icon: List, labelKey: "aiModelsModels" },
 ] as const
 
+const SYSTEM_SUBNAV_ITEMS = [
+  { href: "/system/logs", icon: ScrollText, labelKey: "systemLogs" },
+  { href: "/system/workers", icon: Users, labelKey: "systemWorkers" },
+  { href: "/system/docker", icon: Container, labelKey: "systemDocker" },
+] as const
+
 const CONFIG_ITEMS = [
   { href: "/configuration", icon: Settings, labelKey: "configuration" },
 ] as const
@@ -154,10 +162,12 @@ function CustomerSwitcher() {
   const { customers, sortedCustomers, recentCustomers, activeCustomer, setActiveCustomer } = useCustomer()
   const [isOpen, setIsOpen] = useState(false)
 
+  const blocksRef = useRef<BlocksIconHandle>(null)
+
   if (!activeCustomer) return (
-    <div className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b">
-      <Blocks className="h-4 w-4 shrink-0" />
-      <span className="text-xs truncate group-data-[collapsible=icon]:hidden text-[var(--muted-foreground)]">
+    <div className="flex items-center gap-2 w-full px-3 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] border-b">
+      <BlocksIcon size={16} className="shrink-0" />
+      <span className="text-xs truncate group-data-[collapsible=icon]:hidden opacity-80">
         Loading…
       </span>
     </div>
@@ -165,8 +175,8 @@ function CustomerSwitcher() {
 
   if (customers.length === 1) {
     return (
-      <div className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b">
-        <Blocks className="h-4 w-4 shrink-0" />
+      <div className="flex items-center gap-2 w-full px-3 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] border-b">
+        <BlocksIcon size={16} className="shrink-0" />
         <span className="text-xs truncate group-data-[collapsible=icon]:hidden">
           {activeCustomer.name}
         </span>
@@ -222,9 +232,11 @@ function CustomerSwitcher() {
       <button
         ref={triggerRef}
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 w-full px-3 py-2 bg-sidebar-accent text-sidebar-foreground/60 border-b hover:text-sidebar-foreground transition-colors outline-none cursor-pointer group-data-[collapsible=icon]:justify-center"
+        onMouseEnter={() => blocksRef.current?.startAnimation()}
+        onMouseLeave={() => blocksRef.current?.stopAnimation()}
+        className="flex items-center gap-2 w-full px-3 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] border-b hover:bg-[var(--primary)]/90 transition-colors outline-none cursor-pointer group-data-[collapsible=icon]:justify-center"
       >
-        <Blocks className="h-4 w-4 shrink-0" />
+        <BlocksIcon ref={blocksRef} size={16} className="shrink-0" />
         <span className="flex-1 text-xs truncate text-left group-data-[collapsible=icon]:hidden">
           {activeCustomer.name}
         </span>
@@ -360,14 +372,6 @@ export function AppSidebar() {
           </DropdownMenuTrigger>
 
           <DropdownMenuContent side="top" align="start" className="w-56 mb-1">
-            <DropdownMenuLabel className="font-normal">
-              <div className="flex flex-col space-y-0.5">
-                <p className="text-sm font-medium">{user?.name}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{user?.email}</p>
-              </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-
             {/* Navigation */}
             {NAV_ITEMS.map((item) => (
               <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
@@ -546,6 +550,23 @@ export function AppSidebar() {
                 {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
               </DropdownMenuItem>
             ))}
+
+            {/* System */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Server className="h-4 w-4" />
+                {t("nav.system")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {SYSTEM_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
             <DropdownMenuSeparator />
 
             {/* Theme + logout */}

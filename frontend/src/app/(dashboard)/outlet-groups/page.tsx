@@ -7,6 +7,10 @@ import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
   ChevronDown, ChevronUp, ArrowRightLeft,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -143,6 +147,7 @@ export default function OutletGroupsPage() {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(() => loadOgJson<string | null>(cid, "selectedGroup", null))
   const [selected, setSelected] = useState<OutletGroupResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadOgJson<string>(cid, "activeTab", "tab1"))
+  const [detailMaximized, setDetailMaximized] = useState(() => loadOgJson<boolean>(cid, "detailMaximized", false))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -210,6 +215,7 @@ export default function OutletGroupsPage() {
   useEffect(() => { if (cid) saveOgJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveOgJson(cid, "activeTab", activeTab) }, [cid, activeTab])
   useEffect(() => { if (cid) saveOgJson(cid, "selectedGroup", selected?.id ?? null) }, [cid, selected?.id])
+  useEffect(() => { if (cid) saveOgJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
 
   // ── Restore selected group from persisted ID when list loads ───────────────
 
@@ -528,7 +534,7 @@ export default function OutletGroupsPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 shrink-0 bg-background">
           <Button size="sm" className="h-7 gap-1.5 px-2 cursor-pointer" onClick={() => setNewDialogOpen(true)}>
@@ -691,13 +697,20 @@ export default function OutletGroupsPage() {
 
       {/* ── Detail pane ── */}
       {selected && (
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden border-t">
+        <div className={cn("flex-1 flex flex-col min-h-0 overflow-hidden", !detailMaximized && "border-t")}>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
             <div className="relative w-full">
               <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabOutlets")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
+                <div
+                  className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setDetailMaximized((v) => !v)}
+                  aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                >
+                  {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                </div>
               </TabsList>
               <div
                 className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
@@ -711,7 +724,23 @@ export default function OutletGroupsPage() {
               <TabsContent value="tab1" className="space-y-4 max-w-2xl mt-6 px-4 pb-20">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-medium text-[var(--muted-foreground)]">ID</label>
-                  <span className="text-sm font-mono opacity-60">{selected.id}</span>
+                  <div className="relative">
+                    <Input
+                      value={selected.id}
+                      readOnly
+                      className="pr-9 opacity-50 cursor-default select-all font-mono text-xs"
+                    />
+                    <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                      <CopyIcon
+                        size={16}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selected.id)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldName")}</label>

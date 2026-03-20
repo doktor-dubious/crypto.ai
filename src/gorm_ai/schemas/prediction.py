@@ -67,6 +67,8 @@ class PredictionResult(BaseModel):
     upper_bound: float | None = None
     confidence: float | None = None
     economic_optimal: float | None = None  # Newsvendor-optimal draw based on profit/cost margin
+    quantiles: list[float] | None = None  # P10..P90 (9 values at 0.1, 0.2, ..., 0.9)
+    cv: float | None = None  # per-weekday coefficient of variation
 
 
 class OutletPrediction(BaseModel):
@@ -184,6 +186,8 @@ class CompletedPredictionResponse(BaseModel):
     outlet_count: int
     error: str | None
     created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class PredictionAnalyticsSummary(BaseModel):
@@ -238,6 +242,7 @@ class PredictionEngineParameterResponse(BaseModel):
     prediction_engine_id: str
     name: str
     value: str
+    parameter: str | None
     description: str | None
     sort_order: int
     selected: bool
@@ -248,6 +253,7 @@ class PredictionEngineParameterCreate(BaseModel):
 
     name: str
     value: str
+    parameter: str | None = None
     description: str | None = None
     sort_order: int = 0
 

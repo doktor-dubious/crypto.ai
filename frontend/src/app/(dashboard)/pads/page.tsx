@@ -48,10 +48,63 @@ function filtersToAssignments(filters: SalesFilterResponse[]): StrategyAssignmen
   }))
 }
 
+// ─── Grouped filter type ─────────────────────────────────────────────────────
+
+interface GroupedFilter {
+  /** All individual filter IDs in this group */
+  ids: string[]
+  name: string
+  from_date: string
+  to_date: string
+}
+
+/**
+ * Group same-name filters with consecutive/overlapping date ranges into
+ * consolidated entries. Filters are considered consecutive when sorted by
+ * from_date and the next filter's from_date is at most 1 day after the
+ * previous filter's to_date.
+ */
+function groupFilters(filters: SalesFilterResponse[]): GroupedFilter[] {
+  if (filters.length === 0) return []
+
+  // Sort by name, then from_date
+  const sorted = [...filters].sort((a, b) =>
+    a.name !== b.name ? a.name.localeCompare(b.name) : a.from_date.localeCompare(b.from_date)
+  )
+
+  const groups: GroupedFilter[] = []
+  let current: GroupedFilter = {
+    ids: [sorted[0].id],
+    name: sorted[0].name,
+    from_date: sorted[0].from_date,
+    to_date: sorted[0].to_date,
+  }
+
+  for (let i = 1; i < sorted.length; i++) {
+    const f = sorted[i]
+    if (f.name === current.name) {
+      // Check if consecutive: next from_date is at most 1 day after current to_date
+      const prevEnd = new Date(current.to_date)
+      const nextStart = new Date(f.from_date)
+      const diffMs = nextStart.getTime() - prevEnd.getTime()
+      if (diffMs <= 86_400_000) {
+        // Merge: extend the range
+        current.ids.push(f.id)
+        if (f.to_date > current.to_date) current.to_date = f.to_date
+        continue
+      }
+    }
+    groups.push(current)
+    current = { ids: [f.id], name: f.name, from_date: f.from_date, to_date: f.to_date }
+  }
+  groups.push(current)
+  return groups
+}
+
 // ─── Dialog state types ──────────────────────────────────────────────────────
 
 interface FilterDialogState {
-  filterId: string
+  filterIds: string[]
   filterName: string
 }
 
@@ -142,9 +195,9 @@ export default function PadsFiltersPage() {
 
   const filterAssignments = useMemo(() => filtersToAssignments(filters), [filters])
 
-  // Sort filters by to_date descending (most recent first)
-  const sortedFilters = useMemo(
-    () => [...filters].sort((a, b) => b.to_date.localeCompare(a.to_date)),
+  // Group same-name consecutive filters into ranges, sorted by to_date descending
+  const groupedFilters = useMemo(
+    () => groupFilters(filters).sort((a, b) => b.to_date.localeCompare(a.to_date)),
     [filters]
   )
 
@@ -162,21 +215,22 @@ export default function PadsFiltersPage() {
   }, [pads])
 
   // Pagination
-  const totalFilterPages = Math.max(1, Math.ceil(sortedFilters.length / FILTERS_PER_PAGE))
+  const totalFilterPages = Math.max(1, Math.ceil(groupedFilters.length / FILTERS_PER_PAGE))
   const clampedPage = Math.min(filterPage, totalFilterPages - 1)
-  const pagedFilters = sortedFilters.slice(
+  const pagedFilters = groupedFilters.slice(
     clampedPage * FILTERS_PER_PAGE,
     (clampedPage + 1) * FILTERS_PER_PAGE
   )
 
-  // Color map for filters (based on original order for calendar consistency)
+  // Color map for grouped filters (first ID used as group key)
   const filterColorMap = useMemo(() => {
     const map = new Map<string, string>()
-    filters.forEach((f, i) => {
-      map.set(f.id, ASSIGNMENT_COLORS[i % ASSIGNMENT_COLORS.length].bar)
+    groupedFilters.forEach((g, i) => {
+      const color = ASSIGNMENT_COLORS[i % ASSIGNMENT_COLORS.length].bar
+      for (const id of g.ids) map.set(id, color)
     })
     return map
-  }, [filters])
+  }, [groupedFilters])
 
   // ─── Mutations ──────────────────────────────────────────────────────────────
 
@@ -235,7 +289,9 @@ export default function PadsFiltersPage() {
   })
 
   const deleteFilterMutation = useMutation({
-    mutationFn: (id: string) => salesFiltersApi.delete(id),
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) await salesFiltersApi.delete(id)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sales-filters", activeCustomer?.id] })
       toast.success(t("toastDeleted"))
@@ -323,7 +379,7 @@ export default function PadsFiltersPage() {
     }
   }
 
-  function handleFilterClick(filter: SalesFilterResponse) {
+  function handleFilterClick(filter: GroupedFilter) {
     const date = parseISO(filter.from_date)
     setNavigateToDate({ year: date.getFullYear(), month: date.getMonth() + 1 })
   }
@@ -387,34 +443,36 @@ export default function PadsFiltersPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {sortedFilters.length === 0 ? (
+              {groupedFilters.length === 0 ? (
                 <div className="px-3 py-6 text-center">
                   <p className="text-xs text-muted-foreground">{t("noFilters")}</p>
                 </div>
               ) : (
                 <div className="divide-y">
-                  {pagedFilters.map((filter) => {
-                    const color = filterColorMap.get(filter.id) ?? ASSIGNMENT_COLORS[0].bar
+                  {pagedFilters.map((group) => {
+                    const color = filterColorMap.get(group.ids[0]) ?? ASSIGNMENT_COLORS[0].bar
                     return (
                       <div
-                        key={filter.id}
+                        key={group.ids[0]}
                         className="flex items-center gap-2 px-3 py-2.5 group cursor-pointer hover:bg-muted/50 transition-colors"
-                        onClick={() => handleFilterClick(filter)}
+                        onClick={() => handleFilterClick(group)}
                       >
                         <div
                           className="h-2.5 w-2.5 rounded-sm shrink-0"
                           style={{ backgroundColor: color }}
                         />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">{filter.name}</p>
+                          <p className="text-xs font-medium truncate">{group.name}</p>
                           <p className="text-[10px] text-muted-foreground">
-                            {filter.from_date} – {filter.to_date}
+                            {group.from_date === group.to_date
+                              ? group.from_date
+                              : `${group.from_date} – ${group.to_date}`}
                           </p>
                         </div>
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            setFilterDialog({ filterId: filter.id, filterName: filter.name })
+                            setFilterDialog({ filterIds: group.ids, filterName: group.name })
                           }}
                           className={cn(
                             "shrink-0 text-muted-foreground transition-colors cursor-pointer",
@@ -488,7 +546,11 @@ export default function PadsFiltersPage() {
               selectedDates={selectedDates}
               onSelectedDatesChange={handleSelectedDatesChange}
               onPadChipClick={(padId, padName, date) => setPadDialog({ padId, padName, date })}
-              onBarClick={(filterId, filterName) => setFilterDialog({ filterId, filterName })}
+              onBarClick={(filterId, filterName) => {
+                // Find the group containing this filter ID to delete all grouped entries
+                const group = groupedFilters.find((g) => g.ids.includes(filterId))
+                setFilterDialog({ filterIds: group?.ids ?? [filterId], filterName })
+              }}
               navigateToDate={navigateToDate}
             />
           </div>
@@ -584,7 +646,7 @@ export default function PadsFiltersPage() {
               variant="destructive"
               size="sm"
               disabled={deleteFilterMutation.isPending}
-              onClick={() => filterDialog && deleteFilterMutation.mutate(filterDialog.filterId)}
+              onClick={() => filterDialog && deleteFilterMutation.mutate(filterDialog.filterIds)}
             >
               {t("deleteFilter")}
             </Button>

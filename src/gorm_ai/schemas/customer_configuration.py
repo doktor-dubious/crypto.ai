@@ -34,6 +34,16 @@ class CustomerConfigurationBase(BaseModel):
     weekday_profile_correction: bool | None = None
     weekday_profile_correction_strength: float | None = None
     weekday_profile_correction_threshold: float | None = None
+    weekday_profile_correction_method: int | None = None
+    variation_adjustment: bool | None = None
+    variation_history_days: int | None = None
+    open_monday: bool | None = None
+    open_tuesday: bool | None = None
+    open_wednesday: bool | None = None
+    open_thursday: bool | None = None
+    open_friday: bool | None = None
+    open_saturday: bool | None = None
+    open_sunday: bool | None = None
 
 
 class CustomerConfigurationCreate(CustomerConfigurationBase):
@@ -71,6 +81,16 @@ class CustomerConfigurationUpdate(BaseModel):
     weekday_profile_correction: bool | None = None
     weekday_profile_correction_strength: float | None = None
     weekday_profile_correction_threshold: float | None = None
+    weekday_profile_correction_method: int | None = None
+    variation_adjustment: bool | None = None
+    variation_history_days: int | None = None
+    open_monday: bool | None = None
+    open_tuesday: bool | None = None
+    open_wednesday: bool | None = None
+    open_thursday: bool | None = None
+    open_friday: bool | None = None
+    open_saturday: bool | None = None
+    open_sunday: bool | None = None
 
 
 class CustomerConfigurationResponse(CustomerConfigurationBase):

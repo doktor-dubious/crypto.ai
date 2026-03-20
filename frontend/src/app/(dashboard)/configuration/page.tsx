@@ -5,6 +5,8 @@ import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { Info, Settings, Users, Search } from "lucide-react"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { useCustomer } from "@/components/providers/customer-provider"
 import { ViewSwitcher } from "@/components/ui/view-switcher"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -183,16 +185,33 @@ function CurrencyCombobox({
 // ─── Tab content components ──────────────────────────────────────────────────
 
 function CustomerDetailsTab({
+  customerId,
   draft,
   setDraft,
   t,
 }: {
+  customerId: string
   draft: Partial<CustomerResponse>
   setDraft: (fn: (d: Partial<CustomerResponse>) => Partial<CustomerResponse>) => void
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
   return (
     <>
+      <FieldRow label={t("fieldCustomerId")}>
+        <div className="relative">
+          <Input value={customerId} readOnly className="pr-9 bg-[var(--muted)]/40 text-[var(--muted-foreground)] cursor-default" />
+          <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+            <CopyIcon
+              size={16}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => {
+                navigator.clipboard.writeText(customerId)
+                toast.success(t("toastCopied"))
+              }}
+            />
+          </AnimateIcon>
+        </div>
+      </FieldRow>
       <FieldRow label={t("fieldName")}>
         <Input
           value={draft.name ?? ""}
@@ -334,6 +353,31 @@ function CoreTab({
           <option value="3">{t("roundingFloor")}</option>
         </select>
       </FieldRow>
+
+      <SwitchRow
+        label={t("variationAdjustment")}
+        info={t("variationAdjustmentInfo")}
+        checked={draft.variation_adjustment as boolean ?? false}
+        onCheckedChange={(v) => set("variation_adjustment", v)}
+      />
+      {(draft.variation_adjustment as boolean) && (
+        <div className="mt-1 ml-4 space-y-3 border-l-2 border-[var(--border)] pl-4">
+          <FieldRow label={t("variationHistoryDays")} info={t("variationHistoryDaysInfo")}>
+            <Input
+              type="number"
+              min={30}
+              max={1825}
+              step={1}
+              value={draft.variation_history_days != null ? String(draft.variation_history_days) : "365"}
+              onChange={(e) => {
+                const v = e.target.value
+                set("variation_history_days", v === "" ? null : Math.max(30, Math.min(1825, parseInt(v, 10) || 365)))
+              }}
+              className="h-8 text-sm max-w-[140px]"
+            />
+          </FieldRow>
+        </div>
+      )}
     </>
   )
 }
@@ -350,9 +394,33 @@ function WeekdayTab({
   const set = (key: string, value: boolean) => setDraft((d) => ({ ...d, [key]: value }))
 
   const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const
+  const FULL_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const
 
   return (
     <>
+      {/* Opening Days */}
+      <div>
+        <div className="mb-1">
+          <h3 className="text-sm font-semibold">{t("sectionOpenDays")}</h3>
+          <p className="text-xs text-muted-foreground">{t("sectionOpenDaysDesc")}</p>
+        </div>
+        <div className="mt-3">
+          {FULL_DAYS.map((day) => {
+            const key = `open_${day}` as const
+            const labelKey = `open${day.charAt(0).toUpperCase()}${day.slice(1)}` as Parameters<typeof t>[0]
+            return (
+              <SwitchRow
+                key={key}
+                label={t(labelKey)}
+                info={t("openDayInfo")}
+                checked={draft[key] as boolean ?? true}
+                onCheckedChange={(v) => set(key, v)}
+              />
+            )
+          })}
+        </div>
+      </div>
+
       {/* Weekday Correction */}
       <div>
         <div className="mb-1">
@@ -445,6 +513,16 @@ function WeekdayTab({
                 }}
                 className="h-8 text-sm max-w-[140px]"
               />
+            </FieldRow>
+            <FieldRow label={t("weekdayProfileCorrectionMethod")} info={t("weekdayProfileCorrectionMethodInfo")}>
+              <select
+                value={String(draft.weekday_profile_correction_method ?? 1)}
+                onChange={(e) => setDraft((d) => ({ ...d, weekday_profile_correction_method: parseInt(e.target.value, 10) }))}
+                className={selectClassName}
+              >
+                <option value="1">{t("weekdayProfileCorrectionMethodAdditive")}</option>
+                <option value="2">{t("weekdayProfileCorrectionMethodMultiplicative")}</option>
+              </select>
             </FieldRow>
           </div>
         )}
@@ -635,18 +713,26 @@ export default function ConfigurationPage() {
       queryClient.invalidateQueries({ queryKey: ["customers"] })
       toast.success(t("toastCustomerUpdated"))
     },
-    onError: () => toast.error(t("toastError")),
+    onError: (e) => toast.error(t("toastError"), { description: e instanceof Error ? e.message : undefined }),
   })
 
   const configMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!customerConfig) {
         // No config exists yet — create one
         const data: Record<string, unknown> = {}
         for (const k of Object.keys(configDraft)) {
           if (configDraft[k] != null) data[k] = configDraft[k]
         }
-        return customerConfigurationApi.create(activeCustomer!.id, data)
+        try {
+          return await customerConfigurationApi.create(activeCustomer!.id, data)
+        } catch (e) {
+          // If create fails with 409/500 (config may already exist), try patch instead
+          if (e instanceof Error && e.message.includes("500")) {
+            return customerConfigurationApi.patch(activeCustomer!.id, data)
+          }
+          throw e
+        }
       }
       const changes: Record<string, unknown> = {}
       const source = customerConfig as unknown as Record<string, unknown>
@@ -659,7 +745,7 @@ export default function ConfigurationPage() {
       queryClient.invalidateQueries({ queryKey: ["customerConfiguration", activeCustomer?.id] })
       toast.success(t("toastConfigUpdated"))
     },
-    onError: () => toast.error(t("toastError")),
+    onError: (e) => toast.error(t("toastError"), { description: e instanceof Error ? e.message : undefined }),
   })
 
   const gormMutation = useMutation({
@@ -676,7 +762,7 @@ export default function ConfigurationPage() {
       queryClient.invalidateQueries({ queryKey: ["configuration"] })
       toast.success(t("toastConfigUpdated"))
     },
-    onError: () => toast.error(t("toastError")),
+    onError: (e) => toast.error(t("toastError"), { description: e instanceof Error ? e.message : undefined }),
   })
 
   function handleSave() {
@@ -706,7 +792,7 @@ export default function ConfigurationPage() {
   // ── Render ──
 
   const renderTabs = (tabValues: { value: string; label: string }[], content: ReactNode) => (
-    <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col overflow-hidden gap-0">
+    <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col gap-0">
       <div className="relative w-full">
         <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
           {tabValues.map((tv) => (
@@ -726,7 +812,7 @@ export default function ConfigurationPage() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex h-full flex-col">
         {/* Header with ViewSwitcher */}
         <div className="shrink-0 px-4 py-3">
           <ViewSwitcher
@@ -744,7 +830,7 @@ export default function ConfigurationPage() {
         </div>
 
         {/* Content */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden px-4">
+        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto px-4">
           {mode === "gorm" ? (
             renderTabs(
               [
@@ -753,7 +839,7 @@ export default function ConfigurationPage() {
                 { value: "workers", label: t("tabWorkers") },
               ],
               <>
-                <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <CoreTab
                     draft={gormDraft}
                     setDraft={setGormDraft}
@@ -764,10 +850,10 @@ export default function ConfigurationPage() {
                     t={t}
                   />
                 </TabsContent>
-                <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
-                <TabsContent value="workers" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                <TabsContent value="workers" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WorkersTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
               </>
@@ -780,10 +866,10 @@ export default function ConfigurationPage() {
                 { value: "weekday", label: t("tabWeekday") },
               ],
               <>
-                <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
-                  <CustomerDetailsTab draft={customerDraft} setDraft={setCustomerDraft} t={t} />
+                <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <CustomerDetailsTab customerId={cid} draft={customerDraft} setDraft={setCustomerDraft} t={t} />
                 </TabsContent>
-                <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <CoreTab
                     draft={configDraft}
                     setDraft={setConfigDraft}
@@ -794,7 +880,7 @@ export default function ConfigurationPage() {
                     t={t}
                   />
                 </TabsContent>
-                <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
               </>

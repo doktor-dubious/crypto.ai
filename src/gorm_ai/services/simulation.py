@@ -20,6 +20,7 @@ from gorm_ai.database.models.outlet_group import OutletGroupMember
 from gorm_ai.database.models.prediction import Prediction as PredictionModel
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.sales import Sales
+from gorm_ai.database.models.sales_filter import SalesFilter
 from gorm_ai.database.models.simulation import Simulation as SimulationModel
 from gorm_ai.database.models.simulation_date import SimulationDate as SimulationDateModel
 from gorm_ai.prediction.registry import EngineRegistry
@@ -34,6 +35,211 @@ from gorm_ai.services.prediction import PredictionService
 from gorm_ai.services.sales import SalesService
 
 _CONFIGURATION_SINGLETON_ID = "00000000-0000-0000-0000-000000000001"
+
+# ---------------------------------------------------------------------------
+# Ln(2) constant used to calibrate exponential tail decay.
+# When survival = exp(-LN2/scale * excess), it halves every `scale` units.
+# ---------------------------------------------------------------------------
+_LN2 = 0.6931471805599453
+
+
+def _demand_variability(quantiles: list[float]) -> float:
+    """Estimate the demand variability (scale) from the quantile spread.
+
+    We use the inter-quartile range (IQR) as the primary measure of how
+    much demand varies.  The IQR is robust to outliers and captures the
+    "typical" spread of the distribution.
+
+    Quantile indices:  0=Q10, 1=Q20, 2=Q30, 3=Q40, 4=Q50,
+                       5=Q60, 6=Q70, 7=Q80, 8=Q90
+
+    IQR approximation: Q70 - Q30  (indices 6 and 2).
+    This spans the middle 40% of the distribution (P30–P70).
+
+    Fallbacks for degenerate (very narrow) distributions:
+      1. Q90 - Q10  (full 80% range)
+      2. 10% of Q50  (absolute fallback for near-constant demand)
+      3. Minimum of 0.5 to avoid divide-by-zero or infinite tails
+    """
+    iqr = quantiles[6] - quantiles[2]  # Q70 - Q30
+    if iqr > 0:
+        return iqr
+
+    # Fallback 1: full range Q90-Q10
+    full_range = quantiles[8] - quantiles[0]
+    if full_range > 0:
+        return full_range
+
+    # Fallback 2: fraction of the median
+    return max(0.5, quantiles[4] * 0.10)
+
+
+def _build_posterior_survival(
+    actual_sale: float,
+    quantiles: list[float],
+) -> Callable[[float], float]:
+    """Build a posterior survival function anchored at the sold-out point.
+
+    === Why we don't use classical Bayesian conditioning here ===
+
+    The naive Bayesian approach is:
+
+        P(demand >= q | demand >= actual_sale)
+            = P_prior(demand >= q) / P_prior(demand >= actual_sale)
+
+    This is mathematically correct IF the prior CDF perfectly represents
+    the true demand distribution.  In practice it fails because:
+
+    1. The prior CDF is an approximation built from only 9 quantile
+       points (Q10–Q90) with piecewise-linear interpolation.
+
+    2. When actual_sale is at or near Q90 (the 90th percentile), the
+       prior says P(demand >= actual_sale) ≈ 10%.  Conditioning on this
+       renormalizes a very thin slice of the prior tail, amplifying any
+       errors in the tail shape.
+
+    3. The observation "outlet sold out at actual_sale" is strong evidence
+       that the forecast underestimated demand for this outlet on this
+       day.  Classical conditioning preserves the prior's thin tail shape
+       — it doesn't account for the fact that the model was likely wrong
+       about the demand level.
+
+    Example:  Q10–Q90 = [1.5, 1.8, 2.0, 2.1, 2.3, 2.4, 2.6, 2.7, 3.0]
+    Outlet sold out at 3 (= Q90).
+    Naive conditioning gives P(demand >= 4 | demand >= 3) ≈ 10%.
+    But the observation tells us demand was AT LEAST 3 — the forecast was
+    wrong.  We should give meaningful probability to demand being 4+.
+
+    === What we do instead: observation-anchored posterior tail ===
+
+    We treat the sold-out point (actual_sale) as a known floor for demand
+    and build an exponential survival curve starting from that floor:
+
+        P(demand >= actual_sale + k) = exp(-lambda * k)
+
+    where lambda = ln(2) / variability.
+
+    The "variability" is derived from the forecast's inter-quartile range
+    (IQR = Q70 - Q30).  This captures the model's estimate of demand
+    SPREAD without relying on where the model placed the demand LEVEL.
+
+    The key insight: even when the model was wrong about the level, its
+    estimate of spread (how much demand varies day-to-day) is still
+    informative.
+
+    Properties:
+    - P(demand >= actual_sale) = 1.0  (we know this — the outlet sold out)
+    - Survival halves every `variability` units above actual_sale
+    - Does not depend on where actual_sale falls in the prior CDF
+    - Heavier tail than naive conditioning when the prior underestimated
+
+    Example with IQR = 0.6 (Q70=2.6, Q30=2.0):
+      lambda = ln(2) / 0.6 ≈ 1.155
+      P(demand >= 4 | sold out at 3) = exp(-1.155 * 1) ≈ 0.315  (32%)
+      P(demand >= 5 | sold out at 3) = exp(-1.155 * 2) ≈ 0.099  (10%)
+
+    Compare naive conditioning: P(demand >= 4) ≈ 10%, P(demand >= 5) ≈ 1%
+    """
+    variability = _demand_variability(quantiles)
+
+    # Lambda controls how fast survival drops per unit above actual_sale.
+    # Survival halves every `variability` units.
+    _lambda = _LN2 / variability
+
+    def survival(x: float) -> float:
+        """P(demand >= x | demand >= actual_sale).
+
+        Returns 1.0 at x = actual_sale, decays exponentially above.
+        Returns 1.0 for x < actual_sale (certain — demand already exceeded it).
+        """
+        excess = x - actual_sale
+        if excess <= 0:
+            return 1.0
+        return math.exp(-_lambda * excess)
+
+    return survival
+
+
+def expected_extra_sales(
+    actual_sale: float,
+    scenario_draw: float,
+    quantiles: list[float] | None,
+) -> float:
+    """Estimate expected extra units sold if more stock had been available.
+
+    Called only when the outlet sold out (demand >= actual_sale, zero returns).
+    Uses the posterior survival function to estimate the probability of
+    selling each additional unit from actual_sale+1 up to scenario_draw.
+
+    The expected extra sales is the sum of survival probabilities:
+
+        E[extra] = sum_{k=1}^{N} P(demand >= actual_sale + k)
+
+    where N = scenario_draw - actual_sale.
+
+    Each term P(demand >= actual_sale + k) represents the probability that
+    demand is high enough to sell the k-th additional unit.  Summing these
+    gives the expected number of extra units sold (by linearity of
+    expectation).
+
+    Falls back to a simple binary count (round(diff)) when quantiles are
+    unavailable — this assumes all extra units would sell with certainty.
+    """
+    diff = scenario_draw - actual_sale
+    if diff <= 0:
+        return 0.0
+
+    if quantiles is None or len(quantiles) != 9:
+        return round(diff)
+
+    survival = _build_posterior_survival(actual_sale, quantiles)
+
+    total = 0.0
+    start = int(actual_sale) + 1
+    end = int(scenario_draw)
+    for q in range(start, end + 1):
+        total += survival(float(q))
+
+    return total
+
+
+def expected_extra_sales_detailed(
+    actual_sale: float,
+    scenario_draw: float,
+    quantiles: list[float] | None,
+) -> tuple[float, list[tuple[int, float]]]:
+    """Like expected_extra_sales but also returns per-unit probabilities.
+
+    Returns:
+        (total_expected_extra_sales, [(unit, survival_prob), ...])
+
+    The per-unit probabilities show P(demand >= unit) for each integer
+    unit from actual_sale+1 to scenario_draw.  These are displayed in the
+    simulation detail view so the user can see how confidence drops for
+    each additional unit.
+    """
+    diff = scenario_draw - actual_sale
+    if diff <= 0:
+        return 0.0, []
+
+    if quantiles is None or len(quantiles) != 9:
+        n = round(diff)
+        return float(n), [(q, 1.0) for q in range(
+            int(actual_sale) + 1, int(actual_sale) + 1 + int(n),
+        )]
+
+    survival = _build_posterior_survival(actual_sale, quantiles)
+
+    total = 0.0
+    unit_probs: list[tuple[int, float]] = []
+    start = int(actual_sale) + 1
+    end = int(scenario_draw)
+    for q in range(start, end + 1):
+        prob = survival(float(q))
+        total += prob
+        unit_probs.append((q, round(prob, 4)))
+
+    return total, unit_probs
 
 
 class SimulationService:
@@ -148,7 +354,33 @@ class SimulationService:
         rounding = await self._prediction_service._resolve_rounding(request.customer_id)
         weekday_correction = await self._prediction_service._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
+        variation_params = await self._prediction_service._resolve_variation_adjustment(request.customer_id)
         weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
+        open_days_flags = await self._prediction_service._resolve_open_days(request.customer_id)
+
+        # --- Per-outlet closed days (same logic as in PredictionService) ---
+        # Build a set of python weekdays (0-6) that are closed for each outlet,
+        # based on OutletDelivery.open flags.  Used to:
+        #   1. Filter historical data so the engine doesn't see closed-day zeros
+        #   2. Skip closed-day results in the per-outlet accumulation loop
+        outlet_closed_days: dict[str, set[int]] = {}
+        for oid, wd_map in delivery_map.items():
+            # OutletDelivery.weekday: 1-7 (Mon=1) → Python weekday: 0-6 (Mon=0)
+            closed = {wd - 1 for wd, od in wd_map.items() if not od.open}
+            has_open = any(od.open for od in wd_map.values())
+            if closed and has_open:
+                outlet_closed_days[oid] = closed
+
+        # Load sales filter date ranges so we can skip filtered dates
+        _sf_result = await self.session.execute(
+            select(SalesFilter.from_date, SalesFilter.to_date).where(
+                SalesFilter.customer_id == request.customer_id,
+                SalesFilter.active.is_(True),
+            )
+        )
+        sales_filter_ranges: list[tuple[date, date]] = [
+            (row.from_date, row.to_date) for row in _sf_result.all()
+        ]
 
         # Per-outlet scalar accumulators — avoids holding all SimulationDayResult objects in RAM
         outlet_profit_acc: dict[str, float] = {oid: 0.0 for oid in outlet_ids}
@@ -221,6 +453,15 @@ class SimulationService:
                     {"date": s.date, "value": s.sold} for s in historical_sales
                 ]
 
+                # Filter out days this specific outlet is closed (per-outlet open days).
+                # Without this, closed-day zeros pollute the training data.
+                closed_wds = outlet_closed_days.get(outlet_id)
+                if closed_wds:
+                    historical_data = [
+                        row for row in historical_data
+                        if row["date"].weekday() not in closed_wds
+                    ]
+
                 if len(historical_data) < capabilities.min_history_length:
                     continue
 
@@ -237,6 +478,7 @@ class SimulationService:
                     "pad_dates": pad_covariates,
                     "weekday_correction": weekday_correction,
                     "weekday_profile_correction": weekday_profile_params,
+                    "variation_adjustment": variation_params,
                 })
                 batch_outlet_ids.append(outlet_id)
 
@@ -328,7 +570,25 @@ class SimulationService:
                 }
 
                 for pred_date, outlet_results in sorted(date_outlet.items()):
-                    weekday = pred_date.weekday() + 1  # 1=Monday, 7=Sunday
+                    # Skip days the publication is closed
+                    if not open_days_flags[pred_date.weekday()]:
+                        continue
+                    # Skip dates covered by sales filters
+                    if any(sf_from <= pred_date <= sf_to for sf_from, sf_to in sales_filter_ranges):
+                        continue
+
+                    # Remove outlets that are closed on this weekday (per-outlet open days).
+                    # This prevents closed-day predictions from affecting simulation metrics.
+                    py_wd = pred_date.weekday()  # 0-6
+                    if outlet_closed_days:
+                        outlet_results = {
+                            oid: r for oid, r in outlet_results.items()
+                            if py_wd not in outlet_closed_days.get(oid, set())
+                        }
+                        if not outlet_results:
+                            continue
+
+                    weekday = py_wd + 1  # 1=Monday, 7=Sunday
 
                     pred_record = PredictionModel(
                         customer_id=request.customer_id,
@@ -441,6 +701,7 @@ class SimulationService:
                     for outlet_id, r in outlet_results.items():
                         delivery = delivery_map.get(outlet_id, {}).get(weekday)
                         oc = chunk_weekday_corrections.get(outlet_id, {})
+                        q = r.quantiles  # [P10..P90] or None
                         self.session.add(PredictionOutlet(
                             prediction_id=pred_record.id,
                             outlet_id=outlet_id,
@@ -449,8 +710,16 @@ class SimulationService:
                             upper_bound=r.upper_bound,
                             confidence=r.confidence,
                             eo=r.economic_optimal,
+                            cv=r.cv,
                             delivered=outlet_delivered[outlet_id],
                             actual_sale=chunk_actuals.get((pred_date, outlet_id)),
+                            q20=q[1] if q else None,
+                            q30=q[2] if q else None,
+                            q40=q[3] if q else None,
+                            q50=q[4] if q else None,
+                            q60=q[5] if q else None,
+                            q70=q[6] if q else None,
+                            q80=q[7] if q else None,
                             fixed=delivery.fixed if delivery else None,
                             minimum=delivery.minimum if delivery else None,
                             maximum=delivery.maximum if delivery else None,
@@ -529,11 +798,8 @@ class SimulationService:
                         actual_total_sale += actual_sale
                         actual_total_returned += max(0.0, actual_draw - actual_sale)
 
-                    # --- Accumulate scenario stats ---
-                    if actual_sale is not None:
-                        delivered_total_delivered += round(adj_draw)
-                        delivered_total_sold += round(min(adj_draw, actual_sale))
-                        delivered_total_returned += round(max(0.0, adj_draw - actual_sale))
+                    # --- Accumulate scenario stats (deferred until after sold-out logic) ---
+                    _acc_scenario_delivered = actual_sale is not None
 
                     # prediction scenario: diff metrics + group profit (same logic as delivered, using rounded predicted)
                     if actual_draw is not None and actual_sale is not None:
@@ -549,10 +815,10 @@ class SimulationService:
                             p_loss = round(p_draw - actual_sale)
                             p_more = 0
                         elif p_draw > actual_sale and sold_out_p:
-                            p_sold_if = p_draw
+                            p_more = expected_extra_sales(actual_sale, p_draw, pred.quantiles)
+                            p_sold_if = actual_sale + p_more
                             p_return_if = 0.0
                             p_loss = 0
-                            p_more = round(p_draw - actual_sale)
                         else:
                             p_sold_if = actual_sale
                             p_return_if = max(0.0, p_draw - actual_sale)
@@ -575,7 +841,7 @@ class SimulationService:
                         elif p_draw > actual_draw:
                             increase = p_draw - actual_draw
                             if sold_out_p:
-                                pred_g_profit[4] += increase * _profit
+                                pred_g_profit[4] += p_more * _profit - increase * _cost
                             else:
                                 pred_g_profit[3] -= increase * _cost
 
@@ -598,10 +864,10 @@ class SimulationService:
                             eo_loss = round(eo_draw - actual_sale)
                             eo_more = 0
                         elif eo_draw > actual_sale and sold_out_eo:
-                            eo_sold_if = eo_draw
+                            eo_more = expected_extra_sales(actual_sale, eo_draw, pred.quantiles)
+                            eo_sold_if = actual_sale + eo_more
                             eo_return_if = 0.0
                             eo_loss = 0
-                            eo_more = round(eo_draw - actual_sale)
                         else:
                             eo_sold_if = actual_sale
                             eo_return_if = max(0.0, eo_draw - actual_sale)
@@ -624,7 +890,7 @@ class SimulationService:
                         elif eo_draw > actual_draw:
                             increase = eo_draw - actual_draw
                             if sold_out_eo:
-                                eo_g_profit[4] += increase * _profit
+                                eo_g_profit[4] += eo_more * _profit - increase * _cost
                             else:
                                 eo_g_profit[3] -= increase * _cost
 
@@ -643,10 +909,10 @@ class SimulationService:
                             more_sale = 0
                         elif adj_draw > actual_sale and sold_out:
                             # Over-delivery into sold-out outlet: extra copies could sell
-                            sold_if_delivered = adj_draw
+                            more_sale = expected_extra_sales(actual_sale, adj_draw, pred.quantiles)
+                            sold_if_delivered = actual_sale + more_sale
                             return_if_delivered = 0.0
                             loss_sale = 0
-                            more_sale = round(adj_draw - actual_sale)  # positive
                         else:
                             # Over-delivery but not sold out, or exact match
                             sold_if_delivered = actual_sale
@@ -672,10 +938,22 @@ class SimulationService:
                             increase = adj_draw - actual_draw
                             if sold_out:
                                 # G4: good increase — outlet was sold out, extra copies could sell
-                                deliv_g_profit[4] += increase * _profit
+                                deliv_g_profit[4] += more_sale * _profit - increase * _cost
                             else:
                                 # G3: bad increase — outlet had unsold copies, extra copies wasted
                                 deliv_g_profit[3] -= increase * _cost
+
+                    # Now accumulate scenario totals using sold-out-aware values
+                    if _acc_scenario_delivered:
+                        delivered_total_delivered += round(adj_draw)
+                        if actual_draw is not None:
+                            # Use the sold-out-corrected values computed above
+                            delivered_total_sold += round(sold_if_delivered)
+                            delivered_total_returned += round(max(0.0, adj_draw - sold_if_delivered))
+                        else:
+                            # No actual_draw → can't determine sold-out, use naive
+                            delivered_total_sold += round(min(adj_draw, actual_sale))
+                            delivered_total_returned += round(max(0.0, adj_draw - actual_sale))
 
                     log.debug(
                         "simulation.date",
@@ -1201,6 +1479,7 @@ class SimulationService:
         simulation_id: str,
         column: str = "delivered",
         weekdays: list[int] | None = None,
+        outlet_ids: list[str] | None = None,
     ) -> dict | None:
         """Re-aggregate overview stats for a simulation, optionally filtered by weekday.
 
@@ -1229,6 +1508,8 @@ class SimulationService:
         filters = [SimulationDate.simulation_id == simulation_id]
         if weekdays:
             filters.append(extract("isodow", PredictionModel.date).in_(weekdays))
+        if outlet_ids:
+            filters.append(PredictionOutlet.outlet_id.in_(outlet_ids))
 
         # Load all relevant rows with actual delivery from sales
         rows_result = await self.session.execute(
@@ -1238,6 +1519,15 @@ class SimulationService:
                 col_attr.label("scenario_delivery"),
                 Sales.delivered.label("actual_delivered"),
                 PredictionOutlet.actual_sale,
+                PredictionOutlet.lower_bound,
+                PredictionOutlet.q20,
+                PredictionOutlet.q30,
+                PredictionOutlet.q40,
+                PredictionOutlet.q50,
+                PredictionOutlet.q60,
+                PredictionOutlet.q70,
+                PredictionOutlet.q80,
+                PredictionOutlet.upper_bound,
             )
             .join(SimulationDate, SimulationDate.prediction_id == PredictionOutlet.prediction_id)
             .join(PredictionModel, PredictionModel.id == PredictionOutlet.prediction_id)
@@ -1264,13 +1554,17 @@ class SimulationService:
         total_delivered = 0.0
         total_sold = 0.0
         total_returned = 0.0
+        scenario_sold_out_count = 0
+        scenario_total_count = 0
+        actual_sold_out_count = 0
+        actual_total_count = 0
         actual_total_delivered = 0.0
         actual_total_sale = 0.0
         actual_total_returned = 0.0
         diff_delivered_total = 0
         diff_return_total = 0
         lost_sale_total = 0
-        more_sale_total = 0
+        more_sale_total = 0.0
         g_profit: dict[int, float] = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         has_scenario = False
         has_actual = False
@@ -1280,6 +1574,10 @@ class SimulationService:
             actual_draw = float(r.actual_delivered) if r.actual_delivered is not None else None
             actual_sale = float(r.actual_sale) if r.actual_sale is not None else None
 
+            # Reconstruct quantiles from stored columns (None if any missing)
+            q_vals = [r.lower_bound, r.q20, r.q30, r.q40, r.q50, r.q60, r.q70, r.q80, r.upper_bound]
+            row_quantiles = [float(v) for v in q_vals] if all(v is not None for v in q_vals) else None
+
             if scenario_delivery is not None and actual_sale is not None:
                 has_scenario = True
                 s_draw = max(1, round(float(scenario_delivery)))
@@ -1287,7 +1585,11 @@ class SimulationService:
                 # Use conservative sold/returned (matches run_simulation logic)
                 total_delivered += s_draw
                 total_sold += round(min(s_draw, actual_sale))
-                total_returned += round(max(0.0, s_draw - actual_sale))
+                s_ret = round(max(0.0, s_draw - actual_sale))
+                total_returned += s_ret
+                scenario_total_count += 1
+                if s_ret == 0:
+                    scenario_sold_out_count += 1
 
                 # Diff metrics (require actual_draw)
                 if actual_draw is not None:
@@ -1297,15 +1599,15 @@ class SimulationService:
                     if s_draw < actual_sale:
                         s_return_if = 0.0
                         loss_sale = round(s_draw - actual_sale)  # negative
-                        more_sale = 0
+                        more_sale = 0.0
                     elif s_draw > actual_sale and sold_out:
+                        more_sale = expected_extra_sales(actual_sale, s_draw, row_quantiles)
                         s_return_if = 0.0
                         loss_sale = 0
-                        more_sale = round(s_draw - actual_sale)  # positive
                     else:
                         s_return_if = max(0.0, s_draw - actual_sale)
                         loss_sale = 0
-                        more_sale = 0
+                        more_sale = 0.0
 
                     diff_delivered_total += round(s_draw - actual_draw)
                     diff_return_total += round(s_return_if - actual_return_val)
@@ -1329,7 +1631,7 @@ class SimulationService:
                     elif s_draw > actual_draw:
                         increase = s_draw - actual_draw
                         if sold_out:
-                            g_profit[4] += increase * _profit
+                            g_profit[4] += more_sale * _profit - increase * _cost
                         else:
                             g_profit[3] -= increase * _cost
 
@@ -1337,7 +1639,11 @@ class SimulationService:
                 has_actual = True
                 actual_total_delivered += actual_draw
                 actual_total_sale += actual_sale
-                actual_total_returned += max(0.0, actual_draw - actual_sale)
+                a_ret = max(0.0, actual_draw - actual_sale)
+                actual_total_returned += a_ret
+                actual_total_count += 1
+                if a_ret == 0:
+                    actual_sold_out_count += 1
 
         return {
             "total_delivered": total_delivered if has_scenario else None,
@@ -1354,6 +1660,16 @@ class SimulationService:
             "g2": g_profit[2] or None,
             "g3": g_profit[3] or None,
             "g4": g_profit[4] or None,
+            "sold_out_pct": (
+                round(scenario_sold_out_count / scenario_total_count * 100, 1)
+                if scenario_total_count > 0 else None
+            ),
+            "actual_sold_out_pct": (
+                round(actual_sold_out_count / actual_total_count * 100, 1)
+                if actual_total_count > 0 else None
+            ),
+            "default_cost": default_cost,
+            "default_profit": default_profit,
         }
 
     async def get_model_fit(
@@ -1396,37 +1712,447 @@ class SimulationService:
         if weekdays:
             filters.append(extract("isodow", PredictionModel.date).in_(weekdays))
 
+        from gorm_ai.database.models.outlet_financials import OutletFinancials
+
+        # Fetch per-outlet rows (not aggregated) so we can compute profit
         rows = await self.session.execute(
             select(
                 PredictionModel.date,
-                func.sum(PredictionOutlet.actual_sale).label("actual_sale"),
-                func.sum(PredictionOutlet.delivered).label("delivered"),
-                func.sum(PredictionOutlet.eo).label("eo"),
-                func.sum(PredictionOutlet.predicted).label("predicted"),
-                func.sum(PredictionOutlet.lower_bound).label("lower_bound"),
-                func.sum(PredictionOutlet.upper_bound).label("upper_bound"),
+                extract("isodow", PredictionModel.date).label("weekday"),
+                PredictionOutlet.outlet_id,
+                PredictionOutlet.actual_sale,
+                PredictionOutlet.delivered,
+                PredictionOutlet.eo,
+                PredictionOutlet.predicted,
+                PredictionOutlet.lower_bound,
+                PredictionOutlet.upper_bound,
+                Sales.delivered.label("actual_delivered"),
+                Sales.sold.label("actual_sold"),
             )
             .join(SimulationDate, SimulationDate.prediction_id == PredictionOutlet.prediction_id)
             .join(PredictionModel, PredictionModel.id == PredictionOutlet.prediction_id)
+            .outerjoin(
+                Sales,
+                (Sales.outlet_id == PredictionOutlet.outlet_id)
+                & (Sales.date == PredictionModel.date),
+            )
             .where(*filters)
-            .group_by(PredictionModel.date)
             .order_by(PredictionModel.date)
         )
+        raw_rows = rows.all()
+
+        # Load financials
+        all_outlet_ids = list({r.outlet_id for r in raw_rows})
+        fin_result = await self.session.execute(
+            select(
+                OutletFinancials.outlet_id,
+                OutletFinancials.weekday,
+                OutletFinancials.cost_per_unit,
+                OutletFinancials.profit_per_unit,
+            ).where(OutletFinancials.outlet_id.in_(all_outlet_ids))
+        ) if all_outlet_ids else None
+        fin_map: dict[tuple[str, int], tuple[float | None, float | None]] = {}
+        if fin_result:
+            fin_map = {
+                (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
+                for r in fin_result
+            }
+        default_cost, default_profit = await self._get_default_financials(
+            sim.customer_id
+        )
+
+        # Aggregate by date
+        from collections import defaultdict
+        date_agg: dict[date, dict] = {}
+        for r in raw_rows:
+            d = r.date
+            if d not in date_agg:
+                date_agg[d] = {
+                    "actual_sale": 0.0, "delivered": 0.0, "eo": 0.0, "predicted": 0.0,
+                    "lower_bound": 0.0, "upper_bound": 0.0,
+                    "actual_delivered": 0.0, "actual_sold": 0.0,
+                    "sim_delivered": 0.0, "sim_sold": 0.0,
+                    "sim_profit": 0.0, "actual_profit": 0.0,
+                    "_has_actual": False, "_has_sim": False,
+                }
+            agg = date_agg[d]
+            if r.actual_sale is not None:
+                agg["actual_sale"] += float(r.actual_sale)
+            if r.delivered is not None:
+                agg["delivered"] += float(r.delivered)
+            if r.eo is not None:
+                agg["eo"] += float(r.eo)
+            if r.predicted is not None:
+                agg["predicted"] += float(r.predicted)
+            if r.lower_bound is not None:
+                agg["lower_bound"] += float(r.lower_bound)
+            if r.upper_bound is not None:
+                agg["upper_bound"] += float(r.upper_bound)
+
+            weekday = int(r.weekday)
+            cost, profit_unit = fin_map.get(
+                (r.outlet_id, weekday), (None, None)
+            )
+            _cost = (cost if cost is not None else default_cost) or 0.0
+            _profit = (profit_unit if profit_unit is not None else default_profit) or 0.0
+
+            # Actual values
+            if r.actual_delivered is not None:
+                a_del = float(r.actual_delivered)
+                a_sold = float(r.actual_sold) if r.actual_sold is not None else 0.0
+                a_ret = a_del - a_sold
+                agg["actual_delivered"] += a_del
+                agg["actual_sold"] += a_sold
+                agg["actual_profit"] += a_sold * _profit - a_ret * _cost
+                agg["_has_actual"] = True
+
+            # Sim values
+            if r.delivered is not None and r.actual_sale is not None:
+                s_draw = max(1.0, round(float(r.delivered)))
+                s_sold = min(s_draw, float(r.actual_sale))
+                s_ret = s_draw - s_sold
+                agg["sim_delivered"] += s_draw
+                agg["sim_sold"] += s_sold
+                agg["sim_profit"] += s_sold * _profit - s_ret * _cost
+                agg["_has_sim"] = True
 
         data = [
             {
-                "date": row.date,
-                "actual_sale": row.actual_sale,
-                "delivered": row.delivered,
-                "eo": row.eo,
-                "predicted": row.predicted,
-                "lower_bound": row.lower_bound,
-                "upper_bound": row.upper_bound,
+                "date": d,
+                "actual_sale": agg["actual_sale"] or None,
+                "delivered": agg["delivered"] or None,
+                "eo": agg["eo"] or None,
+                "predicted": agg["predicted"] or None,
+                "lower_bound": agg["lower_bound"] or None,
+                "upper_bound": agg["upper_bound"] or None,
+                "actual_delivered": agg["actual_delivered"] if agg["_has_actual"] else None,
+                "actual_sold": agg["actual_sold"] if agg["_has_actual"] else None,
+                "actual_returned": (agg["actual_delivered"] - agg["actual_sold"]) if agg["_has_actual"] else None,
+                "actual_profit": round(agg["actual_profit"], 2) if agg["_has_actual"] else None,
+                "sim_delivered": agg["sim_delivered"] if agg["_has_sim"] else None,
+                "sim_sold": agg["sim_sold"] if agg["_has_sim"] else None,
+                "sim_returned": (agg["sim_delivered"] - agg["sim_sold"]) if agg["_has_sim"] else None,
+                "sim_profit": round(agg["sim_profit"], 2) if agg["_has_sim"] else None,
             }
-            for row in rows.all()
+            for d, agg in sorted(date_agg.items())
         ]
 
         return {"outlets": outlets, "data": data}
+
+    async def get_data_dump(
+        self,
+        simulation_id: str,
+        column: str = "delivered",
+        outlet_ids: list[str] | None = None,
+        from_date: date | None = None,
+        to_date: date | None = None,
+        weekdays: list[int] | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        sort_by: str = "date",
+        sort_dir: str = "asc",
+        search: str | None = None,
+        group: str | None = None,
+    ) -> dict | None:
+        """Return per-row prediction-outlet data for a simulation."""
+        from sqlalchemy import case, extract, func
+
+        from gorm_ai.database.models.outlet_financials import (
+            OutletFinancials,
+        )
+        from gorm_ai.database.models.simulation_date import SimulationDate
+
+        sim = await self.session.get(SimulationModel, simulation_id)
+        if not sim or not sim.active:
+            return None
+
+        _col_attr = {
+            "delivered": PredictionOutlet.delivered,
+            "eo": PredictionOutlet.eo,
+            "predicted": PredictionOutlet.predicted,
+        }
+        col_attr = _col_attr.get(column, PredictionOutlet.delivered)
+
+        filters = [SimulationDate.simulation_id == simulation_id]
+        if weekdays:
+            filters.append(
+                extract("isodow", PredictionModel.date).in_(weekdays)
+            )
+        if outlet_ids:
+            filters.append(PredictionOutlet.outlet_id.in_(outlet_ids))
+        if from_date:
+            filters.append(PredictionModel.date >= from_date)
+        if to_date:
+            filters.append(PredictionModel.date <= to_date)
+        if search:
+            filters.append(Outlet.name.ilike(f"%{search}%"))
+
+        # Group filter: classify rows by comparing scenario vs actual delivery
+        # s_draw = ROUND(scenario_col), G1: s_draw < actual_delivered AND s_draw >= actual_sale
+        # G2: s_draw < actual_delivered AND s_draw < actual_sale
+        # G3: s_draw > actual_delivered AND actual_delivered > actual_sale (not sold out)
+        # G4: s_draw > actual_delivered AND actual_delivered <= actual_sale (sold out)
+        needs_sales_for_filter = group in ("g1", "g2", "g3", "g4")
+        group_filters = []
+        if needs_sales_for_filter:
+            s_draw = func.round(col_attr)
+            if group == "g1":
+                group_filters = [
+                    s_draw < Sales.delivered,
+                    s_draw >= PredictionOutlet.actual_sale,
+                    Sales.delivered.isnot(None),
+                    PredictionOutlet.actual_sale.isnot(None),
+                ]
+            elif group == "g2":
+                group_filters = [
+                    s_draw < Sales.delivered,
+                    s_draw < PredictionOutlet.actual_sale,
+                    Sales.delivered.isnot(None),
+                    PredictionOutlet.actual_sale.isnot(None),
+                ]
+            elif group == "g3":
+                group_filters = [
+                    s_draw > Sales.delivered,
+                    Sales.delivered > PredictionOutlet.actual_sale,
+                    Sales.delivered.isnot(None),
+                    PredictionOutlet.actual_sale.isnot(None),
+                ]
+            elif group == "g4":
+                group_filters = [
+                    s_draw > Sales.delivered,
+                    Sales.delivered <= PredictionOutlet.actual_sale,
+                    Sales.delivered.isnot(None),
+                    PredictionOutlet.actual_sale.isnot(None),
+                ]
+
+        # Lightweight count query (includes Sales join only when group filter needs it)
+        count_query = (
+            select(func.count())
+            .select_from(PredictionOutlet)
+            .join(
+                SimulationDate,
+                SimulationDate.prediction_id == PredictionOutlet.prediction_id,
+            )
+            .join(
+                PredictionModel,
+                PredictionModel.id == PredictionOutlet.prediction_id,
+            )
+            .join(
+                Outlet,
+                Outlet.id == PredictionOutlet.outlet_id,
+            )
+        )
+        if needs_sales_for_filter:
+            count_query = count_query.join(
+                Sales,
+                (Sales.outlet_id == PredictionOutlet.outlet_id)
+                & (Sales.date == PredictionModel.date),
+            )
+        count_query = count_query.where(*filters, *group_filters)
+        count_result = await self.session.execute(count_query)
+        total_count = count_result.scalar() or 0
+
+        # Sorting
+        _sort_columns: dict = {
+            "date": PredictionModel.date,
+            "outlet_name": Outlet.name,
+            "scenario_delivery": col_attr,
+        }
+        sort_col = _sort_columns.get(sort_by, PredictionModel.date)
+        order = sort_col.desc() if sort_dir == "desc" else sort_col.asc()
+
+        # Main paginated query (includes Sales outerjoin for actuals)
+        rows_result = await self.session.execute(
+            select(
+                PredictionOutlet.outlet_id,
+                Outlet.name.label("outlet_name"),
+                PredictionModel.date,
+                extract("isodow", PredictionModel.date).label("weekday"),
+                col_attr.label("scenario_delivery"),
+                Sales.delivered.label("actual_delivered"),
+                PredictionOutlet.actual_sale,
+                PredictionOutlet.lower_bound,
+                PredictionOutlet.q20,
+                PredictionOutlet.q30,
+                PredictionOutlet.q40,
+                PredictionOutlet.q50,
+                PredictionOutlet.q60,
+                PredictionOutlet.q70,
+                PredictionOutlet.q80,
+                PredictionOutlet.upper_bound,
+                PredictionOutlet.cv,
+            )
+            .join(
+                SimulationDate,
+                SimulationDate.prediction_id
+                == PredictionOutlet.prediction_id,
+            )
+            .join(
+                PredictionModel,
+                PredictionModel.id == PredictionOutlet.prediction_id,
+            )
+            .join(
+                Outlet,
+                Outlet.id == PredictionOutlet.outlet_id,
+            )
+            .outerjoin(
+                Sales,
+                (Sales.outlet_id == PredictionOutlet.outlet_id)
+                & (Sales.date == PredictionModel.date),
+            )
+            .where(*filters, *group_filters)
+            .order_by(order, Outlet.name)
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = rows_result.all()
+
+        # Load financial data
+        all_outlet_ids = list({r.outlet_id for r in rows})
+        fin_result = await self.session.execute(
+            select(
+                OutletFinancials.outlet_id,
+                OutletFinancials.weekday,
+                OutletFinancials.cost_per_unit,
+                OutletFinancials.profit_per_unit,
+            ).where(OutletFinancials.outlet_id.in_(all_outlet_ids))
+        )
+        fin_map: dict[tuple[str, int], tuple[float | None, float | None]] = {
+            (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
+            for r in fin_result
+        }
+        default_cost, default_profit = await self._get_default_financials(
+            sim.customer_id
+        )
+
+        result_rows = []
+        for r in rows:
+            scenario_delivery = r.scenario_delivery
+            actual_draw = (
+                float(r.actual_delivered)
+                if r.actual_delivered is not None
+                else None
+            )
+            actual_sale = (
+                float(r.actual_sale)
+                if r.actual_sale is not None
+                else None
+            )
+
+            s_delivery: float | None = None
+            s_sold: float | None = None
+            s_returned: float | None = None
+            a_returned: float | None = None
+            g1 = g2 = g3 = g4 = None
+            g4_extra_sales: float | None = None
+            g4_profit_unit: float | None = None
+            g4_unit_probs: list[tuple[int, float]] | None = None
+
+            # Quantile values
+            row_q10 = float(r.lower_bound) if r.lower_bound is not None else None
+            row_q20 = float(r.q20) if r.q20 is not None else None
+            row_q30 = float(r.q30) if r.q30 is not None else None
+            row_q40 = float(r.q40) if r.q40 is not None else None
+            row_q50 = float(r.q50) if r.q50 is not None else None
+            row_q60 = float(r.q60) if r.q60 is not None else None
+            row_q70 = float(r.q70) if r.q70 is not None else None
+            row_q80 = float(r.q80) if r.q80 is not None else None
+            row_q90 = float(r.upper_bound) if r.upper_bound is not None else None
+
+            if scenario_delivery is not None and actual_sale is not None:
+                s_draw = max(1, round(float(scenario_delivery)))
+                s_delivery = float(s_draw)
+                # Naive defaults — overridden below when sold-out logic applies
+                s_sold = float(round(min(s_draw, actual_sale)))
+                s_returned = float(round(max(0.0, s_draw - actual_sale)))
+
+                if actual_draw is not None:
+                    a_returned = max(0.0, actual_draw - actual_sale)
+                    sold_out = a_returned == 0.0
+
+                    cost, profit_unit = fin_map.get(
+                        (r.outlet_id, int(r.weekday)), (None, None)
+                    )
+                    _cost = (cost if cost is not None else default_cost) or 0.0
+                    _profit = (
+                        profit_unit
+                        if profit_unit is not None
+                        else default_profit
+                    ) or 0.0
+
+                    if s_draw < actual_draw:
+                        reduction = actual_draw - s_draw
+                        if s_draw >= actual_sale:
+                            g1 = reduction * _cost
+                        else:
+                            g2 = (
+                                reduction * _cost
+                                - (actual_sale - s_draw) * _profit
+                            )
+                    elif s_draw > actual_draw:
+                        increase = s_draw - actual_draw
+                        if sold_out:
+                            q_vals = [
+                                r.lower_bound, r.q20, r.q30, r.q40,
+                                r.q50, r.q60, r.q70, r.q80,
+                                r.upper_bound,
+                            ]
+                            quantiles = (
+                                [float(v) for v in q_vals]
+                                if all(v is not None for v in q_vals)
+                                else None
+                            )
+                            more_sale, unit_probs = expected_extra_sales_detailed(
+                                actual_sale, s_draw, quantiles
+                            )
+                            g4 = more_sale * _profit - increase * _cost
+                            g4_extra_sales = more_sale
+                            g4_profit_unit = _profit
+                            g4_unit_probs = unit_probs
+                            # Correct sold/returned: extra units could sell
+                            s_sold = float(round(actual_sale + more_sale))
+                            s_returned = float(round(max(0.0, s_draw - actual_sale - more_sale)))
+                        else:
+                            g3 = -(increase * _cost)
+            elif scenario_delivery is not None:
+                s_draw = max(1, round(float(scenario_delivery)))
+                s_delivery = float(s_draw)
+
+            if actual_draw is not None and actual_sale is not None:
+                a_returned = max(0.0, actual_draw - actual_sale)
+
+            result_rows.append(
+                {
+                    "outlet_id": r.outlet_id,
+                    "outlet_name": r.outlet_name,
+                    "date": r.date,
+                    "scenario_delivery": s_delivery,
+                    "scenario_sold": s_sold,
+                    "scenario_returned": s_returned,
+                    "actual_delivered": actual_draw,
+                    "actual_sold": actual_sale,
+                    "actual_returned": a_returned,
+                    "q10": row_q10,
+                    "q20": row_q20,
+                    "q30": row_q30,
+                    "q40": row_q40,
+                    "q50": row_q50,
+                    "q60": row_q60,
+                    "q70": row_q70,
+                    "q80": row_q80,
+                    "q90": row_q90,
+                    "g1": g1,
+                    "g2": g2,
+                    "g3": g3,
+                    "g4": g4,
+                    "g4_extra_sales": g4_extra_sales,
+                    "g4_profit_unit": g4_profit_unit,
+                    "g4_unit_probs": g4_unit_probs,
+                    "cv": float(r.cv) if r.cv is not None else None,
+                }
+            )
+
+        return {"rows": result_rows, "total_count": total_count}
 
     # -------------------------------------------------------------------------
     # Classification

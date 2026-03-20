@@ -39,7 +39,6 @@ def main() -> None:
             "--loglevel=info",
             f"--concurrency={concurrency}",
             f"--pool={pool}",
-            "--purge",  # discard stale messages from previous runs
         ],
     )
 

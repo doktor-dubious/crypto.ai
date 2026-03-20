@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -194,6 +194,8 @@ class Moirai2Engine(PredictionEngine):
                 "df": df,
                 "n_hist": len(df),
                 "covariates": item.get("covariates"),
+                "historical_data": item["historical_data"],
+                "variation_adjustment": item.get("variation_adjustment"),
             })
 
         # --- Step 2: build GluonTS PandasDataset (one series per outlet) ---
@@ -241,9 +243,23 @@ class Moirai2Engine(PredictionEngine):
                 [fc.quantile(float(q)) for q in _QUANTILE_LEVELS]
             )
 
+            va = p.get("variation_adjustment", {})
+            weekday_cvs = None
+            if va.get("enabled") if isinstance(va, dict) else va:
+                days = (
+                    va.get("history_days", 365)
+                    if isinstance(va, dict) else 365
+                )
+                weekday_cvs = self._compute_weekday_cvs(
+                    p["historical_data"], days,
+                )
+
             day_results = []
             for idx, fd in enumerate(future_dates):
-                eo = self._compute_economic_optimal(fd, idx, all_quantiles, p["covariates"])
+                eo = self._compute_economic_optimal(
+                    fd, idx, all_quantiles, p["covariates"],
+                    weekday_cvs=weekday_cvs,
+                )
                 day_results.append(PredictionResult(
                     date=fd,
                     predicted_value=float(mean_vals[idx]),
@@ -251,6 +267,8 @@ class Moirai2Engine(PredictionEngine):
                     upper_bound=float(upper[idx]),
                     confidence=0.80,
                     economic_optimal=eo,
+                    quantiles=[float(all_quantiles[idx, j]) for j in range(all_quantiles.shape[1])],
+                    cv=weekday_cvs.get(fd.weekday()) if weekday_cvs else None,
                 ))
             output.append(day_results)
 
@@ -262,12 +280,16 @@ class Moirai2Engine(PredictionEngine):
         day_index: int,
         all_quantiles: np.ndarray,
         covariates: dict[str, dict[date, float]] | None,
+        weekday_cvs: dict[int, float] | None = None,
     ) -> float | None:
         """Newsvendor-optimal draw using τ = (selling_price − production_cost) / selling_price.
 
         - cost_per_unit   = production cost per unit (Co: wasted on unsold units)
         - profit_per_unit = selling price per unit
         - Cu              = selling_price − production_cost (margin lost per missed sale)
+
+        When weekday_cvs is provided, τ is adjusted upward for
+        high-variation weekdays to protect against stockouts.
         """
         if covariates is None:
             return None
@@ -280,5 +302,43 @@ class Moirai2Engine(PredictionEngine):
             )
             return None
         tau = (selling_price - production_cost) / selling_price
+
+        if weekday_cvs is not None:
+            cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
+            tau = tau + cv * (1.0 - tau)
+
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(all_quantiles[day_index, nearest_idx])
+
+    @staticmethod
+    def _compute_weekday_cvs(
+        historical_data: list[dict],
+        history_days: int = 365,
+    ) -> dict[int, float]:
+        """Compute coefficient of variation per weekday."""
+        from collections import defaultdict
+
+        if not historical_data:
+            return {}
+
+        cutoff = (
+            historical_data[-1]["date"] - timedelta(days=history_days)
+        )
+        recent = [r for r in historical_data if r["date"] > cutoff]
+
+        by_dow: dict[int, list[float]] = defaultdict(list)
+        for r in recent:
+            by_dow[r["date"].weekday()].append(float(r["value"]))
+
+        cvs: dict[int, float] = {}
+        for dow, vals in by_dow.items():
+            if len(vals) < 2:
+                cvs[dow] = 0.0
+                continue
+            arr = np.array(vals)
+            mean = float(np.mean(arr))
+            if mean <= 0:
+                cvs[dow] = 0.0
+                continue
+            cvs[dow] = float(np.std(arr, ddof=1) / mean)
+        return cvs

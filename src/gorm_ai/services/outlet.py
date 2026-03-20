@@ -445,6 +445,7 @@ class OutletService:
                     lower_bound=lp.lower_bound if lp else None,
                     upper_bound=lp.upper_bound if lp else None,
                     predicted=lp.predicted if lp else None,
+                    cv=lp.cv if lp else None,
                     economic_optimal=lp.economic_optimal if lp else None,
                     delivered=lp.delivered if lp else None,
                     pad_effect=pad_effect,

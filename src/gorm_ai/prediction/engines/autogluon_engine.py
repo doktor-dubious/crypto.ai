@@ -5,7 +5,7 @@ import gc
 import logging
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -203,6 +203,8 @@ class AutoGluonEngine(PredictionEngine):
                 "cov_arrays": cov_arrays,
                 "date_to_cov": date_to_cov,
                 "covariates": item.get("covariates"),
+                "historical_data": item["historical_data"],
+                "variation_adjustment": item.get("variation_adjustment"),
             })
 
         # --- Step 2: assemble training TimeSeriesDataFrame ---
@@ -295,6 +297,17 @@ class AutoGluonEngine(PredictionEngine):
             # Use positional indexing: AutoGluon forecasts relative to the last training date,
             # which may differ from prediction_from (data gaps). Map the i-th forecast value
             # to the i-th future_date regardless of the model's internal timestamps.
+            va = p.get("variation_adjustment", {})
+            weekday_cvs = None
+            if va.get("enabled") if isinstance(va, dict) else va:
+                days = (
+                    va.get("history_days", 365)
+                    if isinstance(va, dict) else 365
+                )
+                weekday_cvs = self._compute_weekday_cvs(
+                    p["historical_data"], days,
+                )
+
             day_results = []
             for i, fd in enumerate(future_dates):
                 if i >= len(outlet_preds):
@@ -306,7 +319,9 @@ class AutoGluonEngine(PredictionEngine):
                 q_vals = np.array([float(row[c]) for c in quantile_col_names])
 
                 economic_optimal = self._compute_economic_optimal(
-                    fd, q_vals, p["covariates"], holding_rate, protection_days
+                    fd, q_vals, p["covariates"],
+                    holding_rate, protection_days,
+                    weekday_cvs=weekday_cvs,
                 )
                 day_results.append(PredictionResult(
                     date=fd,
@@ -315,6 +330,8 @@ class AutoGluonEngine(PredictionEngine):
                     upper_bound=upper,
                     confidence=0.80,
                     economic_optimal=economic_optimal,
+                    quantiles=[float(q_vals[j]) for j in range(len(q_vals))],
+                    cv=weekday_cvs.get(fd.weekday()) if weekday_cvs else None,
                 ))
             output.append(day_results)
 
@@ -327,6 +344,7 @@ class AutoGluonEngine(PredictionEngine):
         covariates: dict[str, dict[date, float]] | None,
         holding_rate: float,
         protection_days: int,
+        weekday_cvs: dict[int, float] | None = None,
     ) -> float | None:
         """Newsvendor-optimal draw for a single day using per-day quantile array (shape: 9,).
 
@@ -334,6 +352,9 @@ class AutoGluonEngine(PredictionEngine):
           - cost_per_unit   = production cost per unit (Co: wasted on unsold units)
           - profit_per_unit = selling price per unit
           - Cu              = selling_price − production_cost (margin lost per missed sale)
+
+        When weekday_cvs is provided, τ is adjusted upward for
+        high-variation weekdays to protect against stockouts.
         """
         if covariates is None:
             logger.debug("EO: no covariates (cost/profit not configured)")
@@ -348,8 +369,46 @@ class AutoGluonEngine(PredictionEngine):
             )
             return None
         tau = (selling_price - production_cost) / selling_price
+
+        if weekday_cvs is not None:
+            cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
+            tau = tau + cv * (1.0 - tau)
+
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(q_vals[nearest_idx])
+
+    @staticmethod
+    def _compute_weekday_cvs(
+        historical_data: list[dict],
+        history_days: int = 365,
+    ) -> dict[int, float]:
+        """Compute coefficient of variation per weekday."""
+        from collections import defaultdict
+
+        if not historical_data:
+            return {}
+
+        cutoff = (
+            historical_data[-1]["date"] - timedelta(days=history_days)
+        )
+        recent = [r for r in historical_data if r["date"] > cutoff]
+
+        by_dow: dict[int, list[float]] = defaultdict(list)
+        for r in recent:
+            by_dow[r["date"].weekday()].append(float(r["value"]))
+
+        cvs: dict[int, float] = {}
+        for dow, vals in by_dow.items():
+            if len(vals) < 2:
+                cvs[dow] = 0.0
+                continue
+            arr = np.array(vals)
+            mean = float(np.mean(arr))
+            if mean <= 0:
+                cvs[dow] = 0.0
+                continue
+            cvs[dow] = float(np.std(arr, ddof=1) / mean)
+        return cvs
 
     def _get_hyperparameters(self) -> dict:
         """Return AutoGluon hyperparameters dict for fit(). Override in subclasses."""

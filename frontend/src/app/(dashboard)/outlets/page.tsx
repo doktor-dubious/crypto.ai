@@ -6,6 +6,10 @@ import { useTranslations } from "next-intl"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Plus, X, Info,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -183,6 +187,9 @@ function DeliveryAnalyticsWeekdayRows({
                 <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums font-medium align-middle">
                   {fmtNum(wd.predicted)}
                 </td>
+                <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle text-[var(--muted-foreground)]">
+                  {wd.cv != null ? wd.cv.toFixed(2) : "—"}
+                </td>
                 <td rowSpan={3} className="py-1.5 px-2 text-center tabular-nums align-middle">
                   {fmtNum(wd.economic_optimal)}
                 </td>
@@ -256,6 +263,7 @@ export default function OutletsListPage() {
   const [selectedOutletId, setSelectedOutletId] = useState<string | null>(() => loadJson<string | null>(cid, "selectedOutlet", null))
   const [selected, setSelected] = useState<OutletResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadJson<string>(cid, "activeTab", "tab1"))
+  const [detailMaximized, setDetailMaximized] = useState(() => loadJson<boolean>(cid, "detailMaximized", false))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
@@ -526,6 +534,7 @@ export default function OutletsListPage() {
   useEffect(() => { if (cid) saveJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveJson(cid, "activeTab", activeTab) }, [cid, activeTab])
   useEffect(() => { if (cid) saveJson(cid, "selectedOutlet", selected?.id ?? null) }, [cid, selected?.id])
+  useEffect(() => { if (cid) saveJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
 
   // ── Restore selected outlet from persisted ID when outlets load ───────────
 
@@ -803,7 +812,7 @@ export default function OutletsListPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
 
         {/* Toolbar */}
         <div className="flex items-center justify-end gap-2 px-4 py-2 shrink-0 bg-background">
@@ -1000,6 +1009,13 @@ export default function OutletsListPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabDeliveryAnalytics")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab7">{t("tabData")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabActions")}</TabsTrigger>
+                  <div
+                    className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setDetailMaximized((v) => !v)}
+                    aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                  >
+                    {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                  </div>
                 </TabsList>
                 <div
                   className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
@@ -1041,11 +1057,23 @@ export default function OutletsListPage() {
                     ) : null}
                   </div>
                   <FieldRow label={t("fieldId")}>
-                    <Input
-                      value={selected.id}
-                      readOnly
-                      className="opacity-50 cursor-default select-all font-mono text-xs"
-                    />
+                    <div className="relative">
+                      <Input
+                        value={selected.id}
+                        readOnly
+                        className="pr-9 opacity-50 cursor-default select-all font-mono text-xs"
+                      />
+                      <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                        <CopyIcon
+                          size={16}
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={() => {
+                            navigator.clipboard.writeText(selected.id)
+                            toast.success(t("toastCopied"))
+                          }}
+                        />
+                      </AnimateIcon>
+                    </div>
                   </FieldRow>
                   <FieldRow label={t("fieldExtId")}>
                     <Input
@@ -1468,6 +1496,7 @@ export default function OutletsListPage() {
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daLower")} <HeaderInfo text={t("daLowerInfo")} /></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daUpper")} <HeaderInfo text={t("daUpperInfo")} /></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daPredict")} <HeaderInfo text={t("daPredictInfo")} /></th>
+                            <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daCV")} <HeaderInfo text={t("daCVInfo")} /></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[44px]" rowSpan={2}>{t("daEO")} <HeaderInfo text={t("daEOInfo")} /></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[52px]" rowSpan={2}>{t("daLatest")} <HeaderInfo text={t("daLatestInfo")} /></th>
                             <th className="text-center font-medium text-[var(--muted-foreground)] py-1.5 px-2 min-w-[80px]" rowSpan={2}>{t("daCostProfit")} <HeaderInfo text={t("daCostProfitInfo")} /></th>

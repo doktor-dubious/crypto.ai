@@ -39,6 +39,23 @@ class Configuration(Base):
     weekday_profile_correction: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     weekday_profile_correction_strength: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     weekday_profile_correction_threshold: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # 1=additive, 2=multiplicative
+    weekday_profile_correction_method: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False,
+    )
+    variation_adjustment: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+    )
+    variation_history_days: Mapped[int] = mapped_column(
+        Integer, default=365, nullable=False,
+    )
+    open_monday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_tuesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_wednesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_thursday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_friday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_saturday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    open_sunday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     simultaneous_tasks: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     periodic_check_workers: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     auto_restart_workers: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

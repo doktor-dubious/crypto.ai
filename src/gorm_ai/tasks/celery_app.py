@@ -97,6 +97,9 @@ celery_app.conf.update(
     task_soft_time_limit=3000,  # 50 minutes soft limit
     worker_prefetch_multiplier=1,
     worker_concurrency=4,
+    broker_transport_options={
+        "visibility_timeout": 604800,  # 7 days – must exceed longest task (simulations)
+    },
     # Solo pool: when the worker is killed mid-task (e.g. revoke with
     # terminate=True), do NOT re-queue the message.  Without this the
     # cancelled task gets redelivered after the container restarts.

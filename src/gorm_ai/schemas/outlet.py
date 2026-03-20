@@ -156,6 +156,7 @@ class DeliveryAnalyticsWeekday(BaseModel):
     lower_bound: float | None
     upper_bound: float | None
     predicted: float | None
+    cv: float | None = None
     economic_optimal: float | None
     delivered: float | None              # latest recommended delivery
     pad_effect: float | None = None      # avg(PAD predictions) - avg(non-PAD baseline)

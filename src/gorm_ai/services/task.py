@@ -11,6 +11,19 @@ from gorm_ai.database.models.task_record import TaskRecord
 from gorm_ai.schemas.task import CeleryWorkerTask
 
 
+def _restart_worker_container() -> None:
+    """Restart the celery-worker Docker container (blocking call)."""
+    import docker  # type: ignore
+
+    client = docker.from_env()
+    containers = client.containers.list(
+        all=True,
+        filters={"label": "com.docker.compose.service=celery-worker"},
+    )
+    for container in containers:
+        container.restart()
+
+
 class TaskService:
     """Service for task record operations."""
 
@@ -135,13 +148,30 @@ class TaskService:
         )
 
     async def cancel(self, task_id: str) -> None:
-        """Revoke a Celery task and mark its record as 'revoked'."""
-        from gorm_ai.tasks.celery_app import celery_app
+        """Revoke a Celery task and mark its record as 'revoked'.
 
-        await asyncio.to_thread(celery_app.control.revoke, task_id, terminate=True)
+        With the solo pool the worker is blocked on computation and cannot
+        process ``revoke`` control commands.  When the task being cancelled
+        is currently running (status='started'), we restart the worker
+        container to actually kill it.  The redelivery guard in each task
+        (``if record.status != 'pending': skip``) ensures the revoked task
+        won't re-run after the restart.
+        """
+        record = await self.get(task_id)
+        is_running = record.status == "started"
+
         await self.update_status(task_id, "revoked", completed_at=datetime.now(UTC))
+        await self.session.commit()
 
-    async def mark_stale_pending_revoked(self, stale_seconds: int = 300) -> int:
+        if is_running:
+            # Restart the worker container so the running task is actually killed.
+            await asyncio.to_thread(_restart_worker_container)
+        else:
+            # Pending task: a normal revoke is sufficient.
+            from gorm_ai.tasks.celery_app import celery_app
+            await asyncio.to_thread(celery_app.control.revoke, task_id, terminate=True)
+
+    async def mark_stale_pending_revoked(self, stale_seconds: int = 86400 * 7) -> int:
         """Mark pending tasks as revoked if they have been waiting too long.
 
         A task stuck in 'pending' for longer than ``stale_seconds`` was likely

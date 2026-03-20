@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -123,15 +123,23 @@ class TimesFMEngine(PredictionEngine):
                 predictions, all_quantiles, historical_data, future_dates,
                 strength=wpc.get("strength", 1.0) if isinstance(wpc, dict) else 1.0,
                 threshold=wpc.get("threshold", 0.0) if isinstance(wpc, dict) else 0.0,
+                method=wpc.get("method", 1) if isinstance(wpc, dict) else 1,
             )
             lower = all_quantiles[:, 0]
             upper = all_quantiles[:, -1]
 
         # Build results
+        va = kwargs.get("variation_adjustment", {})
+        weekday_cvs = None
+        if va.get("enabled") if isinstance(va, dict) else va:
+            days = va.get("history_days", 365) if isinstance(va, dict) else 365
+            weekday_cvs = self._compute_weekday_cvs(historical_data, days)
+
         results = []
         for i, pred_date in enumerate(future_dates):
             economic_optimal = self._compute_economic_optimal(
-                pred_date, i, all_quantiles, covariates, holding_rate, protection_days
+                pred_date, i, all_quantiles, covariates, holding_rate, protection_days,
+                weekday_cvs=weekday_cvs,
             )
             results.append(
                 PredictionResult(
@@ -141,6 +149,8 @@ class TimesFMEngine(PredictionEngine):
                     upper_bound=float(upper[i]),
                     confidence=0.80,
                     economic_optimal=economic_optimal,
+                    quantiles=[float(all_quantiles[i, j]) for j in range(all_quantiles.shape[1])] if all_quantiles is not None else None,
+                    cv=weekday_cvs.get(pred_date.weekday()) if weekday_cvs else None,
                 )
             )
 
@@ -233,15 +243,28 @@ class TimesFMEngine(PredictionEngine):
                     preds, quantiles, item["historical_data"], future_dates,
                     strength=wpc.get("strength", 1.0) if isinstance(wpc, dict) else 1.0,
                     threshold=wpc.get("threshold", 0.0) if isinstance(wpc, dict) else 0.0,
+                    method=wpc.get("method", 1) if isinstance(wpc, dict) else 1,
                 )
                 lower = quantiles[:, 0]
                 upper = quantiles[:, -1]
+
+            va = item.get("variation_adjustment", {})
+            weekday_cvs = None
+            if va.get("enabled") if isinstance(va, dict) else va:
+                days = (
+                    va.get("history_days", 365)
+                    if isinstance(va, dict) else 365
+                )
+                weekday_cvs = self._compute_weekday_cvs(
+                    item["historical_data"], days,
+                )
 
             day_results = []
             for idx, pred_date in enumerate(future_dates):
                 economic_optimal = self._compute_economic_optimal(
                     pred_date, idx, quantiles,
                     item.get("covariates"), holding_rate, protection_days,
+                    weekday_cvs=weekday_cvs,
                 )
                 day_results.append(PredictionResult(
                     date=pred_date,
@@ -250,6 +273,8 @@ class TimesFMEngine(PredictionEngine):
                     upper_bound=float(upper[idx]),
                     confidence=0.80,
                     economic_optimal=economic_optimal,
+                    quantiles=[float(quantiles[idx, j]) for j in range(quantiles.shape[1])],
+                    cv=weekday_cvs.get(pred_date.weekday()) if weekday_cvs else None,
                 ))
             output.append(day_results)
 
@@ -319,6 +344,7 @@ class TimesFMEngine(PredictionEngine):
         future_dates: list[date],
         strength: float = 1.0,
         threshold: float = 0.0,
+        method: int = 1,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Redistribute forecast's weekly total to match historical weekday proportions.
 
@@ -335,6 +361,9 @@ class TimesFMEngine(PredictionEngine):
             threshold: Minimum absolute share divergence |ratio - 1| required before
                        correction is applied to a weekday. Days below threshold are
                        left unchanged.
+            method: 1 = additive (shift quantiles by the same offset as the point
+                    prediction, preserving the original spread); 2 = multiplicative
+                    (scale all quantiles by the same ratio as the point prediction).
 
         Returns corrected (predictions, all_quantiles).
         """
@@ -395,8 +424,16 @@ class TimesFMEngine(PredictionEngine):
             # Dampen: blend between no-correction (1.0) and full correction (raw_ratio)
             ratio = 1.0 + strength * (raw_ratio - 1.0)
             for idx in indices:
-                corrected_pred[idx] *= ratio
-                corrected_q[idx] *= ratio
+                if method == 2:
+                    # Multiplicative: scale everything by the ratio
+                    corrected_pred[idx] *= ratio
+                    corrected_q[idx] *= ratio
+                else:
+                    # Additive: shift quantiles by the same offset as the point
+                    # prediction so the original spread is preserved.
+                    offset = predictions[idx] * (ratio - 1.0)
+                    corrected_pred[idx] += offset
+                    corrected_q[idx] += offset
 
         return corrected_pred, corrected_q
 
@@ -408,6 +445,7 @@ class TimesFMEngine(PredictionEngine):
         covariates: dict[str, dict[date, float]] | None,
         holding_rate: float,
         protection_days: int,
+        weekday_cvs: dict[int, float] | None = None,
     ) -> float | None:
         """Compute the Newsvendor-optimal draw for a single forecast day.
 
@@ -417,6 +455,10 @@ class TimesFMEngine(PredictionEngine):
           - profit_per_unit = selling price per unit
           - Cu              = selling_price − production_cost (margin lost per missed sale)
           - τ               = (profit − cost) / profit
+
+        When weekday_cvs is provided, τ is adjusted upward for high-variation
+        weekdays: adjusted_τ = τ + cv * (1 − τ), nudging toward higher quantiles
+        to protect against stockout risk on volatile days.
 
         Returns None when quantile data or financial data is unavailable, or when
         selling price ≤ production cost (economically invalid).
@@ -439,8 +481,50 @@ class TimesFMEngine(PredictionEngine):
             return None
 
         tau = (selling_price - production_cost) / selling_price
+
+        if weekday_cvs is not None:
+            cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
+            tau = tau + cv * (1.0 - tau)
+
         nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
         return float(all_quantiles[day_index, nearest_idx])
+
+    @staticmethod
+    def _compute_weekday_cvs(
+        historical_data: list[dict],
+        history_days: int = 365,
+    ) -> dict[int, float]:
+        """Compute coefficient of variation per weekday from recent history.
+
+        Returns dict mapping weekday (0=Mon..6=Sun) to CV (std/mean).
+        CV is 0.0 when mean is zero or there are fewer than 2 samples.
+        """
+        from collections import defaultdict
+
+        if not historical_data:
+            return {}
+
+        cutoff = historical_data[-1]["date"] - timedelta(days=history_days)
+        recent = [
+            r for r in historical_data if r["date"] > cutoff
+        ]
+
+        by_dow: dict[int, list[float]] = defaultdict(list)
+        for r in recent:
+            by_dow[r["date"].weekday()].append(float(r["value"]))
+
+        cvs: dict[int, float] = {}
+        for dow, vals in by_dow.items():
+            if len(vals) < 2:
+                cvs[dow] = 0.0
+                continue
+            arr = np.array(vals)
+            mean = float(np.mean(arr))
+            if mean <= 0:
+                cvs[dow] = 0.0
+                continue
+            cvs[dow] = float(np.std(arr, ddof=1) / mean)
+        return cvs
 
     def _apply_hf_env(self) -> None:
         """Push HF_TOKEN and HF_HUB_CACHE from settings into os.environ.

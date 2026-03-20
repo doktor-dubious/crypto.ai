@@ -7,6 +7,10 @@ import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
   ChevronDown, ChevronUp, Info,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -103,6 +107,7 @@ export default function AIModelsPage() {
   const [activeTab, setActiveTab] = useState(() => loadJson<string>("activeTab", "tab1"))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
+  const [detailMaximized, setDetailMaximized] = useState(() => loadJson<boolean>("maximized", false))
   const [draft, setDraft] = useState<PredictionEngineUpdate>({})
 
   // ── Delete dialogs
@@ -127,6 +132,7 @@ export default function AIModelsPage() {
   const [newParamDialogOpen, setNewParamDialogOpen] = useState(false)
   const [newParamName, setNewParamName] = useState("")
   const [newParamValue, setNewParamValue] = useState("")
+  const [newParamParameter, setNewParamParameter] = useState("")
   const [newParamDescription, setNewParamDescription] = useState("")
   const [newParamSortOrder, setNewParamSortOrder] = useState(0)
 
@@ -148,6 +154,7 @@ export default function AIModelsPage() {
   useEffect(() => { saveJson("checked", [...selectedIds]) }, [selectedIds])
   useEffect(() => { saveJson("starred", [...starredIds]) }, [starredIds])
   useEffect(() => { saveJson("activeTab", activeTab) }, [activeTab])
+  useEffect(() => { saveJson("maximized", detailMaximized) }, [detailMaximized])
   useEffect(() => { saveJson("selectedModel", selectedModel?.id ?? null) }, [selectedModel?.id])
 
   // ── Restore selected model from persisted ID when list loads ──────────────
@@ -204,13 +211,14 @@ export default function AIModelsPage() {
   })
 
   const createParamMutation = useMutation({
-    mutationFn: ({ engineId, name, value, description, sort_order }: { engineId: string; name: string; value: string; description: string; sort_order: number }) =>
-      predictionEnginesApi.createParameter(engineId, { name, value, description: description || null, sort_order }),
+    mutationFn: ({ engineId, name, value, parameter, description, sort_order }: { engineId: string; name: string; value: string; parameter: string; description: string; sort_order: number }) =>
+      predictionEnginesApi.createParameter(engineId, { name, value, parameter: parameter || null, description: description || null, sort_order }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["prediction-engine-parameters", selectedModel?.id] })
       setNewParamDialogOpen(false)
       setNewParamName("")
       setNewParamValue("")
+      setNewParamParameter("")
       setNewParamDescription("")
       setNewParamSortOrder(0)
       toast.success(t("toastParameterCreated"))
@@ -391,7 +399,7 @@ export default function AIModelsPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Top: Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 shrink-0 bg-background">
           <Button variant="default" size="sm" className="h-7 text-xs gap-1.5" onClick={() => setNewDialogOpen(true)}>
@@ -595,7 +603,7 @@ export default function AIModelsPage() {
       {/* ── Bottom: Detail pane ── */}
       {selectedModel && (
         <>
-          <hr className="my-8" />
+          {!detailMaximized && <hr className="my-8" />}
 
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Tabs */}
@@ -609,6 +617,13 @@ export default function AIModelsPage() {
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabParameters")}</TabsTrigger>
+                  <div
+                    className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setDetailMaximized((v) => !v)}
+                    aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                  >
+                    {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                  </div>
                 </TabsList>
 
                 <div
@@ -618,9 +633,21 @@ export default function AIModelsPage() {
               </div>
 
               {/* ─ Details ─ */}
-              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
+              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
                 <FieldRow label="ID">
-                  <Input value={selectedModel.id} readOnly className="opacity-50 cursor-default select-all font-mono text-xs" />
+                  <div className="relative">
+                    <Input value={selectedModel.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
+                    <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                      <CopyIcon
+                        size={16}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedModel.id)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </div>
                 </FieldRow>
                 <FieldRow label={t("fieldSlug")}>
                   <Input value={selectedModel.slug} readOnly className="opacity-50 cursor-default select-all font-mono text-xs" />
@@ -668,7 +695,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Parameters ─ */}
-              <TabsContent value="tab2" className="mt-6 pl-[2px]">
+              <TabsContent value="tab2" className="mt-6 pl-[2px] overflow-y-auto">
               <TooltipProvider>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-medium">{t("tabParameters")}</h3>
@@ -865,6 +892,13 @@ export default function AIModelsPage() {
                 placeholder={t("paramValuePlaceholder")}
               />
             </FieldRow>
+            <FieldRow label={t("fieldParameter")}>
+              <Input
+                value={newParamParameter}
+                onChange={(e) => setNewParamParameter(e.target.value)}
+                placeholder={t("fieldParameterPlaceholder")}
+              />
+            </FieldRow>
             <FieldRow label={t("fieldDescription")}>
               <Input
                 value={newParamDescription}
@@ -886,7 +920,7 @@ export default function AIModelsPage() {
             </Button>
             <Button
               size="sm"
-              onClick={() => selectedModel && createParamMutation.mutate({ engineId: selectedModel.id, name: newParamName, value: newParamValue, description: newParamDescription, sort_order: newParamSortOrder })}
+              onClick={() => selectedModel && createParamMutation.mutate({ engineId: selectedModel.id, name: newParamName, value: newParamValue, parameter: newParamParameter, description: newParamDescription, sort_order: newParamSortOrder })}
               disabled={!newParamName.trim() || !newParamValue.trim() || createParamMutation.isPending}
             >
               {createParamMutation.isPending ? t("creating") : t("addParameter")}

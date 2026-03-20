@@ -6,6 +6,8 @@ import { useTranslations } from "next-intl"
 import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -96,6 +98,7 @@ export default function SimulationStrategiesPage() {
   const [currentPage, setCurrentPage] = useState(1)
 
   // ── Detail pane state (persisted)
+  const [detailMaximized, setDetailMaximized] = useState(() => loadSsJson<boolean>(cid, "detailMaximized", false))
   const [selectedStratId, setSelectedStratId] = useState<string | null>(() => loadSsJson<string | null>(cid, "selectedStrat", null))
   const [selected, setSelected] = useState<SimulationStrategyResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadSsJson<string>(cid, "activeTab", "tab1"))
@@ -144,6 +147,7 @@ export default function SimulationStrategiesPage() {
   useEffect(() => { if (cid) saveSsJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
   useEffect(() => { if (cid) saveSsJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveSsJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveSsJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
   useEffect(() => { if (cid) saveSsJson(cid, "selectedStrat", selected?.id ?? null) }, [cid, selected?.id])
 
   // ── Restore selected strategy from persisted ID when list loads ────────────
@@ -369,7 +373,7 @@ export default function SimulationStrategiesPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 shrink-0 bg-background">
           <Button variant="default" size="sm" className="h-7 text-xs gap-1.5" onClick={() => setNewDialogOpen(true)}>
@@ -550,6 +554,13 @@ export default function SimulationStrategiesPage() {
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabActions")}</TabsTrigger>
+                  <div
+                    className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setDetailMaximized((v) => !v)}
+                    aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                  >
+                    {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                  </div>
                 </TabsList>
                 <div
                   className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"

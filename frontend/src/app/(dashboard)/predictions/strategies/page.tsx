@@ -7,6 +7,10 @@ import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
   ChevronDown, ChevronUp,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -152,6 +156,7 @@ export default function PredictionStrategiesPage() {
   const [currentPage, setCurrentPage] = useState(1)
 
   // ── Detail pane state (persisted)
+  const [detailMaximized, setDetailMaximized] = useState(() => loadStratJson<boolean>(cid, "detailMaximized", false))
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(() => loadStratJson<string | null>(cid, "selectedStrategy", null))
   const [selectedStrategy, setSelectedStrategy] = useState<PredictionStrategyResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadStratJson<string>(cid, "activeTab", "tab1"))
@@ -204,6 +209,7 @@ export default function PredictionStrategiesPage() {
   useEffect(() => { if (cid) saveStratJson(cid, "checked", [...selectedIds]) }, [cid, selectedIds])
   useEffect(() => { if (cid) saveStratJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveStratJson(cid, "activeTab", activeTab) }, [cid, activeTab])
+  useEffect(() => { if (cid) saveStratJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
   useEffect(() => { if (cid) saveStratJson(cid, "selectedStrategy", selectedStrategy?.id ?? null) }, [cid, selectedStrategy?.id])
 
   // ── Restore selected strategy from persisted ID when list loads ────────────
@@ -226,6 +232,7 @@ export default function PredictionStrategiesPage() {
       setSelectedStrategyId(loadStratJson<string | null>(cid, "selectedStrategy", null))
       setSelectedStrategy(null)
       setActiveTab(loadStratJson<string>(cid, "activeTab", "tab1"))
+      setDetailMaximized(loadStratJson<boolean>(cid, "detailMaximized", false))
     }
     prevCidRef.current = cid
   }, [cid])
@@ -470,7 +477,7 @@ export default function PredictionStrategiesPage() {
 
       {/* ── Top: Master table ── */}
       <div
-        className="flex flex-col shrink-0"
+        className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}
       >
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 shrink-0 bg-background">
@@ -681,7 +688,7 @@ export default function PredictionStrategiesPage() {
       {/* ── Bottom: Detail pane ── */}
       {selectedStrategy && (
         <>
-          <hr className="my-8" />
+          {!detailMaximized && <hr className="my-8" />}
 
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Tabs */}
@@ -701,6 +708,13 @@ export default function PredictionStrategiesPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabTechSpecs")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabActions")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab7">{t("tabNotes")}</TabsTrigger>
+                  <div
+                    className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setDetailMaximized((v) => !v)}
+                    aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                  >
+                    {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                  </div>
                 </TabsList>
 
                 {/* <div className="flex-1 overflow-y-auto"> */}
@@ -713,7 +727,19 @@ export default function PredictionStrategiesPage() {
               {/* ─ Details ─ */}
               <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
                 <FieldRow label="ID">
-                  <Input value={selectedStrategy.id} readOnly className="opacity-50 cursor-default select-all font-mono text-xs" />
+                  <div className="relative">
+                    <Input value={selectedStrategy.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
+                    <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                      <CopyIcon
+                        size={16}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedStrategy.id)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </div>
                 </FieldRow>
                 <FieldRow label={t("fieldName")}>
                   <Input
