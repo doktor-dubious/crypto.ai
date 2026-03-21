@@ -318,13 +318,24 @@ class TimesFMEngine(PredictionEngine):
 
             feature_names = sorted(item.get("feature_names", []))
             ridge = Ridge(alpha=1.0, fit_intercept=True)
-            ridge.fit(hist_X_aligned, residuals)
-            adj = ridge.predict(fut_X)
+
+            # Drop rows where residuals or features contain NaN
+            valid = ~np.isnan(residuals)
+            if hist_X_aligned.ndim == 2:
+                valid &= ~np.isnan(hist_X_aligned).any(axis=1)
+            else:
+                valid &= ~np.isnan(hist_X_aligned)
+
+            if valid.sum() >= 2:
+                ridge.fit(hist_X_aligned[valid], residuals[valid])
+                adj = ridge.predict(fut_X)
+            else:
+                adj = np.zeros(horizon)
 
             ridge_infos.append({
                 "feature_names": feature_names,
-                "coefficients": list(ridge.coef_),
-                "intercept": float(ridge.intercept_),
+                "coefficients": list(ridge.coef_) if hasattr(ridge, "coef_") else [],
+                "intercept": float(ridge.intercept_) if hasattr(ridge, "intercept_") else 0.0,
             })
 
             results.append((
