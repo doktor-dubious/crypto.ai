@@ -23,6 +23,15 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Accept build-time env vars so Next.js can inline NEXT_PUBLIC_* values
+ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
+ARG BETTER_AUTH_URL=http://localhost:3000
+ARG BACKEND_INTERNAL_URL=http://localhost:8000
+ENV NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
+ENV BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL}
+
 RUN npx prisma generate
 RUN npm run build
 

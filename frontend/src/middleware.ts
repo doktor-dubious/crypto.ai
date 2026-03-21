@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 const PUBLIC_PATHS = ["/login"]
-const SKIP_PREFIXES = ["/api/", "/_next/", "/favicon"]
+const SKIP_PREFIXES = ["/api/", "/backend/", "/_next/", "/favicon"]
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl

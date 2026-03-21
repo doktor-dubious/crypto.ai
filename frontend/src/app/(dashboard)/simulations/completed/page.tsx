@@ -723,10 +723,10 @@ function ModelFitTab({ simulationId, simFrom, simTo, weekdays, weekdayFilter, on
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
                   <XAxis
                     dataKey="date"
-                    tick={profitLossMap ? (props: { x: number; y: number; payload: { value: string } }) => {
+                    tick={profitLossMap ? (props: { x: string | number; y: string | number; payload: { value: string } }) => {
                       const isLoss = profitLossMap.get(props.payload.value)
                       return (
-                        <text x={props.x} y={props.y + 12} textAnchor="middle" fontSize={11} fill={isLoss ? "hsl(0 72% 51%)" : "currentColor"} fontWeight={isLoss ? 600 : 400}>
+                        <text x={props.x} y={Number(props.y) + 12} textAnchor="middle" fontSize={11} fill={isLoss ? "hsl(0 72% 51%)" : "currentColor"} fontWeight={isLoss ? 600 : 400}>
                           {xFormatter(props.payload.value)}
                         </text>
                       )
