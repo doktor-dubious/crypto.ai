@@ -64,8 +64,8 @@ Thumbs.db
 log/*.json
 log/*.log
 
-# Models (HF cache + fine-tuned checkpoints)
-models/
+# Models (HF cache + fine-tuned checkpoints) — top-level only
+/models/
 
 # Frontend
 frontend/.next/
