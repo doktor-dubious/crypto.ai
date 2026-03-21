@@ -893,6 +893,7 @@ function DataDumpTab({
   const [ddGroupId, setDdGroupId] = useState<string | null>(null)
   const [ddOutletSearch, setDdOutletSearch] = useState("")
   const [ddOutletPage, setDdOutletPage] = useState(1)
+  const [ddGroup, setDdGroup] = useState<string | null>(null)
 
   // Derive ISO strings from date range
   const ddFromDate = ddDateRange?.from ? format(ddDateRange.from, "yyyy-MM-dd") : ""
@@ -953,7 +954,7 @@ function DataDumpTab({
   }, [search])
 
   // Reset to page 1 when filters change
-  useEffect(() => { setCurrentPage(1) }, [ddScenario, resolvedOutletIds, ddFromDate, ddToDate, debouncedSearch, sortField, sortDir])
+  useEffect(() => { setCurrentPage(1) }, [ddScenario, resolvedOutletIds, ddFromDate, ddToDate, debouncedSearch, sortField, sortDir, ddGroup])
 
   // Map client sort fields to server sort fields (profit/starred are client-only)
   const serverSortBy = (sortField === "profit" || sortField === "starred") ? "date" : sortField
@@ -961,7 +962,7 @@ function DataDumpTab({
 
   // ── Fetch data dump (server-side paginated)
   const { data: dumpData, isLoading } = useQuery({
-    queryKey: ["simulation-data-dump", simulationId, ddScenario, resolvedOutletIds, ddFromDate, ddToDate, currentPage, serverSortBy, serverSortDir, debouncedSearch],
+    queryKey: ["simulation-data-dump", simulationId, ddScenario, resolvedOutletIds, ddFromDate, ddToDate, currentPage, serverSortBy, serverSortDir, debouncedSearch, ddGroup],
     queryFn: () => simulationsApi.getDataDump(simulationId, {
       column: ddScenario,
       outletIds: resolvedOutletIds,
@@ -972,6 +973,7 @@ function DataDumpTab({
       sortBy: serverSortBy,
       sortDir: serverSortDir,
       search: debouncedSearch || undefined,
+      group: ddGroup || undefined,
     }),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -1078,6 +1080,8 @@ function DataDumpTab({
   const fmtN = (n: number | null | undefined) => n != null ? formatNumber(n) : "—"
   const fmtC = (n: number | null | undefined) => n != null ? formatCurrency(n, currencySymbol) : "—"
   const fmtQ = (n: number | null | undefined) => n != null ? n.toFixed(1) : "—"
+  const isEoQ = (q: number | null | undefined, eo: number | null | undefined) =>
+    q != null && eo != null && Math.abs(q - eo) < 0.01
   const delta = (a: number | null | undefined, b: number | null | undefined) => {
     if (a == null || b == null) return null
     return a - b
@@ -1236,7 +1240,7 @@ function DataDumpTab({
                       />
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <button className="h-5 w-4 flex items-center justify-center hover:text-foreground transition-colors cursor-pointer">
+                          <button className={cn("h-5 w-4 flex items-center justify-center hover:text-foreground transition-colors cursor-pointer", ddGroup && "text-primary")}>
                             <ChevronDown className="h-3 w-3" />
                           </button>
                         </DropdownMenuTrigger>
@@ -1254,17 +1258,17 @@ function DataDumpTab({
                             {t("selectBottomProfitable")}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g1 != null).map((r) => rowKey(r))))}>
-                            {t("selectG1")}
+                          <DropdownMenuItem onClick={() => setDdGroup((g) => g === "g1" ? null : "g1")}>
+                            {t("selectG1")}{ddGroup === "g1" ? " ✓" : ""}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g2 != null).map((r) => rowKey(r))))}>
-                            {t("selectG2")}
+                          <DropdownMenuItem onClick={() => setDdGroup((g) => g === "g2" ? null : "g2")}>
+                            {t("selectG2")}{ddGroup === "g2" ? " ✓" : ""}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g3 != null).map((r) => rowKey(r))))}>
-                            {t("selectG3")}
+                          <DropdownMenuItem onClick={() => setDdGroup((g) => g === "g3" ? null : "g3")}>
+                            {t("selectG3")}{ddGroup === "g3" ? " ✓" : ""}
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRows.filter((r) => r.g4 != null).map((r) => rowKey(r))))}>
-                            {t("selectG4")}
+                          <DropdownMenuItem onClick={() => setDdGroup((g) => g === "g4" ? null : "g4")}>
+                            {t("selectG4")}{ddGroup === "g4" ? " ✓" : ""}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1338,15 +1342,16 @@ function DataDumpTab({
                         <div className="text-xs text-[var(--muted-foreground)]">{fmtN(row.actual_returned)}</div>
                         <div className={cn("text-xs", dReturned != null && dReturned < 0 ? "text-green-500" : dReturned != null && dReturned > 0 ? "text-red-500" : "text-[var(--muted-foreground)]")}>{fmtDelta(dReturned)}</div>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q10)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q20)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q30)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q40)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q50)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q60)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q70)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q80)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.q90)}</TableCell>
+                      {([row.q10, row.q20, row.q30, row.q40, row.q50, row.q60, row.q70, row.q80, row.q90] as (number | null)[]).map((q, i) => (
+                        <TableCell key={i} className="text-right tabular-nums text-xs">
+                          {isEoQ(q, row.eo) ? (
+                            <span className="relative inline-block px-1">
+                              <span className="absolute inset-[-14px] bg-[url('/red-circle-brush.png')] bg-contain bg-center bg-no-repeat pointer-events-none" />
+                              <span className="relative">{fmtQ(q)}</span>
+                            </span>
+                          ) : fmtQ(q)}
+                        </TableCell>
+                      ))}
                       <TableCell className={cn("text-right tabular-nums", row.g1 != null && row.g1 > 0 && "text-green-500")}>{fmtC(row.g1)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g2 != null && row.g2 < 0 && "text-red-500")}>{fmtC(row.g2)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g3 != null && row.g3 < 0 && "text-red-500")}>{fmtC(row.g3)}</TableCell>

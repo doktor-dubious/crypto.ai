@@ -1212,6 +1212,23 @@
     "deleteActionUnderstood": "I understand this action is irreversible",
     "deleteActionButton": "Delete Template"
   },
+  "systemLogs": {
+    "gorm": "Gorm",
+    "fastapi": "FastAPI",
+    "celeryWorker": "Celery Worker",
+    "redis": "Redis",
+    "database": "Database",
+    "frontend": "Frontend",
+    "claude": "Claude",
+    "searchPlaceholder": "Filter log lines...",
+    "noLogs": "No log lines found",
+    "noLogsHint": "There are no log entries matching your criteria",
+    "showing": "Showing {from}–{to} of {total} lines",
+    "lineNumber": "Line",
+    "autoRefresh": "Auto-refresh",
+    "refresh": "Refresh",
+    "loadError": "Failed to load logs"
+  },
   "userMenu": {
     "account": "Account",
     "theme": "Theme",
@@ -1231,6 +1248,7 @@
     "selectedCount": "{selected} of {total} selected",
     "tabDetails": "Details",
     "tabParameters": "Parameters",
+    "tabAction": "Action",
     "paramName": "Parameter",
     "paramValue": "Value",
     "noParameters": "No parameters defined",

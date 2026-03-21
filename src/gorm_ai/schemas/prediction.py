@@ -19,6 +19,7 @@ class PredictionEngine(StrEnum):
     GLUON_TOTO = "gluon-toto"
     CHRONOS2 = "chronos2"
     CHRONOS_BOLT = "chronos-bolt"
+    SUNDIAL = "sundial"
 
 
 class TaskStatus(StrEnum):

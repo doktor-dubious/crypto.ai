@@ -394,6 +394,7 @@ class DataDumpRow(BaseModel):
     g4_profit_unit: float | None = None
     g4_unit_probs: list[tuple[int, float]] | None = None
     cv: float | None = None
+    eo: float | None = None
 
 
 class DataDumpResponse(BaseModel):

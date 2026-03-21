@@ -1,52 +1,53 @@
 #!/usr/bin/env python3
-"""Fine-tune TimesFM on sales data (pooled multi-series).
+"""Fine-tune TimesFM on sales data (per-outlet, resumable).
 
 Reads per-outlet time series from the database, creates sliding-window
-(context, target) training pairs, and runs continued pre-training.
-Saves the result as a HuggingFace-compatible local checkpoint that the
-TimesFMFinetunedEngine can load.
+(context, target) training pairs, and runs continued pre-training on each
+outlet individually.  After every outlet the checkpoint is saved and a
+``finetune_progress`` row is inserted so that a terminated process (e.g.
+a spot instance being reclaimed) can restart and pick up where it left off.
 
 Incremental fine-tuning
 -----------------------
 The script automatically resumes from the output checkpoint when it
-already exists. This lets you fine-tune in stages — by customer, by
-date interval, or both — without losing previous progress:
+already exists, **and** skips outlets that already have a
+``finetune_progress`` record for this engine.
 
-    # Stage 1: first publication, 2018-2021
-    uv run python scripts/finetune_timesfm.py \\
-        --customer-ids <id1> --start-date 2018-01-01 --end-date 2021-12-31
+    # First run — processes outlets A, B, C, …
+    uv run python scripts/finetune_timesfm.py --customer-ids <id>
 
-    # Stage 2: same publication, 2022-2024 (resumes from stage 1 checkpoint)
-    uv run python scripts/finetune_timesfm.py \\
-        --customer-ids <id1> --start-date 2022-01-01 --end-date 2024-12-31
+    # Spot instance reclaimed after outlet B.
+    # Restart — skips A and B, continues from C.
+    uv run python scripts/finetune_timesfm.py --customer-ids <id>
 
-    # Stage 3: second publication, all dates (resumes from stage 2 checkpoint)
-    uv run python scripts/finetune_timesfm.py \\
-        --customer-ids <id2>
-
-To start completely over: delete the output directory and re-run.
+Use ``--force`` to re-process outlets that are already marked as done.
 
 Options:
-    --customer-ids TEXT     Comma-separated customer UUIDs to include
-                            (default: all active customers)
-    --start-date TEXT       Only include sales on or after this date YYYY-MM-DD
-                            (default: all available history)
-    --end-date TEXT         Only include sales on or before this date YYYY-MM-DD
-                            (default: today)
-    --context-length INT    Context window fed to the model per step
-                            (default: 512)
-    --horizon INT           Forecast horizon used as training target
-                            (default: 7)
-    --epochs INT            Training epochs over the loaded window set
-                            (default: 3)
-    --lr FLOAT              Learning rate — keep small to preserve
-                            pre-trained knowledge (default: 1e-5)
-    --batch-size INT        Training batch size (default: 32)
-    --output TEXT           Checkpoint output directory
-                            (default: models/timesfm_finetuned)
-    --base-checkpoint TEXT  Base TimesFM HuggingFace repo or local path,
-                            used only when no local checkpoint exists yet
-                            (default: google/timesfm-2.5-200m-pytorch)
+    --customer-ids TEXT       Comma-separated customer UUIDs to include
+                              (default: all active customers)
+    --outlet-group-ids TEXT   Comma-separated outlet group UUIDs; outlets
+                              belonging to any of these groups are included
+    --outlet-ids TEXT         Comma-separated outlet UUIDs to include
+                              (default: all for the selected customers)
+    --start-date TEXT         Only include sales on or after this date YYYY-MM-DD
+                              (default: all available history)
+    --end-date TEXT           Only include sales on or before this date YYYY-MM-DD
+                              (default: today)
+    --context-length INT      Context window fed to the model per step
+                              (default: 512)
+    --horizon INT             Forecast horizon used as training target
+                              (default: 7)
+    --epochs INT              Training epochs over the loaded window set
+                              (default: 3)
+    --lr FLOAT                Learning rate — keep small to preserve
+                              pre-trained knowledge (default: 1e-5)
+    --batch-size INT          Training batch size (default: 32)
+    --output TEXT              Checkpoint output directory
+                              (default: models/timesfm_finetuned)
+    --base-checkpoint TEXT    Base TimesFM HuggingFace repo or local path,
+                              used only when no local checkpoint exists yet
+                              (default: google/timesfm-2.5-200m-pytorch)
+    --force                   Re-process outlets already marked as done
 """
 
 from __future__ import annotations
@@ -56,11 +57,11 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as fn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 
@@ -69,16 +70,20 @@ from torch.utils.data import DataLoader, Dataset
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from sqlalchemy import select  # noqa: E402 (after sys.path edit)
+from sqlalchemy import delete, select  # noqa: E402
 
 from gorm_ai.database.connection import async_session_factory  # noqa: E402
 from gorm_ai.database.models.customer import Customer  # noqa: E402
+from gorm_ai.database.models.finetune_progress import FinetuneProgress  # noqa: E402
 from gorm_ai.database.models.outlet import Outlet  # noqa: E402
+from gorm_ai.database.models.outlet_group import OutletGroupMember  # noqa: E402
 from gorm_ai.logging import configure_logging  # noqa: E402
 from gorm_ai.services.sales import SalesService  # noqa: E402
 
 configure_logging()
 log = logging.getLogger(__name__)
+
+ENGINE_NAME = "timesfm"
 
 
 # ---------------------------------------------------------------------------
@@ -136,85 +141,123 @@ class SlidingWindowDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Data loading (single outlet)
 # ---------------------------------------------------------------------------
 
-async def _load_series_async(
-    customer_ids: list[str] | None,
-    outlet_ids_filter: list[str] | None,
+async def _load_outlet_series(
+    session,
+    customer_id: str,
+    outlet_id: str,
     start_date: date | None,
     end_date: date | None,
+) -> np.ndarray | None:
+    """Load sales series for a single outlet. Returns None if too few rows."""
+    sales_service = SalesService(session)
+    sales = await sales_service.get_by_date_range(
+        customer_id=customer_id,
+        outlet_id=outlet_id,
+        start_date=start_date,
+        end_date=end_date or date.today(),
+        apply_sales_filter=True,
+    )
+    if not sales:
+        return None
+    return np.array([float(s.sold) for s in sales], dtype=np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Progress helpers
+# ---------------------------------------------------------------------------
+
+async def _get_completed_outlet_ids(session, engine: str) -> set[str]:
+    """Return outlet IDs already marked as fine-tuned for this engine."""
+    stmt = select(FinetuneProgress.outlet_id).where(
+        FinetuneProgress.engine == engine,
+        FinetuneProgress.active.is_(True),
+    )
+    result = await session.execute(stmt)
+    return set(result.scalars().all())
+
+
+async def _mark_outlet_done(
+    session,
+    outlet_id: str,
+    customer_id: str,
+    engine: str,
     context_length: int,
     horizon: int,
-) -> list[np.ndarray]:
-    """Load outlet sales series from the database within the given date range."""
-    min_length = context_length + horizon
-    series_list: list[np.ndarray] = []
-
-    async with async_session_factory() as session:
-        if customer_ids:
-            stmt = select(Customer).where(
-                Customer.id.in_(customer_ids), Customer.active.is_(True)
-            )
-        else:
-            stmt = select(Customer).where(Customer.active.is_(True))
-
-        result = await session.execute(stmt)
-        customers = list(result.scalars().all())
-        log.info("Found %d customer(s) to process", len(customers))
-
-        sales_service = SalesService(session)
-
-        for customer in customers:
-            outlet_stmt = select(Outlet.id).where(
-                Outlet.customer_id == customer.id,
-                Outlet.active.is_(True),
-            )
-            if outlet_ids_filter:
-                outlet_stmt = outlet_stmt.where(Outlet.id.in_(outlet_ids_filter))
-            result = await session.execute(outlet_stmt)
-            outlet_ids = list(result.scalars().all())
-            log.info("Customer %s — %d outlets", customer.id, len(outlet_ids))
-
-            loaded = 0
-            skipped = 0
-            for outlet_id in outlet_ids:
-                sales = await sales_service.get_by_date_range(
-                    customer_id=customer.id,
-                    outlet_id=outlet_id,
-                    start_date=start_date,
-                    end_date=end_date or date.today(),
-                    apply_sales_filter=True,
-                )
-                if len(sales) < min_length:
-                    skipped += 1
-                    continue
-                arr = np.array([float(s.sold) for s in sales], dtype=np.float32)
-                series_list.append(arr)
-                loaded += 1
-
-            log.info(
-                "Customer %s — loaded %d series, skipped %d (too short)",
-                customer.id, loaded, skipped,
-            )
-
-    log.info("Total series loaded: %d", len(series_list))
-    return series_list
-
-
-def load_series(
-    customer_ids: list[str] | None,
-    outlet_ids_filter: list[str] | None,
-    start_date: date | None,
-    end_date: date | None,
-    context_length: int,
-    horizon: int,
-) -> list[np.ndarray]:
-    return asyncio.run(
-        _load_series_async(
-            customer_ids, outlet_ids_filter, start_date, end_date, context_length, horizon
+    epochs: int,
+) -> None:
+    """Insert or update a finetune_progress row for this outlet."""
+    # Delete any existing row (handles --force re-runs cleanly)
+    await session.execute(
+        delete(FinetuneProgress).where(
+            FinetuneProgress.outlet_id == outlet_id,
+            FinetuneProgress.engine == engine,
         )
     )
+    session.add(FinetuneProgress(
+        outlet_id=outlet_id,
+        customer_id=customer_id,
+        engine=engine,
+        completed_at=datetime.now(UTC),
+        context_length=context_length,
+        horizon=horizon,
+        epochs=epochs,
+    ))
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Outlet resolution
+# ---------------------------------------------------------------------------
+
+async def _resolve_outlets(
+    session,
+    customer_ids: list[str] | None,
+    outlet_ids_filter: list[str] | None,
+    outlet_group_ids: list[str] | None,
+) -> list[tuple[str, str]]:
+    """Return list of (customer_id, outlet_id) tuples to process."""
+    # Determine customers
+    if customer_ids:
+        stmt = select(Customer).where(
+            Customer.id.in_(customer_ids), Customer.active.is_(True)
+        )
+    else:
+        stmt = select(Customer).where(Customer.active.is_(True))
+    result = await session.execute(stmt)
+    customers = list(result.scalars().all())
+    log.info("Found %d customer(s) to process", len(customers))
+
+    # Resolve outlet group IDs to outlet IDs
+    group_outlet_ids: set[str] | None = None
+    if outlet_group_ids:
+        stmt = select(OutletGroupMember.outlet_id).where(
+            OutletGroupMember.group_id.in_(outlet_group_ids),
+            OutletGroupMember.active.is_(True),
+        )
+        result = await session.execute(stmt)
+        group_outlet_ids = set(result.scalars().all())
+        log.info("Outlet groups resolved to %d outlet(s)", len(group_outlet_ids))
+
+    pairs: list[tuple[str, str]] = []
+    for customer in customers:
+        outlet_stmt = select(Outlet.id).where(
+            Outlet.customer_id == customer.id,
+            Outlet.active.is_(True),
+        )
+        if outlet_ids_filter:
+            outlet_stmt = outlet_stmt.where(Outlet.id.in_(outlet_ids_filter))
+        if group_outlet_ids is not None:
+            outlet_stmt = outlet_stmt.where(Outlet.id.in_(group_outlet_ids))
+
+        result = await session.execute(outlet_stmt)
+        for oid in result.scalars().all():
+            pairs.append((customer.id, oid))
+
+    log.info("Total outlets to consider: %d", len(pairs))
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +287,7 @@ def get_trainable_module(model: object) -> torch.nn.Module:
 
 
 # ---------------------------------------------------------------------------
-# Training
+# Training (single outlet)
 # ---------------------------------------------------------------------------
 
 def train(
@@ -273,50 +316,30 @@ def train(
 
     dataset = SlidingWindowDataset(series_list, context_length, horizon)
     if len(dataset) == 0:
-        log.error(
-            "No training windows generated. "
-            "All series may be shorter than context_length (%d) + horizon (%d) = %d days.",
-            context_length, horizon, context_length + horizon,
-        )
-        sys.exit(1)
+        log.warning("No training windows for this outlet — skipping.")
+        return
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
     nn_module.train()
     optimizer = AdamW(nn_module.parameters(), lr=lr)
 
-    log.info(
-        "Starting training — %d windows, patch_size=%d, batch_size=%d, epochs=%d, lr=%s",
-        len(dataset), p, batch_size, epochs, lr,
-    )
-
     for epoch in range(1, epochs + 1):
         epoch_loss = 0.0
         n_batches = 0
 
         for ctx_batch, tgt_batch in loader:
-            # ctx_batch: (B, context_length) — pre-normalised by SlidingWindowDataset
-            # tgt_batch: (B, horizon)        — same scale as ctx_batch
-            B = ctx_batch.shape[0]
+            bsz = ctx_batch.shape[0]
             optimizer.zero_grad()
 
-            # Reshape flat context into patches: (B, num_patches, p)
-            # Data is already (mean=0, std≈1) so no additional normalisation needed.
-            patched = ctx_batch.reshape(B, -1, p)
-            # All-False mask: True = masked/invalid, False = valid
+            patched = ctx_batch.reshape(bsz, -1, p)
             masks = torch.zeros_like(patched, dtype=torch.bool)
 
-            # Forward pass (gradients enabled).
-            # Returns ((input_emb, output_emb, output_ts, quantile_spread), caches)
-            # output_ts shape: (B, num_patches, o * q)
             (_, _, output_ts, _), _ = nn_module(patched, masks)
 
-            # Point forecast: last patch, first `horizon` output steps,
-            # averaged across quantile heads → (B, horizon).
-            # Both forecast and tgt_batch are in the same normalised space.
-            forecast = output_ts.reshape(B, -1, o, q)[:, -1, :horizon, :].mean(dim=-1)
+            forecast = output_ts.reshape(bsz, -1, o, q)[:, -1, :horizon, :].mean(dim=-1)
 
-            loss = F.mse_loss(forecast, tgt_batch)
+            loss = fn.mse_loss(forecast, tgt_batch)
             loss.backward()
             optimizer.step()
 
@@ -324,10 +347,9 @@ def train(
             n_batches += 1
 
         avg_loss = epoch_loss / max(n_batches, 1)
-        log.info("Epoch %d/%d — avg MSE loss: %.6f", epoch, epochs, avg_loss)
+        log.info("  Epoch %d/%d — avg MSE loss: %.6f", epoch, epochs, avg_loss)
 
     nn_module.eval()
-    log.info("Training complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -341,10 +363,6 @@ def save_checkpoint(model: object, output_dir: str) -> None:
     output_dir with a rename. This means an interrupted save never
     corrupts the previous good checkpoint — the old directory is only
     replaced once the new one is fully written.
-
-    Tries model.save_pretrained() first (standard HuggingFace API).
-    Falls back to saving the state_dict + copying config files from the
-    HuggingFace cache so that from_pretrained(local_path) can load it.
     """
     import shutil
     import tempfile
@@ -352,13 +370,10 @@ def save_checkpoint(model: object, output_dir: str) -> None:
     parent = os.path.dirname(os.path.abspath(output_dir))
     os.makedirs(parent, exist_ok=True)
 
-    # Write to a sibling temp dir so the rename is on the same filesystem
-    # (required for os.replace to be atomic on Linux).
     with tempfile.TemporaryDirectory(dir=parent, prefix=".tmp_checkpoint_") as tmp_dir:
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(tmp_dir)
         else:
-            # Fallback: state_dict + config files from HF cache
             nn_module = get_trainable_module(model)
             torch.save(nn_module.state_dict(), os.path.join(tmp_dir, "pytorch_model.bin"))
             try:
@@ -374,15 +389,12 @@ def save_checkpoint(model: object, output_dir: str) -> None:
                     e,
                 )
 
-        # Atomically replace the output directory.
-        # Move the old checkpoint aside first, swap in the new one, then remove old.
         old_dir = output_dir + ".old"
         if os.path.isdir(output_dir):
             os.rename(output_dir, old_dir)
         try:
             shutil.copytree(tmp_dir, output_dir)
         except Exception:
-            # Restore previous checkpoint on failure
             if os.path.isdir(old_dir):
                 os.rename(old_dir, output_dir)
             raise
@@ -399,13 +411,18 @@ def save_checkpoint(model: object, output_dir: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fine-tune TimesFM 2.5 on pooled sales data.",
+        description="Fine-tune TimesFM 2.5 on sales data (per-outlet, resumable).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
         "--customer-ids",
         default=None,
         help="Comma-separated customer UUIDs to include (default: all)",
+    )
+    p.add_argument(
+        "--outlet-group-ids",
+        default=None,
+        help="Comma-separated outlet group UUIDs; only outlets in these groups are included",
     )
     p.add_argument(
         "--outlet-ids",
@@ -435,12 +452,18 @@ def parse_args() -> argparse.Namespace:
         "--base-checkpoint", default="google/timesfm-2.5-200m-pytorch",
         help="Used only when no local checkpoint exists yet",
     )
+    p.add_argument(
+        "--force", action="store_true",
+        help="Re-process outlets already marked as fine-tuned",
+    )
     return p.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+# ---------------------------------------------------------------------------
+# Main (async core)
+# ---------------------------------------------------------------------------
 
+async def _main_async(args: argparse.Namespace) -> None:
     customer_ids = (
         [c.strip() for c in args.customer_ids.split(",")]
         if args.customer_ids
@@ -451,7 +474,11 @@ def main() -> None:
         if args.outlet_ids
         else None
     )
-
+    outlet_group_ids = (
+        [g.strip() for g in args.outlet_group_ids.split(",")]
+        if args.outlet_group_ids
+        else None
+    )
     start_date: date | None = (
         date.fromisoformat(args.start_date) if args.start_date else None
     )
@@ -492,37 +519,94 @@ def main() -> None:
     )
     log.info("Model loaded from '%s'.", checkpoint)
 
+    # Resolve outlets and filter out already-completed ones
+    async with async_session_factory() as session:
+        all_pairs = await _resolve_outlets(
+            session, customer_ids, outlet_ids_filter, outlet_group_ids,
+        )
+
+        if args.force:
+            completed: set[str] = set()
+            log.info("--force: will re-process all outlets")
+        else:
+            completed = await _get_completed_outlet_ids(session, ENGINE_NAME)
+            if completed:
+                log.info("Skipping %d already-completed outlet(s)", len(completed))
+
+    pairs = [(cid, oid) for cid, oid in all_pairs if oid not in completed]
+
+    if not pairs:
+        log.info("All outlets already processed. Use --force to re-run.")
+        return
+
     log.info(
-        "Loading sales series — customers: %s, outlets: %s, dates: %s to %s",
+        "Processing %d outlet(s) — customers: %s, dates: %s to %s",
+        len(pairs),
         args.customer_ids or "all",
-        args.outlet_ids or "all",
         start_date or "beginning",
         end_date or "today",
     )
-    series_list = load_series(customer_ids, outlet_ids_filter, start_date, end_date, args.context_length, args.horizon)
 
-    if not series_list:
-        log.error(
-            "No series loaded. Check your database connection and that "
-            "sales data has been imported for the specified customers/dates."
+    min_length = args.context_length + args.horizon
+    processed = 0
+    skipped = 0
+    failed = 0
+
+    for idx, (customer_id, outlet_id) in enumerate(pairs, 1):
+        log.info(
+            "[%d/%d] Outlet %s (customer %s)",
+            idx, len(pairs), outlet_id, customer_id,
         )
-        sys.exit(1)
+        try:
+            async with async_session_factory() as session:
+                series = await _load_outlet_series(
+                    session, customer_id, outlet_id, start_date, end_date,
+                )
 
-    train(
-        model=model,
-        series_list=series_list,
-        context_length=args.context_length,
-        horizon=args.horizon,
-        epochs=args.epochs,
-        lr=args.lr,
-        batch_size=args.batch_size,
-    )
+            if series is None or len(series) < min_length:
+                log.info("  Skipped — too short (%d < %d)",
+                         len(series) if series is not None else 0, min_length)
+                skipped += 1
+                continue
 
-    log.info("Saving checkpoint to '%s'...", args.output)
-    save_checkpoint(model, args.output)
+            train(
+                model=model,
+                series_list=[series],
+                context_length=args.context_length,
+                horizon=args.horizon,
+                epochs=args.epochs,
+                lr=args.lr,
+                batch_size=args.batch_size,
+            )
+
+            save_checkpoint(model, args.output)
+
+            async with async_session_factory() as session:
+                await _mark_outlet_done(
+                    session, outlet_id, customer_id, ENGINE_NAME,
+                    args.context_length, args.horizon, args.epochs,
+                )
+
+            processed += 1
+            log.info("  Done (%d/%d processed)", processed, len(pairs))
+
+        except Exception:
+            failed += 1
+            log.exception("  Failed on outlet %s — continuing", outlet_id)
+
     log.info(
-        "Done. To use the fine-tuned model pass \"engine\": \"timesfm_finetuned\" in your requests."
+        "Finished. Processed: %d, skipped (short): %d, failed: %d",
+        processed, skipped, failed,
     )
+    if processed > 0:
+        log.info(
+            "To use the fine-tuned model pass \"engine\": \"timesfm_finetuned\" in your requests."
+        )
+
+
+def main() -> None:
+    args = parse_args()
+    asyncio.run(_main_async(args))
 
 
 if __name__ == "__main__":

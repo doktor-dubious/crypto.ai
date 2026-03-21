@@ -81,6 +81,14 @@ class EngineRegistry:
         except ImportError:
             pass  # chronos-forecasting not available
 
+        # Register Sundial engine (THU-ML)
+        try:
+            from gorm_ai.prediction.engines.sundial_engine import SundialEngine
+
+            self.register(PredictionEngineEnum.SUNDIAL, SundialEngine)
+        except ImportError:
+            pass  # transformers not available
+
 
     def register(
         self,

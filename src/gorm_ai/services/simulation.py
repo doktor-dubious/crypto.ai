@@ -1981,6 +1981,7 @@ class SimulationService:
                 PredictionOutlet.q80,
                 PredictionOutlet.upper_bound,
                 PredictionOutlet.cv,
+                PredictionOutlet.eo,
             )
             .join(
                 SimulationDate,
@@ -2149,6 +2150,7 @@ class SimulationService:
                     "g4_profit_unit": g4_profit_unit,
                     "g4_unit_probs": g4_unit_probs,
                     "cv": float(r.cv) if r.cv is not None else None,
+                    "eo": float(r.eo) if r.eo is not None else None,
                 }
             )
 

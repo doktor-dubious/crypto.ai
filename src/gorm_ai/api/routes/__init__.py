@@ -8,6 +8,7 @@ from gorm_ai.api.routes import (
     customers,
     financial_dates,
     import_templates,
+    logs,
     outlet_groups,
     outlets,
     pads,
@@ -26,6 +27,7 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
+api_router.include_router(logs.router, prefix="/logs", tags=["logs"])
 api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])

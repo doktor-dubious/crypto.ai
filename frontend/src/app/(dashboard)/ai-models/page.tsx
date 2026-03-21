@@ -617,6 +617,7 @@ export default function AIModelsPage() {
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabParameters")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabAction")}</TabsTrigger>
                   <div
                     className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => setDetailMaximized((v) => !v)}
@@ -675,23 +676,6 @@ export default function AIModelsPage() {
                     className="space-y-6 w-full min-h-30 px-4 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:border-transparent"
                   />
                 </FieldRow>
-
-                {/* Danger zone */}
-                <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4 mt-8">
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>
-                    <p className="text-xs text-muted-foreground">{t("deleteZoneDescription")}</p>
-                  </div>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={openDeleteDialog}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                    {t("deleteButton")}
-                  </Button>
-                </div>
               </TabsContent>
 
               {/* ─ Parameters ─ */}
@@ -761,6 +745,26 @@ export default function AIModelsPage() {
                   })()
                 )}
               </TooltipProvider>
+              </TabsContent>
+
+              {/* ─ Action ─ */}
+              <TabsContent value="tab3" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+                {/* Danger zone */}
+                <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>
+                    <p className="text-xs text-muted-foreground">{t("deleteZoneDescription")}</p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={openDeleteDialog}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                    {t("deleteButton")}
+                  </Button>
+                </div>
               </TabsContent>
             </Tabs>
           </div>

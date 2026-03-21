@@ -1085,6 +1085,7 @@ dependencies = [
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
+    { name = "transformers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1136,6 +1137,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=25.5.0" },
     { name = "timesfm", marker = "extra == 'ml'", git = "https://github.com/google-research/timesfm.git" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0.0" },
+    { name = "transformers", specifier = ">=4.57.6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27.0" },
 ]
 provides-extras = ["ml", "autogluon", "chronos", "dev"]

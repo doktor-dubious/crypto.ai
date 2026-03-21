@@ -1,0 +1,79 @@
+# Docker Compose override for RunPod GPU offload.
+#
+# Only starts the Celery worker (predictions, simulations) and the
+# fine-tuning script environment.  DB and Redis are accessed on the
+# production server via an SSH tunnel (see scripts/runpod-deploy.sh).
+#
+# Usage:
+#   docker compose -f docker-compose.runpod.yml up -d
+#
+# The tunnel must be running first (see runpod-deploy.sh) so that
+# localhost:5432 → production DB and localhost:6379 → production Redis.
+
+services:
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.runpod
+    command: python -m gorm_ai.tasks.worker_entrypoint
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/gorm_ai
+      - REDIS_URL=redis://host.docker.internal:6379/0
+      - CELERY_BROKER_URL=redis://host.docker.internal:6379/1
+      - CELERY_RESULT_BACKEND=redis://host.docker.internal:6379/2
+      - FINETUNED_MODEL_PATH=/models/timesfm_finetuned
+      - HF_HUB_CACHE=/models/hf_cache
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
+      - OPENBLAS_NUM_THREADS=4
+    volumes:
+      - ./src:/app/src
+      - ./log:/app/log
+      - models:/models
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # One-shot container for running the fine-tuning script.
+  # Usage: docker compose -f docker-compose.runpod.yml run --rm finetune [args]
+  finetune:
+    build:
+      context: .
+      dockerfile: Dockerfile.runpod
+    entrypoint: ["python", "scripts/finetune_timesfm.py"]
+    command: ["--output", "/models/timesfm_finetuned"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/gorm_ai
+      - FINETUNED_MODEL_PATH=/models/timesfm_finetuned
+      - HF_HUB_CACHE=/models/hf_cache
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./log:/app/log
+      - models:/models
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - finetune
+
+volumes:
+  models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /workspace/models

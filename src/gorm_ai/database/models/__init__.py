@@ -8,6 +8,7 @@ from gorm_ai.database.models.covariate import Covariate, CovariateOutlet
 from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.currency import Currency
 from gorm_ai.database.models.customer import Customer
+from gorm_ai.database.models.finetune_progress import FinetuneProgress
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
 from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
@@ -38,6 +39,7 @@ __all__ = [
     "Currency",
     "LastPrediction",
     "Customer",
+    "FinetuneProgress",
     "ImportTemplate",
     "ImportTemplateElement",
     "CustomerConfiguration",

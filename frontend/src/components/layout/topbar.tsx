@@ -41,6 +41,9 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/export/log": "exportLog",
   "/ai-models": "aiModelsModels",
   "/configuration": "configuration",
+  "/system/logs": "systemLogs",
+  "/system/workers": "systemWorkers",
+  "/system/docker": "systemDocker",
 }
 
 export function Topbar() {

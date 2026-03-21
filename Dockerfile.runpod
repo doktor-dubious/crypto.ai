@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+#
+# GPU-enabled image for RunPod.  Based on NVIDIA CUDA so PyTorch can
+# use the GPU for predictions, simulations, and fine-tuning.
+
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev python3-pip git curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Use python3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Copy dependency files
+COPY pyproject.toml uv.lock* ./
+
+# Install dependencies with ML extras
+RUN uv sync --frozen --no-dev --no-install-project --extra ml --extra autogluon --extra chronos
+
+# Production stage
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS production
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3.11 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application code
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY alembic.ini ./
+COPY alembic/ ./alembic/
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src"
+ENV PYTHONUNBUFFERED=1
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Create models directory
+RUN mkdir -p /models && chown appuser:appuser /models
+
+# Change ownership to non-root user
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+CMD ["python", "-m", "gorm_ai.tasks.worker_entrypoint"]

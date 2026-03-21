@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [USER] $(jq -r '.prompt')\" >> /home/rune/workspace/projects/gorm.ai/log/claude.log"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MSG=$(jq -r '.last_assistant_message // empty') && [ -n \"$MSG\" ] && echo \"[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [CLAUDE] $MSG\" >> /home/rune/workspace/projects/gorm.ai/log/claude.log"
+          }
+        ]
+      }
+    ]
+  }
+}
