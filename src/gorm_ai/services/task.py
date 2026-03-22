@@ -233,7 +233,9 @@ class TaskService:
         return len(rows)
 
     async def mark_orphaned_worker_tasks_failed(
-        self, alive_worker_names: set[str],
+        self,
+        alive_worker_names: set[str],
+        stale_seconds: int = 600,
     ) -> int:
         """Mark 'started' tasks as failed when their worker is no longer alive.
 
@@ -242,18 +244,28 @@ class TaskService:
         ``worker_name`` is set and *not* in this set is orphaned — its worker
         died (e.g. a RunPod instance was terminated) and the task will never
         complete.
+
+        To avoid false positives with solo-pool workers that are simply busy
+        (and therefore can't respond to ping), a task is only marked failed
+        if its ``updated_at`` is older than ``stale_seconds``.  Progress
+        callbacks update this timestamp, so a task that is still making
+        progress will not be killed.
         """
         if not alive_worker_names:
             # No workers alive at all — fall back to mark_stale_tasks_failed
             return 0
 
+        cutoff = datetime.now(UTC) - timedelta(seconds=stale_seconds)
+
         # Find started tasks whose worker is known but not alive
+        # AND that haven't been updated recently (no progress callbacks)
         result = await self.session.execute(
             update(TaskRecord)
             .where(
                 TaskRecord.status == "started",
                 TaskRecord.worker_name.isnot(None),
                 TaskRecord.worker_name.notin_(alive_worker_names),
+                TaskRecord.updated_at < cutoff,
             )
             .values(
                 status="failure",
