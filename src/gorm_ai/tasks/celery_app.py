@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from celery import Celery
-from celery.signals import task_postrun, task_prerun, worker_process_init
+from celery.signals import task_postrun, task_prerun, worker_process_init, worker_ready, worker_shutdown
 
 from gorm_ai.config import get_settings
 
@@ -14,7 +14,7 @@ celery_app = Celery(
     "gorm_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations"],
+    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations", "gorm_ai.tasks.finetuning"],
 )
 
 # Celery configuration
@@ -47,8 +47,19 @@ def get_current_metrics(task_id: str) -> tuple[float | None, float | None]:
         return None, None
 
 
+def _refresh_worker_registry() -> None:
+    """Refresh this worker's TTL in the Redis registry."""
+    try:
+        hostname = celery_app.current_worker.hostname  # type: ignore[union-attr]
+        r = _get_redis()
+        r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")
+    except Exception:
+        pass
+
+
 @task_prerun.connect
 def on_task_prerun(task_id: str, **kwargs) -> None:
+    _refresh_worker_registry()
     try:
         import psutil
         proc = psutil.Process(os.getpid())
@@ -61,6 +72,7 @@ def on_task_prerun(task_id: str, **kwargs) -> None:
 
 @task_postrun.connect
 def on_task_postrun(task_id: str, **kwargs) -> None:
+    _refresh_worker_registry()
     start = _task_start_metrics.pop(task_id, None)
     if start is None:
         return
@@ -82,6 +94,38 @@ def on_task_postrun(task_id: str, **kwargs) -> None:
                 await session.commit()
 
         asyncio.run(_write())
+    except Exception:
+        pass
+
+
+WORKER_REGISTRY_PREFIX = "gorm:worker:"
+WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
+
+
+def _get_redis():
+    """Return a Redis client from the broker URL."""
+    import redis
+    return redis.Redis.from_url(settings.celery_broker_url)
+
+
+@worker_ready.connect
+def on_worker_ready(sender, **kwargs):
+    """Register this worker in Redis so the API can list it even when busy."""
+    hostname = sender.hostname  # e.g. "celery@RunPod"
+    try:
+        r = _get_redis()
+        r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")
+    except Exception:
+        pass
+
+
+@worker_shutdown.connect
+def on_worker_shutdown(sender, **kwargs):
+    """Remove this worker from the Redis registry."""
+    hostname = sender.hostname
+    try:
+        r = _get_redis()
+        r.delete(f"{WORKER_REGISTRY_PREFIX}{hostname}")
     except Exception:
         pass
 

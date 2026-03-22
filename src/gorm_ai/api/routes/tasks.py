@@ -156,17 +156,32 @@ def _is_worker_container_healthy() -> bool:
 
 @router.get("/workers/list", response_model=list[str])
 async def list_workers() -> list[str]:
-    """Return names of currently connected Celery workers."""
-    from gorm_ai.tasks.celery_app import celery_app
+    """Return names of registered Celery workers (including busy ones)."""
+    from gorm_ai.tasks.celery_app import WORKER_REGISTRY_PREFIX, celery_app
 
-    def _ping() -> dict | None:
-        return celery_app.control.inspect(timeout=2).ping()
+    def _get_workers() -> list[str]:
+        import redis
 
-    result = await asyncio.to_thread(_ping)
-    if not result:
-        return []
-    # Worker keys are like "celery@GORM" — extract the name after @
-    return sorted(key.split("@", 1)[-1] for key in result)
+        # Primary source: Redis registry (works even when solo-pool workers
+        # are busy and can't respond to inspect commands).
+        r = redis.Redis.from_url(str(celery_app.conf.broker_url))
+        keys = r.keys(f"{WORKER_REGISTRY_PREFIX}*")
+        prefix_len = len(WORKER_REGISTRY_PREFIX)
+        registered = {k.decode()[prefix_len:] for k in keys}
+
+        # Fallback: also include workers that respond to ping (covers
+        # workers that haven't been restarted with the new registration).
+        try:
+            ping_result = celery_app.control.inspect(timeout=2).ping()
+            if ping_result:
+                registered.update(ping_result.keys())
+        except Exception:
+            pass
+
+        # Worker keys are like "celery@GORM" — extract the name after @
+        return sorted(key.split("@", 1)[-1] for key in registered)
+
+    return await asyncio.to_thread(_get_workers)
 
 
 @router.post("/workers/restart", status_code=204)
