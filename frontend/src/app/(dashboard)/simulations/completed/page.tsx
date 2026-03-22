@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon, RotateCcw,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -1695,6 +1695,16 @@ export default function SimulationsCompletedPage() {
     onError: () => toast.error(t("toastDeleteError")),
   })
 
+  const resumeMutation = useMutation({
+    mutationFn: (recordId: string) => simulationsApi.resume(recordId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["simulations-completed"] })
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("resumeSuccess"))
+    },
+    onError: () => toast.error(t("resumeError")),
+  })
+
   // ── Tab indicator ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -2319,7 +2329,24 @@ export default function SimulationsCompletedPage() {
               </TabsContent>
 
               {/* ─ Actions ─ */}
-              <TabsContent value="tab3" className="max-w-2xl mt-6 px-4">
+              <TabsContent value="tab3" className="max-w-2xl mt-6 px-4 space-y-4">
+                {(selected.status === "failure" || selected.status === "revoked") && selected.simulation_id && (
+                  <div className="rounded-md border border-[var(--border)] p-4 flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-semibold">{t("resumeButton")}</p>
+                      <p className="text-xs text-[var(--muted-foreground)]">{t("resumeDescription")}</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="shrink-0 cursor-pointer"
+                      disabled={resumeMutation.isPending}
+                      onClick={() => resumeMutation.mutate(selected.id)}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                      {t("resumeButton")}
+                    </Button>
+                  </div>
+                )}
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
                   <div className="space-y-0.5">
                     <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>

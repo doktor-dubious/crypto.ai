@@ -36,19 +36,21 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
             # Unknown task ID → redelivered zombie, skip it
             return {"skipped": True, "reason": "redelivered task not in DB"}
 
-        sim_name = request_data.get("name") or (
-            f"Simulation {request_data.get('simulation_from')} – {request_data.get('simulation_to')}"
-        )
+        sfrom = request_data.get("simulation_from", "")
+        sto = request_data.get("simulation_to", "")
+        sim_name = request_data.get("name") or f"Simulation {sfrom} – {sto}"
+        if request_data.get("resume_simulation_id"):
+            sim_name = "Resuming simulation"
         await ts.update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name, worker_name=worker_name)
         await session.commit()
 
     try:
+        resume_simulation_id = request_data.pop("resume_simulation_id", None)
+
         if isinstance(request_data.get("simulation_from"), str):
             request_data["simulation_from"] = date.fromisoformat(request_data["simulation_from"])
         if isinstance(request_data.get("simulation_to"), str):
             request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
-
-        request = SimulationRequest(**request_data)
 
         async def _on_progress(progress: int, message: str) -> None:
             from gorm_ai.tasks.celery_app import get_current_metrics
@@ -62,7 +64,13 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
 
         async with task_session() as session:
             service = SimulationService(session)
-            result = await service.run_simulation(request, task_id=task_id, on_progress=_on_progress)
+            if resume_simulation_id:
+                result = await service.resume_simulation(
+                    resume_simulation_id, task_id=task_id, on_progress=_on_progress,
+                )
+            else:
+                request = SimulationRequest(**request_data)
+                result = await service.run_simulation(request, task_id=task_id, on_progress=_on_progress)
             await session.commit()
 
         async with task_session() as session:

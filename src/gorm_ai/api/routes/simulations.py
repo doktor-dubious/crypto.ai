@@ -3,6 +3,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.api.deps import TaskServiceDep, get_db
@@ -153,6 +154,67 @@ async def delete_simulation_by_record(
     """Soft-delete a simulation by its TaskRecord id."""
     if not await service.delete_by_record_id(record_id):
         raise HTTPException(status_code=404, detail="Simulation record not found")
+
+
+@router.post("/records/{record_id}/resume", response_model=SimulationTaskStatus, status_code=202)
+async def resume_simulation(
+    record_id: str,
+    task_service: TaskServiceDep,
+    service: SimulationService = Depends(get_simulation_service),
+) -> SimulationTaskStatus:
+    """Resume a failed or cancelled simulation from where it left off.
+
+    Creates a new Celery task that picks up from the last completed chunk.
+    """
+    from datetime import UTC, datetime
+
+    from gorm_ai.database.models.task_record import TaskRecord
+    from gorm_ai.tasks.simulations import run_simulation_task
+
+    # Look up the original TaskRecord
+    record = await service.session.get(TaskRecord, record_id)
+    if not record or not record.active:
+        raise HTTPException(status_code=404, detail="Task record not found")
+    if record.status not in ("failure", "revoked"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed or cancelled simulations can be resumed",
+        )
+
+    # Find the associated Simulation
+    from gorm_ai.database.models.simulation import Simulation as SimulationModel
+    sim_result = await service.session.execute(
+        select(SimulationModel).where(
+            SimulationModel.task_id == record.task_id,
+            SimulationModel.active.is_(True),
+        )
+    )
+    sim = sim_result.scalar_one_or_none()
+    if not sim:
+        raise HTTPException(
+            status_code=404,
+            detail="No simulation record found — task may have failed before starting",
+        )
+
+    # Dispatch resume task
+    request_data = {"resume_simulation_id": sim.id}
+    task = run_simulation_task.apply_async(args=[request_data])
+    name = f"Resume: {sim.name}" if sim.name else "Resume simulation"
+    await task_service.create(task.id, "simulation", sim.customer_id, name=name)
+
+    # Update old TaskRecord status to indicate it was superseded
+    record.status = "revoked"
+    record.error = "Resumed"
+    if not record.completed_at:
+        record.completed_at = datetime.now(UTC)
+
+    return SimulationTaskStatus(
+        task_id=task.id,
+        status="pending",
+        progress=0.0,
+        message="Resume task queued",
+        created_at=datetime.now(UTC),
+    )
 
 
 @router.delete("/{simulation_id}", status_code=204)

@@ -256,6 +256,7 @@ class SimulationService:
         request: SimulationRequest,
         task_id: str | None = None,
         on_progress: Callable[[int, str], Coroutine[Any, Any, None]] | None = None,
+        resume_simulation_id: str | None = None,
     ) -> SimulationResponse:
         """Run the simulation and return classified results per outlet per day."""
         started_at = time.monotonic()
@@ -287,25 +288,35 @@ class SimulationService:
             (request.simulation_to - request.simulation_from).days // 7 + 1
         )
 
-        # --- Create the Simulation DB record before running ---
-        sim_record = SimulationModel(
-            customer_id=request.customer_id,
-            name=request.name or f"Simulation {request.simulation_from} – {request.simulation_to}",
-            description=request.description,
-            prediction_strategy_id=request.prediction_strategy_id,
-            started_at=datetime.now(UTC),
-            outlet_ids=outlet_ids,
-            simulation_from=request.simulation_from,
-            simulation_to=request.simulation_to,
-            delay=request.delay,
-            engine="same_draw" if is_same_draw else engine_type.value,
-            engine_params=resolved_engine_params or None,
-            task_id=task_id,
-            outlet_group_id=request.outlet_group_id,
-        )
-        self.session.add(sim_record)
-        await self.session.flush()
-        await self.session.commit()
+        # --- Create or resume the Simulation DB record ---
+        if resume_simulation_id:
+            sim_record = await self.session.get(SimulationModel, resume_simulation_id)
+            if not sim_record or not sim_record.active:
+                raise ValueError("Simulation not found for resume")
+            sim_record.task_id = task_id
+            sim_record.started_at = datetime.now(UTC)
+            sim_record.ended_at = None
+            await self.session.flush()
+            await self.session.commit()
+        else:
+            sim_record = SimulationModel(
+                customer_id=request.customer_id,
+                name=request.name or f"Simulation {request.simulation_from} – {request.simulation_to}",
+                description=request.description,
+                prediction_strategy_id=request.prediction_strategy_id,
+                started_at=datetime.now(UTC),
+                outlet_ids=outlet_ids,
+                simulation_from=request.simulation_from,
+                simulation_to=request.simulation_to,
+                delay=request.delay,
+                engine="same_draw" if is_same_draw else engine_type.value,
+                engine_params=resolved_engine_params or None,
+                task_id=task_id,
+                outlet_group_id=request.outlet_group_id,
+            )
+            self.session.add(sim_record)
+            await self.session.flush()
+            await self.session.commit()
 
         log.info(
             "simulation.start",
@@ -1131,6 +1142,129 @@ class SimulationService:
             eco_group_counts=eco_agg_group_counts,
             created_at=sim_record_created_at,
         )
+
+    # -------------------------------------------------------------------------
+    # Resume
+    # -------------------------------------------------------------------------
+
+    async def _get_last_completed_date(self, simulation_id: str) -> date | None:
+        """Return the latest prediction date already processed for a simulation."""
+        from sqlalchemy import func as sqlfunc
+
+        result = await self.session.execute(
+            select(sqlfunc.max(PredictionModel.date))
+            .join(SimulationDateModel, SimulationDateModel.prediction_id == PredictionModel.id)
+            .where(SimulationDateModel.simulation_id == simulation_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def resume_simulation(
+        self,
+        simulation_id: str,
+        task_id: str | None = None,
+        on_progress: Callable[[int, str], Coroutine[Any, Any, None]] | None = None,
+    ) -> SimulationResponse:
+        """Resume a failed or cancelled simulation from where it left off."""
+        sim = await self.session.get(SimulationModel, simulation_id)
+        if not sim or not sim.active:
+            raise ValueError("Simulation not found")
+
+        last_date = await self._get_last_completed_date(simulation_id)
+        if last_date:
+            # Align to next week boundary — chunks are 7-day aligned from simulation_from
+            days_done = (last_date - sim.simulation_from).days + 1
+            full_weeks = (days_done + 6) // 7  # round up to completed whole weeks
+            resume_from = sim.simulation_from + timedelta(days=full_weeks * 7)
+        else:
+            resume_from = sim.simulation_from
+
+        if resume_from > sim.simulation_to:
+            raise ValueError("Simulation is already complete — nothing to resume")
+
+        # Build a request from the stored simulation parameters
+        request = SimulationRequest(
+            customer_id=sim.customer_id,
+            name=sim.name,
+            description=sim.description,
+            simulation_from=resume_from,
+            simulation_to=sim.simulation_to,
+            simulation_type=3 if sim.engine == "same_draw" else 1,
+            delay=sim.delay or 14,
+            engine=sim.engine if sim.engine != "same_draw" else None,
+            outlet_ids=sim.outlet_ids,
+            outlet_group_id=sim.outlet_group_id,
+            prediction_strategy_id=sim.prediction_strategy_id,
+        )
+
+        result = await self.run_simulation(
+            request,
+            task_id=task_id,
+            on_progress=on_progress,
+            resume_simulation_id=simulation_id,
+        )
+
+        # Recalculate aggregates from the full dataset (old + new chunks)
+        await self._recalculate_full_aggregates(simulation_id)
+
+        return result
+
+    async def _recalculate_full_aggregates(self, simulation_id: str) -> None:
+        """Recalculate all aggregate stats on the Simulation record from raw data.
+
+        Uses ``get_overview_filtered`` for each scenario (delivered, predicted,
+        economic optimal) so g1-g4 profit classification is fully accurate.
+        """
+        sim = await self.session.get(SimulationModel, simulation_id)
+        if not sim:
+            return
+
+        d_stats = await self.get_overview_filtered(simulation_id, column="delivered")
+        p_stats = await self.get_overview_filtered(simulation_id, column="predicted")
+        eo_stats = await self.get_overview_filtered(simulation_id, column="eo")
+
+        if d_stats:
+            sim.actual_total_delivered = d_stats["actual_total_delivered"]
+            sim.actual_total_sale = d_stats["actual_total_sale"]
+            sim.actual_total_returned = d_stats["actual_total_returned"]
+            sim.d_total_delivered = d_stats["total_delivered"]
+            sim.d_total_sold = d_stats["total_sold"]
+            sim.d_total_returned = d_stats["total_returned"]
+            sim.d_diff_delivered = d_stats["diff_delivered"]
+            sim.d_diff_return = d_stats["diff_return"]
+            sim.d_lost_sale = d_stats["lost_sale"]
+            sim.d_more_sale = d_stats["more_sale"]
+            sim.d_g1 = d_stats["g1"]
+            sim.d_g2 = d_stats["g2"]
+            sim.d_g3 = d_stats["g3"]
+            sim.d_g4 = d_stats["g4"]
+
+        if p_stats:
+            sim.p_total_delivered = p_stats["total_delivered"]
+            sim.p_total_sold = p_stats["total_sold"]
+            sim.p_total_returned = p_stats["total_returned"]
+            sim.p_diff_delivered = p_stats["diff_delivered"]
+            sim.p_diff_return = p_stats["diff_return"]
+            sim.p_lost_sale = p_stats["lost_sale"]
+            sim.p_more_sale = p_stats["more_sale"]
+            sim.p_g1 = p_stats["g1"]
+            sim.p_g2 = p_stats["g2"]
+            sim.p_g3 = p_stats["g3"]
+            sim.p_g4 = p_stats["g4"]
+
+        if eo_stats and eo_stats.get("total_delivered"):
+            sim.eo_total_delivered = eo_stats["total_delivered"]
+            sim.eo_total_sold = eo_stats["total_sold"]
+            sim.eo_total_returned = eo_stats["total_returned"]
+            sim.eo_diff_delivered = eo_stats["diff_delivered"]
+            sim.eo_diff_return = eo_stats["diff_return"]
+            sim.eo_lost_sale = eo_stats["lost_sale"]
+            sim.eo_more_sale = eo_stats["more_sale"]
+            sim.eo_g1 = eo_stats["g1"]
+            sim.eo_g2 = eo_stats["g2"]
+            sim.eo_g3 = eo_stats["g3"]
+            sim.eo_g4 = eo_stats["g4"]
+
+        await self.session.flush()
 
     # -------------------------------------------------------------------------
     # List / delete

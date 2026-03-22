@@ -70,6 +70,10 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
     With --pool=solo the worker can't respond to inspect while running a task.
     We fall back to checking whether the Docker container is running, which is
     reliable regardless of what the solo pool is doing.
+
+    Also detects orphaned tasks: if a worker (e.g. a RunPod instance) has died
+    but other workers are still alive, tasks from the dead worker are marked
+    as failed.
     """
     from gorm_ai.tasks.celery_app import celery_app
 
@@ -77,17 +81,51 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
         return celery_app.control.inspect(timeout=2).ping()
 
     result = await asyncio.to_thread(_ping)
+
+    # Collect the short names of workers that responded to ping
+    # Keys are like "celery@local", "celery@runpod-gpu"
+    alive_workers: set[str] = set()
     if result:
-        return WorkerPingResponse(alive=True)
+        for key in result:
+            alive_workers.add(key.split("@", 1)[-1])
 
-    # Solo pool fallback: check if the worker container is running and healthy.
-    container_up = await asyncio.to_thread(_is_worker_container_healthy)
-    if container_up:
-        return WorkerPingResponse(alive=True)
+    # Solo pool fallback: the local worker can't respond to ping while busy,
+    # so check if its Docker container is running.
+    local_name = await asyncio.to_thread(_get_local_worker_name)
+    if local_name not in alive_workers:
+        container_up = await asyncio.to_thread(_is_worker_container_healthy)
+        if container_up:
+            alive_workers.add(local_name)
 
-    # Container is truly down — clean up any started tasks that will never finish.
-    await service.mark_stale_tasks_failed(stale_seconds=0)
-    return WorkerPingResponse(alive=False)
+    if not alive_workers:
+        # No workers alive at all — mark everything started as failed.
+        await service.mark_stale_tasks_failed(stale_seconds=0)
+        return WorkerPingResponse(alive=False)
+
+    # Some workers are alive but others may have died (e.g. terminated RunPod).
+    # Mark tasks from dead workers as failed.
+    await service.mark_orphaned_worker_tasks_failed(alive_workers)
+
+    return WorkerPingResponse(alive=True)
+
+
+def _get_local_worker_name() -> str:
+    """Return the WORKER_NAME of the local celery-worker container, or 'local'."""
+    try:
+        import docker  # type: ignore
+        client = docker.from_env()
+        containers = client.containers.list(
+            all=True,
+            filters={"label": "com.docker.compose.service=celery-worker"},
+        )
+        if containers:
+            env_list = containers[0].attrs.get("Config", {}).get("Env", [])
+            for entry in env_list:
+                if entry.startswith("WORKER_NAME="):
+                    return entry.split("=", 1)[1]
+    except Exception:
+        pass
+    return "local"
 
 
 def _is_worker_container_healthy() -> bool:

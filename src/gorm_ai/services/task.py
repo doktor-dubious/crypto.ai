@@ -232,6 +232,38 @@ class TaskService:
         rows = result.all()
         return len(rows)
 
+    async def mark_orphaned_worker_tasks_failed(
+        self, alive_worker_names: set[str],
+    ) -> int:
+        """Mark 'started' tasks as failed when their worker is no longer alive.
+
+        ``alive_worker_names`` contains the short worker names (e.g. ``local``,
+        ``runpod-gpu``) of workers confirmed to be online.  Any task whose
+        ``worker_name`` is set and *not* in this set is orphaned — its worker
+        died (e.g. a RunPod instance was terminated) and the task will never
+        complete.
+        """
+        if not alive_worker_names:
+            # No workers alive at all — fall back to mark_stale_tasks_failed
+            return 0
+
+        # Find started tasks whose worker is known but not alive
+        result = await self.session.execute(
+            update(TaskRecord)
+            .where(
+                TaskRecord.status == "started",
+                TaskRecord.worker_name.isnot(None),
+                TaskRecord.worker_name.notin_(alive_worker_names),
+            )
+            .values(
+                status="failure",
+                error="Worker lost (instance terminated)",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(TaskRecord.id)
+        )
+        return len(result.all())
+
     async def get_active_from_db(self) -> list[CeleryWorkerTask]:
         """Return 'started' tasks from DB.
 
