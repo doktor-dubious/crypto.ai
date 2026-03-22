@@ -173,14 +173,15 @@ class Chronos2DirectEngine(PredictionEngine):
                 "bfloat16": torch.bfloat16,
                 "float16": torch.float16,
             }
+            device = "cuda" if torch.cuda.is_available() else "cpu"
             self._pipeline = BaseChronosPipeline.from_pretrained(
                 self._model_id,
-                device_map="cpu",
+                device_map=device,
                 dtype=dtype_map[self._precision],
             )
             logger.info(
-                "Chronos model loaded: %s (pipeline: %s)",
-                self._model_id, type(self._pipeline).__name__,
+                "Chronos model loaded: %s (pipeline: %s, device: %s)",
+                self._model_id, type(self._pipeline).__name__, device,
             )
         except Exception as e:
             logger.warning("Failed to load Chronos model, falling back to statistical: %s", e)
