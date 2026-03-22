@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Info,
 } from "lucide-react"
 import { Maximize } from "@/components/animate-ui/icons/maximize"
 import { Minimize } from "@/components/animate-ui/icons/minimize"
@@ -34,9 +34,13 @@ import {
 } from "@/components/ui/pagination"
 import { useCustomer } from "@/components/providers/customer-provider"
 import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   predictionStrategiesApi, predictionEnginesApi, configurationApi, customerConfigurationApi,
   STRATEGY_TYPE_LABELS,
   type PredictionStrategyResponse, type PredictionStrategyUpdate,
+  type PredictionEngineParameterResponse,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -176,6 +180,16 @@ export default function PredictionStrategiesPage() {
   const [newDescription, setNewDescription] = useState("")
   const [newType, setNewType] = useState(1)
 
+  // ── Parameter dialogs
+  const [newParamDialogOpen, setNewParamDialogOpen] = useState(false)
+  const [newParamName, setNewParamName] = useState("")
+  const [newParamValue, setNewParamValue] = useState("")
+  const [newParamParameter, setNewParamParameter] = useState("")
+  const [newParamDescription, setNewParamDescription] = useState("")
+  const [newParamSortOrder, setNewParamSortOrder] = useState(0)
+  const [deleteParamDialogOpen, setDeleteParamDialogOpen] = useState(false)
+  const [pendingDeleteParam, setPendingDeleteParam] = useState<PredictionEngineParameterResponse | null>(null)
+
   // ── Data fetching ─────────────────────────────────────────────────────────
 
   const { data: strategies = [], isLoading } = useQuery({
@@ -200,6 +214,12 @@ export default function PredictionStrategiesPage() {
     queryFn: () => customerConfigurationApi.get(activeCustomer!.id),
     enabled: !!activeCustomer,
     retry: false,
+  })
+
+  const { data: strategyParameters = [] } = useQuery({
+    queryKey: ["strategy-parameters", selectedStrategy?.id],
+    queryFn: () => predictionStrategiesApi.listParameters(selectedStrategy!.id),
+    enabled: !!selectedStrategy,
   })
 
   const defaultEngineId = customerConfig?.prediction_engine_id ?? globalConfig?.prediction_engine_id ?? null
@@ -279,6 +299,38 @@ export default function PredictionStrategiesPage() {
       toast.success(t("toastDeleted"))
     },
     onError: () => { toast.error(t("toastDeleteError")) },
+  })
+
+  const createParamMutation = useMutation({
+    mutationFn: ({ strategyId, name, value, parameter, description, sort_order }: { strategyId: string; name: string; value: string; parameter: string; description: string; sort_order: number }) =>
+      predictionStrategiesApi.createParameter(strategyId, { name, value, parameter: parameter || null, description: description || null, sort_order }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["strategy-parameters", selectedStrategy?.id] })
+      setNewParamDialogOpen(false)
+      setNewParamName("")
+      setNewParamValue("")
+      setNewParamParameter("")
+      setNewParamDescription("")
+      setNewParamSortOrder(0)
+      toast.success(t("toastParameterCreated"))
+    },
+    onError: () => { toast.error(t("toastParameterCreateError")) },
+  })
+
+  const toggleParamMutation = useMutation({
+    mutationFn: (paramId: string) => predictionEnginesApi.toggleParameterSelected(paramId),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["strategy-parameters", selectedStrategy?.id] })
+    },
+  })
+
+  const deleteParamMutation = useMutation({
+    mutationFn: (paramId: string) => predictionEnginesApi.deleteParameter(paramId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["strategy-parameters", selectedStrategy?.id] })
+      toast.success(t("toastParameterDeleted"))
+    },
+    onError: () => { toast.error(t("toastParameterDeleteError")) },
   })
 
   // ── Sync draft when selected strategy changes ──────────────────────────────
@@ -870,6 +922,81 @@ export default function PredictionStrategiesPage() {
                     ))}
                   </select>
                 </FieldRow>
+
+                {/* ── Parameters ── */}
+                <div className="border-t border-border pt-6">
+                <TooltipProvider>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium">{t("tabParameters")}</h3>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5"
+                      onClick={() => setNewParamDialogOpen(true)}
+                      disabled={!draft.prediction_engine_id && !defaultEngineId}
+                    >
+                      <Plus className="h-3 w-3" />
+                      {t("addParameter")}
+                    </Button>
+                  </div>
+
+                  {strategyParameters.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-32 gap-2 text-muted-foreground">
+                      <p className="text-sm">{t("noParameters")}</p>
+                      <p className="text-xs opacity-60">{t("noParametersHint")}</p>
+                    </div>
+                  ) : (
+                    (() => {
+                      const grouped = strategyParameters.reduce<Record<string, PredictionEngineParameterResponse[]>>((acc, p) => {
+                        ;(acc[p.name] ??= []).push(p)
+                        return acc
+                      }, {})
+                      return (
+                        <div className="space-y-4">
+                          {Object.entries(grouped).map(([name, items]) => (
+                            <div key={name} className="rounded-md border p-3">
+                              <p className="text-xs font-medium text-muted-foreground mb-2">{name}</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {items.map((item) => (
+                                  <span
+                                    key={item.id}
+                                    onClick={() => toggleParamMutation.mutate(item.id)}
+                                    className={cn(
+                                      "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-mono group cursor-pointer transition-colors",
+                                      item.selected
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-muted hover:bg-muted/80"
+                                    )}
+                                  >
+                                    {item.value}
+                                    {item.description && (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Info className="h-3 w-3 shrink-0 cursor-help opacity-60" onClick={(e) => e.stopPropagation()} />
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top" className="max-w-xs">
+                                          {item.description}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    )}
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setPendingDeleteParam(item); setDeleteParamDialogOpen(true) }}
+                                      className="ml-0.5 opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                                      aria-label="Remove"
+                                    >
+                                      &times;
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()
+                  )}
+                </TooltipProvider>
+                </div>
               </TabsContent>
 
               {/* ─ Actions ─ */}
@@ -1128,6 +1255,83 @@ export default function PredictionStrategiesPage() {
               disabled={!bulkDeleteUnderstood || bulkDeleteConfirmText !== t("deleteTypePlaceholder") || deleteMutation.isPending}
             >
               {t("bulkDeleteConfirm", { count: selectedIds.size })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── New Parameter Dialog ── */}
+      <Dialog open={newParamDialogOpen} onOpenChange={setNewParamDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("addParameterTitle")}</DialogTitle>
+            <DialogDescription>{t("addParameterDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <FieldRow label={t("paramFieldName")}>
+              <Input value={newParamName} onChange={(e) => setNewParamName(e.target.value)} placeholder="e.g. model_size" />
+            </FieldRow>
+            <FieldRow label={t("paramFieldValue")}>
+              <Input value={newParamValue} onChange={(e) => setNewParamValue(e.target.value)} placeholder="e.g. base" />
+            </FieldRow>
+            <FieldRow label={t("paramFieldParameter")}>
+              <Input value={newParamParameter} onChange={(e) => setNewParamParameter(e.target.value)} placeholder={t("paramFieldParameterPlaceholder")} />
+            </FieldRow>
+            <FieldRow label={t("paramFieldDescription")}>
+              <Input value={newParamDescription} onChange={(e) => setNewParamDescription(e.target.value)} placeholder={t("paramFieldDescriptionPlaceholder")} />
+            </FieldRow>
+            <FieldRow label={t("paramFieldSortOrder")}>
+              <Input type="number" value={newParamSortOrder} onChange={(e) => setNewParamSortOrder(parseInt(e.target.value) || 0)} className="max-w-[100px]" />
+            </FieldRow>
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setNewParamDialogOpen(false)}>{t("deleteCancel")}</Button>
+            <Button
+              size="sm"
+              disabled={!newParamName || !newParamValue || createParamMutation.isPending}
+              onClick={() => {
+                if (selectedStrategy) {
+                  createParamMutation.mutate({
+                    strategyId: selectedStrategy.id,
+                    name: newParamName,
+                    value: newParamValue,
+                    parameter: newParamParameter,
+                    description: newParamDescription,
+                    sort_order: newParamSortOrder,
+                  })
+                }
+              }}
+            >
+              {createParamMutation.isPending ? t("creating") : t("createButton")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete Parameter Confirmation ── */}
+      <Dialog open={deleteParamDialogOpen} onOpenChange={setDeleteParamDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">{t("deleteParameterTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("deleteParameterDescription", { name: pendingDeleteParam?.name ?? "", value: pendingDeleteParam?.value ?? "" })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteParamDialogOpen(false)}>{t("deleteCancel")}</Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={deleteParamMutation.isPending}
+              onClick={() => {
+                if (pendingDeleteParam) {
+                  deleteParamMutation.mutate(pendingDeleteParam.id, {
+                    onSuccess: () => { setDeleteParamDialogOpen(false); setPendingDeleteParam(null) },
+                  })
+                }
+              }}
+            >
+              {t("deleteConfirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

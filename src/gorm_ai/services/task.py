@@ -72,6 +72,7 @@ class TaskService:
         completed_at: datetime | None = None,
         error: str | None = None,
         name: str | None = None,
+        worker_name: str | None = None,
     ) -> None:
         """Update status (and optional timestamps/error) for a task."""
         values: dict = {"status": status}
@@ -83,6 +84,8 @@ class TaskService:
             values["error"] = error
         if name is not None:
             values["name"] = name
+        if worker_name is not None:
+            values["worker_name"] = worker_name
         await self.session.execute(
             update(TaskRecord).where(TaskRecord.task_id == task_id).values(**values)
         )

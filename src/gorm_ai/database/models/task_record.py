@@ -33,6 +33,7 @@ class TaskRecord(Base):
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     progress_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    worker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     peak_memory_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
     cpu_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
 

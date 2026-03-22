@@ -41,6 +41,7 @@ services:
       - OMP_NUM_THREADS=4
       - MKL_NUM_THREADS=4
       - OPENBLAS_NUM_THREADS=4
+      - WORKER_NAME=${WORKER_NAME:-local}
     volumes:
       - ./src:/app/src
       - ./log:/app/log

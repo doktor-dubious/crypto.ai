@@ -27,8 +27,13 @@ async def _get_concurrency() -> int:
 def main() -> None:
     concurrency = asyncio.run(_get_concurrency())
     pool = "prefork" if concurrency > 1 else "solo"
+    worker_name = os.environ.get("WORKER_NAME", "local")
 
-    print(f"[worker_entrypoint] Starting worker: pool={pool}, concurrency={concurrency}")
+    # Listen on the default queue AND a worker-specific queue so tasks
+    # can be routed to a particular worker by name.
+    queues = f"celery,{worker_name}"
+
+    print(f"[worker_entrypoint] Starting worker: pool={pool}, concurrency={concurrency}, name={worker_name}, queues={queues}")
 
     os.execvp(
         "celery",
@@ -39,6 +44,8 @@ def main() -> None:
             "--loglevel=info",
             f"--concurrency={concurrency}",
             f"--pool={pool}",
+            f"--hostname=celery@{worker_name}",
+            f"--queues={queues}",
         ],
     )
 

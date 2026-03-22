@@ -11,14 +11,17 @@ from gorm_ai.tasks.celery_app import celery_app
 @celery_app.task(bind=True, name="gorm_ai.tasks.simulations.run_simulation_task", time_limit=604800, soft_time_limit=604200)  # 7 days / 6 days 23.5 hrs
 def run_simulation_task(self, request_data: dict) -> dict:
     """Run a simulation task asynchronously."""
-    return asyncio.run(_run_simulation_async(self.request.id, request_data))
+    return asyncio.run(_run_simulation_async(self.request.id, request_data, self.request.hostname))
 
 
-async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
+async def _run_simulation_async(task_id: str, request_data: dict, hostname: str | None = None) -> dict:
     from gorm_ai.database.connection import task_session
     from gorm_ai.schemas.simulation import SimulationRequest
     from gorm_ai.services.simulation import SimulationService
     from gorm_ai.services.task import TaskService
+
+    # Extract friendly worker name from Celery hostname (e.g. "celery@runpod-gpu" -> "runpod-gpu")
+    worker_name = (hostname or "").split("@", 1)[-1] or None
 
     async with task_session() as session:
         # Guard against redelivery after worker restart.
@@ -36,7 +39,7 @@ async def _run_simulation_async(task_id: str, request_data: dict) -> dict:
         sim_name = request_data.get("name") or (
             f"Simulation {request_data.get('simulation_from')} – {request_data.get('simulation_to')}"
         )
-        await ts.update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name)
+        await ts.update_status(task_id, "started", started_at=datetime.now(UTC), name=sim_name, worker_name=worker_name)
         await session.commit()
 
     try:

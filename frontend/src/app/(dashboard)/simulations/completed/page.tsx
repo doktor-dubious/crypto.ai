@@ -1914,6 +1914,9 @@ export default function SimulationsCompletedPage() {
                     <TableCell className="text-sm text-[var(--muted-foreground)]">{formatDateTime(sim.created_at)}</TableCell>
                     <TableCell>
                       {(() => {
+                        if (sim.status === "success" && sim.actual_engine) {
+                          return <Badge variant="info" className="text-xs">{t("statusDegraded")}</Badge>
+                        }
                         const s = STATUS_BADGE[sim.status as SimStatus]
                         return s ? <Badge variant={s.variant} className="text-xs">{t(s.label as Parameters<typeof t>[0])}</Badge> : null
                       })()}
@@ -2076,7 +2079,13 @@ export default function SimulationsCompletedPage() {
 
               {/* ─ Specs ─ */}
               <TabsContent value="tabSpecs" className="space-y-3 max-w-2xl mt-6 px-4">
-                <StatRow label={t("fieldEngine")} value={selected.engine ?? "—"} />
+                <StatRow label={t("fieldEngine")} value={selected.actual_engine ?? selected.engine ?? "—"} />
+                {selected.actual_engine && (
+                  <StatRow
+                    label={t("fieldRequestedEngine")}
+                    value={<span className="text-amber-400">{selected.engine}</span>}
+                  />
+                )}
                 {selected.engine_params && Object.keys(selected.engine_params).length > 0 && (
                   <>
                     <div className="pt-2">

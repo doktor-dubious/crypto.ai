@@ -193,7 +193,10 @@ async def run_simulation_async(
 
     from gorm_ai.tasks.simulations import run_simulation_task
 
-    task = run_simulation_task.delay(data.model_dump(mode="json"))
+    dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
+    if data.worker:
+        dispatch_kwargs["queue"] = data.worker
+    task = run_simulation_task.apply_async(**dispatch_kwargs)
     name = data.name or f"Simulation {data.simulation_from} – {data.simulation_to}"
     await task_service.create(task.id, "simulation", data.customer_id, name=name)
 

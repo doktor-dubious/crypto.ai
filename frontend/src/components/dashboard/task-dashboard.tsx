@@ -135,6 +135,12 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
                     )}
                   </div>
                 )}
+                {task.worker_name && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[var(--muted-foreground)]">Worker</span>
+                    <span className="font-medium">{task.worker_name}</span>
+                  </div>
+                )}
                 {task.peak_memory_mb != null || task.cpu_time_s != null ? (
                   <div className="space-y-0.5">
                     {task.peak_memory_mb != null && (
@@ -167,6 +173,11 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
           <Badge variant={STATUS_BADGE[task.status]}>
             {t(`status.${task.status}` as Parameters<typeof t>[0])}
           </Badge>
+          {task.worker_name && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal text-[var(--muted-foreground)]">
+              {task.worker_name}
+            </Badge>
+          )}
         </div>
         {customerName && (
           <p className="text-xs text-[var(--muted-foreground)] mt-0.5 truncate">

@@ -50,6 +50,7 @@ class Simulation(Base):
     simulation_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     delay: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     engine: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actual_engine: Mapped[str | None] = mapped_column(String(255), nullable=True)
     engine_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Delivered scenario aggregates

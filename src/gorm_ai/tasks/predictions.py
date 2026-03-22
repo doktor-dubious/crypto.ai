@@ -20,16 +20,17 @@ def run_prediction_task(self, request_data: dict) -> dict:
         Prediction response as dict
     """
     # Run async code in sync context
-    return asyncio.run(_run_prediction_async(self.request.id, request_data))
+    return asyncio.run(_run_prediction_async(self.request.id, request_data, self.request.hostname))
 
 
-async def _run_prediction_async(task_id: str, request_data: dict) -> dict:
+async def _run_prediction_async(task_id: str, request_data: dict, hostname: str | None = None) -> dict:
     """
     Run prediction asynchronously.
 
     Args:
         task_id: Celery task ID
         request_data: Prediction request data
+        hostname: Celery worker hostname
 
     Returns:
         Prediction response as dict
@@ -38,6 +39,9 @@ async def _run_prediction_async(task_id: str, request_data: dict) -> dict:
     from gorm_ai.schemas.prediction import PredictionRequest
     from gorm_ai.services.prediction import PredictionService
     from gorm_ai.services.task import TaskService
+
+    # Extract friendly worker name from Celery hostname (e.g. "celery@local" -> "local")
+    worker_name = (hostname or "").split("@", 1)[-1] or None
 
     async with task_session() as session:
         # Guard against redelivery after worker restart.
@@ -51,7 +55,7 @@ async def _run_prediction_async(task_id: str, request_data: dict) -> dict:
         except HTTPException:
             return {"skipped": True, "reason": "redelivered task not in DB"}
 
-        await ts.update_status(task_id, "started", started_at=datetime.now(UTC))
+        await ts.update_status(task_id, "started", started_at=datetime.now(UTC), worker_name=worker_name)
         await session.commit()
 
     async def _on_progress(progress: int, message: str | None = None) -> None:

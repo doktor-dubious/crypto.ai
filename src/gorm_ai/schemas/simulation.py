@@ -43,6 +43,7 @@ class SimulationRequest(BaseModel):
     ignore_fixed: bool = False       # ignore outlet delivery fixed constraint
     ignore_minimum: bool = False     # ignore outlet delivery minimum constraint
     ignore_maximum: bool = False     # ignore outlet delivery maximum constraint
+    worker: str | None = None        # route to a specific worker queue; None = any available
 
 
 class SimulationDayResult(BaseModel):
@@ -113,6 +114,7 @@ class SimulationResponse(BaseModel):
     simulation_to: date
     delay: int
     engine: str
+    actual_engine: str | None = None
     outlets: list[OutletSimulationResult]
 
     # Baseline aggregates
@@ -163,6 +165,7 @@ class SimulationRecordResponse(BaseModel):
     simulation_to: date | None
     delay: int | None
     engine: str | None
+    actual_engine: str | None = None
 
     # Delivered scenario
     d_total_delivered: float | None
@@ -221,6 +224,7 @@ class CompletedSimulationResponse(BaseModel):
     simulation_from: date | None = None
     simulation_to: date | None = None
     engine: str | None = None
+    actual_engine: str | None = None
     engine_params: dict | None = None
     delay: int | None = None
     outlet_count: int = 0

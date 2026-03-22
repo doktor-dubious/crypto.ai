@@ -208,6 +208,7 @@
       "statusSuccess": "Completed",
       "statusFailure": "Failed",
       "statusRevoked": "Cancelled",
+      "statusDegraded": "Degraded",
       "selectCompleted": "Select Completed",
       "selectCancelled": "Select Cancelled",
       "selectFailed": "Select Failed",
@@ -236,6 +237,7 @@
       "fieldPeriod": "Period",
       "fieldExecutionPeriod": "Execution period",
       "fieldEngine": "Engine",
+      "fieldRequestedEngine": "Requested Engine",
       "fieldParams": "Parameters",
       "fieldDelay": "Delay",
       "fieldOutlets": "Outlets",
@@ -321,6 +323,8 @@
       "fieldStrategyNone": "None",
       "fieldOutletGroup": "Outlet Group",
       "fieldOutletGroupNone": "All outlets",
+      "fieldWorker": "Worker",
+      "fieldWorkerAny": "Any available",
       "typeStrategy": "Strategy",
       "typeSameDraw": "Same Draw",
       "typeSameSale": "Same Sale",
@@ -510,7 +514,26 @@
       "toastUpdated": "Strategy \"{name}\" saved",
       "toastUpdateError": "Failed to save strategy",
       "toastDeleted": "Strategy deleted",
-      "toastDeleteError": "Failed to delete strategy"
+      "toastDeleteError": "Failed to delete strategy",
+      "tabParameters": "Parameters",
+      "addParameter": "Add Parameter",
+      "noParameters": "No strategy-level parameters",
+      "noParametersHint": "Strategy parameters override engine-level defaults",
+      "addParameterTitle": "New Parameter",
+      "addParameterDescription": "Add a parameter override for this strategy. Strategy parameters take precedence over engine-level parameters.",
+      "paramFieldName": "Name",
+      "paramFieldValue": "Value",
+      "paramFieldParameter": "Parameter (optional)",
+      "paramFieldParameterPlaceholder": "Alternative/internal value",
+      "paramFieldDescription": "Description (optional)",
+      "paramFieldDescriptionPlaceholder": "Brief description",
+      "paramFieldSortOrder": "Sort Order",
+      "deleteParameterTitle": "Delete Parameter",
+      "deleteParameterDescription": "Remove parameter \"{name}\" with value \"{value}\"? This cannot be undone.",
+      "toastParameterCreated": "Parameter added",
+      "toastParameterCreateError": "Failed to add parameter",
+      "toastParameterDeleted": "Parameter removed",
+      "toastParameterDeleteError": "Failed to remove parameter"
     },
     "analytics": {
       "title": "Prediction Analytics",
@@ -555,7 +578,9 @@
       "assignedDates": "date",
       "assignedDatesPlural": "dates",
       "toastQueued": "Predictions queued successfully",
-      "toastError": "Failed to queue predictions"
+      "toastError": "Failed to queue predictions",
+      "workerAny": "Any worker",
+      "workerLabel": "Worker"
     }
   },
   "pads": {

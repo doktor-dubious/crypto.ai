@@ -116,6 +116,21 @@ def _is_worker_container_healthy() -> bool:
         return False
 
 
+@router.get("/workers/list", response_model=list[str])
+async def list_workers() -> list[str]:
+    """Return names of currently connected Celery workers."""
+    from gorm_ai.tasks.celery_app import celery_app
+
+    def _ping() -> dict | None:
+        return celery_app.control.inspect(timeout=2).ping()
+
+    result = await asyncio.to_thread(_ping)
+    if not result:
+        return []
+    # Worker keys are like "celery@GORM" — extract the name after @
+    return sorted(key.split("@", 1)[-1] for key in result)
+
+
 @router.post("/workers/restart", status_code=204)
 async def restart_workers() -> None:
     """Restart the Celery worker container via Docker."""

@@ -57,6 +57,7 @@ class PredictionRequest(BaseModel):
     ignore_fixed: bool = False       # ignore outlet delivery fixed constraint
     ignore_minimum: bool = False     # ignore outlet delivery minimum constraint
     ignore_maximum: bool = False     # ignore outlet delivery maximum constraint
+    worker: str | None = None        # route to a specific worker queue; None = any available
 
 
 class PredictionResult(BaseModel):
@@ -241,6 +242,7 @@ class PredictionEngineParameterResponse(BaseModel):
 
     id: str
     prediction_engine_id: str
+    prediction_strategy_id: str | None
     name: str
     value: str
     parameter: str | None

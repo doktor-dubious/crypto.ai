@@ -4,12 +4,15 @@ import { useState, useMemo, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { RotateCcw, Zap, Search, X, ChevronRight } from "lucide-react"
+import { RotateCcw, Zap, Search, X, ChevronRight, ChevronDown, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { predictionStrategiesApi, padsApi, predictionsApi } from "@/lib/api"
+import { predictionStrategiesApi, padsApi, predictionsApi, tasksApi } from "@/lib/api"
 import { toast } from "sonner"
 import {
   PredictionCalendar,
@@ -46,6 +49,7 @@ export default function NewPredictionPage() {
   const [selectedDates, setSelectedDates] = useState<Set<string>>(() => new Set(loadPredJson<string[]>(cid, "selectedDates", [])))
   const [assignments, setAssignments] = useState<StrategyAssignment[]>(() => loadPredJson<StrategyAssignment[]>(cid, "assignments", []))
   const [strategySearch, setStrategySearch] = useState("")
+  const [worker, setWorker] = useState<string | null>(null)
 
   // ─── Data fetching ─────────────────────────────────────────────────────────
 
@@ -61,6 +65,12 @@ export default function NewPredictionPage() {
     queryKey: ["pads", activeCustomer?.id],
     queryFn: () => padsApi.list(activeCustomer!.id),
     enabled: !!activeCustomer,
+  })
+
+  const { data: workers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => tasksApi.listWorkers(),
+    staleTime: 30_000,
   })
 
   // ─── Persist state to localStorage ─────────────────────────────────────────
@@ -135,6 +145,7 @@ export default function NewPredictionPage() {
           prediction_from: dates[0],
           prediction_to: dates[dates.length - 1],
           prediction_strategy_id: assignment.strategyId,
+          worker: worker || undefined,
         })
       }
     },
@@ -170,6 +181,30 @@ export default function NewPredictionPage() {
               <RotateCcw className="h-3 w-3" />
               {t("clearButton")}
             </Button>
+            {workers.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-xs hover:bg-[var(--muted)] transition-colors cursor-pointer">
+                    <span className={cn(!worker && "text-[var(--muted-foreground)]")}>
+                      {worker ?? t("workerAny")}
+                    </span>
+                    <ChevronDown className="h-3 w-3 opacity-50" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setWorker(null)} className="flex items-center justify-between text-xs">
+                    <span className="text-[var(--muted-foreground)]">{t("workerAny")}</span>
+                    {worker === null && <Check className="h-3 w-3 ml-2" />}
+                  </DropdownMenuItem>
+                  {workers.map((w) => (
+                    <DropdownMenuItem key={w} onClick={() => setWorker(w)} className="flex items-center justify-between text-xs">
+                      <span>{w}</span>
+                      {worker === w && <Check className="h-3 w-3 ml-2" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <Button
               variant="default"
               size="sm"

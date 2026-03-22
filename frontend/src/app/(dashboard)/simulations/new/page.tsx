@@ -19,7 +19,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { simulationsApi, predictionStrategiesApi, outletGroupsApi, customerConfigurationApi, salesApi, type SimulationRunRequest } from "@/lib/api"
+import { simulationsApi, predictionStrategiesApi, outletGroupsApi, customerConfigurationApi, salesApi, tasksApi, type SimulationRunRequest } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -195,6 +195,13 @@ export default function SimulationsNewPage() {
   const [outletGroupId, setOutletGroupId] = useState<string | null>(() => loadSimNJson<string | null>(cid, "outletGroupId", null))
   const [startDate, setStartDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "startDate", null); return v ? new Date(v) : undefined })
   const [endDate, setEndDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "endDate", null); return v ? new Date(v) : undefined })
+  const [worker, setWorker] = useState<string | null>(null)
+
+  const { data: workers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => tasksApi.listWorkers(),
+    staleTime: 30_000,
+  })
 
   const { data: strategies = [] } = useQuery({
     queryKey: ["prediction-strategies", activeCustomer?.id],
@@ -285,6 +292,7 @@ export default function SimulationsNewPage() {
       delay,
       prediction_strategy_id: strategyId,
       outlet_group_id: resolvedGroupId || undefined,
+      worker: worker || undefined,
     })
     if (!name.trim()) setName(resolvedName)
   }
@@ -447,6 +455,42 @@ export default function SimulationsNewPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+
+        {/* Worker */}
+        {workers.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldWorker")}</label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
+                  <span className={cn(!worker && "text-[var(--muted-foreground)]")}>
+                    {worker ?? t("fieldWorkerAny")}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72">
+                <DropdownMenuItem
+                  onClick={() => setWorker(null)}
+                  className="flex items-center justify-between"
+                >
+                  <span className="text-[var(--muted-foreground)]">{t("fieldWorkerAny")}</span>
+                  {worker === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                </DropdownMenuItem>
+                {workers.map((w) => (
+                  <DropdownMenuItem
+                    key={w}
+                    onClick={() => setWorker(w)}
+                    className="flex items-center justify-between"
+                  >
+                    <span>{w}</span>
+                    {worker === w && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
 
       </div>
 

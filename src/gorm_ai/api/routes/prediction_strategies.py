@@ -2,8 +2,10 @@
 
 from fastapi import APIRouter, HTTPException
 
-from gorm_ai.api.deps import PredictionStrategyServiceDep
+from gorm_ai.api.deps import PredictionEngineParameterServiceDep, PredictionStrategyServiceDep
 from gorm_ai.schemas.prediction import (
+    PredictionEngineParameterCreate,
+    PredictionEngineParameterResponse,
     PredictionStrategyCreate,
     PredictionStrategyResponse,
     PredictionStrategyUpdate,
@@ -65,3 +67,51 @@ async def delete_prediction_strategy(
     """Soft-delete a prediction strategy."""
     if not await service.delete(strategy_id):
         raise HTTPException(status_code=404, detail="Prediction strategy not found")
+
+
+# ── Strategy Parameters ──────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{strategy_id}/parameters",
+    response_model=list[PredictionEngineParameterResponse],
+)
+async def list_strategy_parameters(
+    strategy_id: str,
+    service: PredictionEngineParameterServiceDep,
+) -> list[PredictionEngineParameterResponse]:
+    """List parameters scoped to a prediction strategy."""
+    params = await service.list_by_strategy(strategy_id)
+    return [PredictionEngineParameterResponse.model_validate(p) for p in params]
+
+
+@router.post(
+    "/{strategy_id}/parameters",
+    response_model=PredictionEngineParameterResponse,
+    status_code=201,
+)
+async def create_strategy_parameter(
+    strategy_id: str,
+    data: PredictionEngineParameterCreate,
+    param_service: PredictionEngineParameterServiceDep,
+    strategy_service: PredictionStrategyServiceDep,
+) -> PredictionEngineParameterResponse:
+    """Add a parameter to a prediction strategy.
+
+    The strategy must have a prediction_engine_id set so the parameter
+    can be linked to the correct engine.
+    """
+    strategy = await strategy_service.get(strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Prediction strategy not found")
+    if not strategy.prediction_engine_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Strategy has no engine assigned — set an engine first",
+        )
+    param = await param_service.create(
+        engine_id=strategy.prediction_engine_id,
+        data=data,
+        strategy_id=strategy_id,
+    )
+    return PredictionEngineParameterResponse.model_validate(param)

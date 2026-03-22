@@ -391,6 +391,7 @@ class SimulationService:
         outlet_eco_group_counts_acc: dict[str, dict[int, int]] = {oid: {1: 0, 2: 0, 3: 0, 4: 0} for oid in outlet_ids}
         outlet_has_data: set[str] = set()
         total_days_processed = 0
+        engine_fell_back = False
 
         # Stats accumulators
         actual_total_delivered = 0.0
@@ -529,6 +530,19 @@ class SimulationService:
                     batch_outlet_ids, ridge_results
                 )
             actual_engine = "same_draw" if is_same_draw else (engine.get_actual_slug() or engine_type.value)
+
+            # Detect engine fallback and flag it on the simulation record (once)
+            if not is_same_draw and actual_engine != engine_type.value and not engine_fell_back:
+                engine_fell_back = True
+                log.warning(
+                    "simulation.engine_fallback",
+                    simulation_id=sim_record_id,
+                    requested_engine=engine_type.value,
+                    actual_engine=actual_engine,
+                )
+                _sr = await self.session.get(SimulationModel, sim_record_id)
+                _sr.actual_engine = actual_engine
+                await self.session.flush()
 
             # Same Draw: compute per-date sum(delivered) across all outlets in the chunk
             same_draw_totals: dict[date, int] = {}
@@ -1107,6 +1121,7 @@ class SimulationService:
             simulation_to=request.simulation_to,
             delay=request.delay,
             engine=engine_type.value,
+            actual_engine=sim_record.actual_engine,
             outlets=outlet_results,
             total_profit_impact=total_profit,
             potential_additional_profit=total_potential,
@@ -1214,6 +1229,8 @@ class SimulationService:
                 "simulation_from": sim.simulation_from if sim else None,
                 "simulation_to": sim.simulation_to if sim else None,
                 "engine": sim.engine if sim else None,
+                "actual_engine": sim.actual_engine if sim else None,
+                "engine_params": sim.engine_params if sim else None,
                 "delay": sim.delay if sim else None,
                 "outlet_count": outlet_count,
                 "outlet_group_id": sim.outlet_group_id if sim else None,

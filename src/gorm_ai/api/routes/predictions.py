@@ -95,7 +95,10 @@ async def create_prediction_async(
     """Create a prediction asynchronously using Celery."""
     from datetime import UTC, datetime
 
-    task = run_prediction_task.delay(data.model_dump(mode="json"))
+    dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
+    if data.worker:
+        dispatch_kwargs["queue"] = data.worker
+    task = run_prediction_task.apply_async(**dispatch_kwargs)
     prediction_name = f"{data.prediction_from} → {data.prediction_to}"
     await task_service.create(task.id, "prediction", data.customer_id, name=prediction_name)
 

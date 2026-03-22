@@ -85,7 +85,9 @@ class PredictionService:
             raise ValueError("prediction_to must be on or after prediction_from")
 
         engine = self.engine_registry.get_engine(engine_type)
-        resolved_engine_params = await self._apply_engine_parameters(engine, engine_type.value)
+        resolved_engine_params = await self._apply_engine_parameters(
+            engine, engine_type.value, request.prediction_strategy_id,
+        )
         capabilities = engine.get_capabilities()
 
         # Resolve outlet IDs: explicit list → request group → customer config group → all active
@@ -324,6 +326,11 @@ class PredictionService:
         ]
 
         actual_engine = engine.get_actual_slug() or engine_type.value
+        if actual_engine != engine_type.value:
+            logger.warning(
+                "prediction.engine_fallback: requested=%s actual=%s task=%s",
+                engine_type.value, actual_engine, task_id,
+            )
         rounding = await self._resolve_rounding(request.customer_id)
         default_cost, default_profit = await self._get_default_financials(request.customer_id) if request.total_return_pct is not None else (None, None)
         await self._persist_predictions(
@@ -1624,11 +1631,18 @@ class PredictionService:
         self,
         engine: object,
         engine_slug: str,
+        strategy_id: str | None = None,
     ) -> dict[str, str]:
-        """Load selected parameters from prediction_engine_parameter and apply them.
+        """Load selected parameters and apply them to *engine*.
+
+        Resolution order (strategy parameters override engine-level ones):
+        1. Engine-level selected parameters (prediction_strategy_id IS NULL).
+        2. Strategy-level selected parameters (prediction_strategy_id = strategy_id),
+           which **override** any engine-level parameter with the same name.
 
         Returns the resolved parameter dict (empty if none configured).
         """
+        # 1. Engine-level params
         result = await self.session.execute(
             select(PredictionEngineParameter)
             .join(
@@ -1639,15 +1653,34 @@ class PredictionService:
                 PredictionEngineModel.slug == engine_slug,
                 PredictionEngineParameter.selected.is_(True),
                 PredictionEngineParameter.active.is_(True),
+                PredictionEngineParameter.prediction_strategy_id.is_(None),
             )
         )
         rows = result.scalars().all()
-        if rows:
-            params = {row.name: (row.parameter if row.parameter else row.value) for row in rows}
+        params = {row.name: (row.parameter if row.parameter else row.value) for row in rows}
+
+        # 2. Strategy-level overrides
+        if strategy_id:
+            strat_result = await self.session.execute(
+                select(PredictionEngineParameter)
+                .join(
+                    PredictionEngineModel,
+                    PredictionEngineParameter.prediction_engine_id == PredictionEngineModel.id,
+                )
+                .where(
+                    PredictionEngineModel.slug == engine_slug,
+                    PredictionEngineParameter.selected.is_(True),
+                    PredictionEngineParameter.active.is_(True),
+                    PredictionEngineParameter.prediction_strategy_id == strategy_id,
+                )
+            )
+            for row in strat_result.scalars().all():
+                params[row.name] = row.parameter if row.parameter else row.value
+
+        if params:
             logger.info("Applying engine parameters for '%s': %s", engine_slug, params)
             engine.apply_parameters(params)
-            return params
-        return {}
+        return params
 
     async def _resolve_engine(
         self,
