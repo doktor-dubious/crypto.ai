@@ -47,11 +47,6 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
     try:
         resume_simulation_id = request_data.pop("resume_simulation_id", None)
 
-        if isinstance(request_data.get("simulation_from"), str):
-            request_data["simulation_from"] = date.fromisoformat(request_data["simulation_from"])
-        if isinstance(request_data.get("simulation_to"), str):
-            request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
-
         async def _on_progress(progress: int, message: str) -> None:
             from gorm_ai.tasks.celery_app import get_current_metrics
             async with task_session() as s:
@@ -69,6 +64,10 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
                     resume_simulation_id, task_id=task_id, on_progress=_on_progress,
                 )
             else:
+                if isinstance(request_data.get("simulation_from"), str):
+                    request_data["simulation_from"] = date.fromisoformat(request_data["simulation_from"])
+                if isinstance(request_data.get("simulation_to"), str):
+                    request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
                 request = SimulationRequest(**request_data)
                 result = await service.run_simulation(request, task_id=task_id, on_progress=_on_progress)
             await session.commit()
