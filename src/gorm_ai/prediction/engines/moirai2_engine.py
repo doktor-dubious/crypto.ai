@@ -14,7 +14,7 @@ from gorm_ai.schemas.prediction import PredictionResult
 logger = logging.getLogger(__name__)
 
 _QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
-_MOIRAI_MODEL_ID = "Salesforce/moirai-2.0-R-small"
+DEFAULT_MODEL_ID = "Salesforce/moirai-2.0-R-small"
 _UNI2TS_AVAILABLE: bool | None = None
 
 # Number of outlets batched in one GluonTS predictor.predict() call.
@@ -41,9 +41,17 @@ class Moirai2Engine(PredictionEngine):
     Falls back to StatisticalEngine when uni2ts is not installed.
     """
 
-    def __init__(self):
+    _MODEL_ALIASES: dict[str, str] = {
+        "moirai-2.0-R-small": "Salesforce/moirai-2.0-R-small",
+        "moirai-2-small": "Salesforce/moirai-2.0-R-small",
+        "small": "Salesforce/moirai-2.0-R-small",
+    }
+
+    def __init__(self, model_id: str = DEFAULT_MODEL_ID):
+        self._model_id = model_id
         self._module = None        # cached Moirai2Module (weights)
         self._module_loaded = False
+        self._batch_size: int = BATCH_SIZE
 
     def get_capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(
@@ -57,6 +65,25 @@ class Moirai2Engine(PredictionEngine):
             max_horizon=64,
             supported_frequencies=["daily", "weekly", "monthly"],
         )
+
+    def _resolve_model_id(self, value: str) -> str:
+        name = value.split("(")[0].strip()
+        if "/" in name:
+            return name
+        return self._MODEL_ALIASES.get(name, f"Salesforce/{name}")
+
+    def apply_parameters(self, params: dict[str, str]) -> None:
+        """Apply DB-driven parameters before the first prediction.
+
+        Supported parameter names:
+          model / submodel – HuggingFace model ID or short name
+          batch_size       – outlets per forward pass (int)
+        """
+        model_value = params.get("model") or params.get("submodel")
+        if model_value:
+            self._model_id = self._resolve_model_id(model_value)
+        if "batch_size" in params:
+            self._batch_size = int(params["batch_size"])
 
     def _check_uni2ts(self) -> bool:
         global _UNI2TS_AVAILABLE
@@ -101,8 +128,8 @@ class Moirai2Engine(PredictionEngine):
         try:
             from uni2ts.model.moirai2 import Moirai2Module
 
-            self._module = Moirai2Module.from_pretrained(_MOIRAI_MODEL_ID)
-            logger.info("MOIRAI-2 module loaded from '%s'", _MOIRAI_MODEL_ID)
+            self._module = Moirai2Module.from_pretrained(self._model_id)
+            logger.info("MOIRAI-2 module loaded from '%s'", self._model_id)
         except Exception as e:
             logger.warning("Failed to load MOIRAI-2 module, falling back to statistical: %s", e)
             self._module = None
@@ -221,7 +248,7 @@ class Moirai2Engine(PredictionEngine):
             feat_dynamic_real_dim=0,
             past_feat_dynamic_real_dim=0,
         )
-        predictor = model.create_predictor(batch_size=BATCH_SIZE)
+        predictor = model.create_predictor(batch_size=self._batch_size)
 
         # --- Step 4: run inference ---
         forecasts = list(predictor.predict(ds))

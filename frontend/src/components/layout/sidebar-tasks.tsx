@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { AnimatedActivity, AnimatedFlask } from "@/components/icons/animated-icons"
+import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot } from "@/components/icons/animated-icons"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
@@ -38,10 +38,12 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
   const completedRoute = task.type === "prediction"
     ? `/predictions/completed?task_id=${task.task_id}`
-    : `/simulations/completed?task_id=${task.task_id}`
+    : task.type === "simulation"
+      ? `/simulations/completed?task_id=${task.task_id}`
+      : null
 
   function handleClick() {
-    if (isFinished) router.push(completedRoute)
+    if (isFinished && completedRoute) router.push(completedRoute)
   }
 
   // Tick every 30s so relative time strings recalculate even when task data is unchanged
@@ -62,7 +64,7 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   })
 
   const iconControls = useAnimation()
-  const Icon = task.type === "prediction" ? AnimatedActivity : AnimatedFlask
+  const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : AnimatedFlask
   const timeStr = (task.started_at ?? task.created_at)
     ? formatDistanceToNow(new Date(task.started_at ?? task.created_at), {
         addSuffix: true,
@@ -72,7 +74,7 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   if (!isExpanded) {
     return (
       <li
-        className={cn("flex items-center justify-center py-1", isFinished && "cursor-pointer")}
+        className={cn("flex items-center justify-center py-1", isFinished && completedRoute && "cursor-pointer")}
         onClick={handleClick}
         onMouseEnter={() => iconControls.start("animate")}
         onMouseLeave={() => iconControls.start("normal")}
@@ -98,7 +100,7 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
     <li
       className={cn(
         "group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors",
-        isFinished && "cursor-pointer"
+        isFinished && completedRoute && "cursor-pointer"
       )}
       onClick={handleClick}
       onMouseEnter={() => iconControls.start("animate")}

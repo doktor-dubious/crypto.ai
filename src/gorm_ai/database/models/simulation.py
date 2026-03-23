@@ -52,6 +52,7 @@ class Simulation(Base):
     engine: Mapped[str | None] = mapped_column(String(255), nullable=True)
     actual_engine: Mapped[str | None] = mapped_column(String(255), nullable=True)
     engine_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # Delivered scenario aggregates
     d_total_delivered: Mapped[int | None] = mapped_column(Integer, nullable=True)

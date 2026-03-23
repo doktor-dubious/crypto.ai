@@ -435,6 +435,10 @@ class SimulationService:
         delivered_more_sale_total = 0
         deliv_g_profit: dict[int, float] = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
 
+        # Track prediction/actual date overlap for data-quality warnings
+        _dates_with_actuals: set[date] = set()
+        _dates_with_predictions: set[date] = set()
+
         chunk_start = request.simulation_from
         chunk_num = 0
         while chunk_start <= request.simulation_to:
@@ -722,6 +726,7 @@ class SimulationService:
                                 outlet_delivered[oid] += extra
 
                     date_outlet_delivered[pred_date] = dict(outlet_delivered)
+                    _dates_with_predictions.add(pred_date)
 
                     for outlet_id, r in outlet_results.items():
                         delivery = delivery_map.get(outlet_id, {}).get(weekday)
@@ -773,6 +778,10 @@ class SimulationService:
                     end_date=chunk_end,
                 )
                 actual_by_date = {s.date: s for s in actual_sales}
+                _dates_with_actuals.update(
+                    d for d, s in actual_by_date.items()
+                    if s.sold is not None or s.delivered is not None
+                )
                 covariates = covariates_cache[outlet_id]
 
                 for pred in predictions:
@@ -1081,8 +1090,38 @@ class SimulationService:
         # Re-fetch sim_record — it was expunged after each chunk commit
         sim_record = await self.session.get(SimulationModel, sim_record_id)
 
+        # --- Data-quality warnings ---
+        sim_warnings: list[str] = []
+        if _dates_with_actuals and _dates_with_predictions:
+            overlap = _dates_with_actuals & _dates_with_predictions
+            if not overlap:
+                actual_weekdays = sorted({d.strftime("%A") for d in _dates_with_actuals})
+                pred_weekdays = sorted({d.strftime("%A") for d in _dates_with_predictions})
+                sim_warnings.append(
+                    f"No date overlap between predictions ({', '.join(pred_weekdays)}) "
+                    f"and actual sales data ({', '.join(actual_weekdays)}). "
+                    f"The delivered scenario results are unreliable. "
+                    f"Check the customer's open-days configuration."
+                )
+                log.warning(
+                    "simulation.no_date_overlap",
+                    simulation_id=sim_record_id,
+                    prediction_weekdays=pred_weekdays,
+                    actual_weekdays=actual_weekdays,
+                    prediction_dates_count=len(_dates_with_predictions),
+                    actual_dates_count=len(_dates_with_actuals),
+                )
+            else:
+                overlap_pct = len(overlap) / len(_dates_with_actuals) * 100
+                if overlap_pct < 50:
+                    sim_warnings.append(
+                        f"Only {overlap_pct:.0f}% of actual sales dates have matching predictions. "
+                        f"Simulation results may be unreliable."
+                    )
+
         # --- Persist aggregated stats to the Simulation record ---
         sim_record.ended_at = datetime.now(UTC)
+        sim_record.warnings = sim_warnings or None
 
         sim_record.actual_total_delivered = actual_total_delivered or None
         sim_record.actual_total_sale = actual_total_sale or None
@@ -1371,6 +1410,7 @@ class SimulationService:
                 "outlet_group_name": sim.outlet_group.name if sim and sim.outlet_group else None,
                 "prediction_strategy_name": sim.prediction_strategy.name if sim and sim.prediction_strategy else None,
                 "error": tr.error,
+                "warnings": sim.warnings if sim else None,
                 "created_at": tr.created_at,
                 "started_at": sim.started_at if sim else None,
                 "ended_at": sim.ended_at if sim else None,

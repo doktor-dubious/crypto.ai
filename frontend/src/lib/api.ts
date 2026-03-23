@@ -329,8 +329,8 @@ export interface FinetuneRequest {
   prediction_engine_id: string
   customer_id: string
   outlet_group_id?: string | null
-  start_date: string
-  end_date: string
+  start_date?: string
+  end_date?: string
   context_length?: number
   horizon?: number
   epochs?: number
@@ -1137,6 +1137,7 @@ export interface CompletedSimulationResponse {
   outlet_group_name: string | null
   prediction_strategy_name: string | null
   error: string | null
+  warnings: string[] | null
   created_at: string
   started_at: string | null
   ended_at: string | null

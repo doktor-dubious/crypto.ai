@@ -1,8 +1,13 @@
 """Prediction engine API routes."""
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from gorm_ai.api.deps import PredictionEngineParameterServiceDep, PredictionEngineServiceDep
+from gorm_ai.api.deps import (
+    PredictionEngineParameterServiceDep,
+    PredictionEngineServiceDep,
+    TaskServiceDep,
+)
 from gorm_ai.schemas.prediction import (
     PredictionEngineCreate,
     PredictionEngineParameterCreate,
@@ -10,6 +15,33 @@ from gorm_ai.schemas.prediction import (
     PredictionEngineResponse,
     PredictionEngineUpdate,
 )
+
+
+class FinetuneRequest(BaseModel):
+    """Schema for fine-tuning request."""
+    prediction_engine_id: str
+    customer_id: str
+    outlet_group_id: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    context_length: int = 512
+    horizon: int = 64
+    epochs: int = 50
+    learning_rate: float = 0.001
+    batch_size: int = 32
+    worker: str | None = None
+
+
+class FinetuneTaskResponse(BaseModel):
+    task_id: str
+    status: str
+    progress: float
+    message: str | None
+    created_at: str
+
+
+class FinetuneCountResponse(BaseModel):
+    count: int
 
 router = APIRouter()
 
@@ -124,3 +156,47 @@ async def delete_engine_parameter(
     """Soft-delete a prediction engine parameter."""
     if not await service.delete(param_id):
         raise HTTPException(status_code=404, detail="Parameter not found")
+
+
+# ── Fine-tuning ──────────────────────────────────────────────────────────────
+
+
+@router.get("/{engine_id}/finetune/count", response_model=FinetuneCountResponse)
+async def get_finetune_count(
+    engine_id: str,
+    task_service: TaskServiceDep,
+) -> FinetuneCountResponse:
+    """Count customers that have been fine-tuned for this engine."""
+    from gorm_ai.services.finetune import FinetuneService
+
+    service = FinetuneService(task_service.session)
+    count = await service.count_finetuned(engine_id)
+    return FinetuneCountResponse(count=count)
+
+
+@router.post("/finetune", response_model=FinetuneTaskResponse, status_code=202)
+async def start_finetune(
+    data: FinetuneRequest,
+    task_service: TaskServiceDep,
+) -> FinetuneTaskResponse:
+    """Start a fine-tuning task asynchronously."""
+    from datetime import UTC, datetime
+
+    from gorm_ai.tasks.finetuning import run_finetune_task
+
+    dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
+    if data.worker:
+        dispatch_kwargs["queue"] = data.worker
+
+    task = run_finetune_task.apply_async(**dispatch_kwargs)
+    task_name = f"Finetune {data.customer_id[:8]}"
+    await task_service.create(task.id, "finetune", data.customer_id, name=task_name)
+
+    now = datetime.now(UTC)
+    return FinetuneTaskResponse(
+        task_id=task.id,
+        status="pending",
+        progress=0,
+        message="Fine-tuning task queued",
+        created_at=now.isoformat(),
+    )

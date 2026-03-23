@@ -11,6 +11,8 @@ import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import { Maximize } from "@/components/animate-ui/icons/maximize"
 import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -2050,9 +2052,33 @@ export default function SimulationsCompletedPage() {
                 </TabsContent>
               )}
 
+              {/* ─ Warnings ─ */}
+              {selected.warnings && selected.warnings.length > 0 && (
+                <div className="max-w-2xl mt-4 mx-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                  <p className="text-xs font-semibold text-amber-500 mb-1.5">{t("warningsTitle")}</p>
+                  {selected.warnings.map((w, i) => (
+                    <p key={i} className="text-xs text-[var(--muted-foreground)] leading-relaxed">{w}</p>
+                  ))}
+                </div>
+              )}
+
               {/* ─ Details ─ */}
               <TabsContent value="tab1" className="space-y-3 max-w-2xl mt-6 px-4">
-                <StatRow label="ID" value={<span className="font-mono text-xs opacity-70">{selected.simulation_id ?? selected.id}</span>} />
+                <StatRow label="ID" value={
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="font-mono text-xs opacity-70">{selected.simulation_id ?? selected.id}</span>
+                    <AnimateIcon animateOnHover className="cursor-pointer">
+                      <CopyIcon
+                        size={14}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selected.simulation_id ?? selected.id)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </span>
+                } />
                 <StatRow label={t("fieldName")} value={selected.name ?? "—"} />
                 <StatRow label={t("fieldDescription")} value={selected.description ?? "—"} />
                 <StatRow label={t("fieldGroup")} value={selected.outlet_group_name ?? "—"} />

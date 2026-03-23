@@ -63,6 +63,74 @@ const FLASK_VARIANTS: Variants = {
   },
 }
 
+// ─── AnimatedCookingPot ───────────────────────────────────────────────────────
+
+const COOKING_POT_VARIANTS: Variants = {
+  normal: { rotate: 0, scale: 1, y: 0 },
+  animate: {
+    scale: [1, 0.95, 1.05, 1],
+    y: [0, 1, -1, 0],
+    transition: {
+      duration: 0.6,
+      ease: "easeInOut",
+    },
+  },
+}
+
+const STEAM_VARIANTS: Variants = {
+  normal: { opacity: 0.6, y: 0 },
+  animate: {
+    opacity: [0, 0.8, 0],
+    y: [0, -3, -6],
+    transition: { duration: 0.8, ease: "easeOut" },
+  },
+}
+
+export function AnimatedCookingPot({ className, controls: externalControls }: { className?: string; controls?: ReturnType<typeof useAnimation> }) {
+  const internalControls = useAnimation()
+  const controls = externalControls ?? internalControls
+  const mouseHandlers = externalControls ? {} : {
+    onMouseEnter: () => controls.start("animate"),
+    onMouseLeave: () => controls.start("normal"),
+  }
+  return (
+    <motion.svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="1em"
+      height="1em"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      variants={COOKING_POT_VARIANTS}
+      animate={controls}
+      {...mouseHandlers}
+    >
+      <path d="M2 12h20" />
+      <path d="M20 12v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8" />
+      <path d="m4 8 16-4" />
+      <path d="m8.86 6.78-.45-1.81a2 2 0 0 1 1.45-2.43l1.94-.48a2 2 0 0 1 2.43 1.46l.45 1.8" />
+      <motion.path
+        d="M9 1v2"
+        variants={STEAM_VARIANTS}
+        animate={controls}
+        strokeOpacity={0.5}
+      />
+      <motion.path
+        d="M15 1v2"
+        variants={STEAM_VARIANTS}
+        animate={controls}
+        strokeOpacity={0.5}
+      />
+    </motion.svg>
+  )
+}
+
+// ─── AnimatedFlask ─────────────────────────────────────────────────────────────
+
 export function AnimatedFlask({ className, controls: externalControls }: { className?: string; controls?: ReturnType<typeof useAnimation> }) {
   const internalControls = useAnimation()
   const controls = externalControls ?? internalControls

@@ -89,6 +89,14 @@ class EngineRegistry:
         except ImportError:
             pass  # transformers not available
 
+        # Register MOIRAI-2 engine (Salesforce)
+        try:
+            from gorm_ai.prediction.engines.moirai2_engine import Moirai2Engine
+
+            self.register(PredictionEngineEnum.MOIRAI2, Moirai2Engine)
+        except ImportError:
+            pass  # uni2ts not available
+
 
     def register(
         self,
