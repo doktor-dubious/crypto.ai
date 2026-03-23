@@ -36,7 +36,7 @@ PROD_HOST="${PROD_HOST:?Set PROD_HOST to your production server address}"
 PROD_USER="${PROD_USER:-root}"
 PROD_SSH_PORT="${PROD_SSH_PORT:-22}"
 PROD_DB_PORT="${PROD_DB_PORT:-5433}"
-PROD_REDIS_PORT="${PROD_REDIS_PORT:-6380}"
+PROD_REDIS_PORT="${PROD_REDIS_PORT:-6379}"
 
 echo "==> Setting up SSH tunnel to ${PROD_USER}@${PROD_HOST}"
 

@@ -24,11 +24,11 @@ class Settings(BaseSettings):
     database_echo: bool = False
 
     # Redis
-    redis_url: str = "redis://localhost:6380/0"
+    redis_url: str = "redis://localhost:6379/0"
 
     # Celery
-    celery_broker_url: str = "redis://localhost:6380/1"
-    celery_result_backend: str = "redis://localhost:6380/2"
+    celery_broker_url: str = "redis://localhost:6379/1"
+    celery_result_backend: str = "redis://localhost:6379/2"
 
     # API
     api_v1_prefix: str = "/api/v1"
