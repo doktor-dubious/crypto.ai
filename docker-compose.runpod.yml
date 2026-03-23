@@ -26,6 +26,7 @@ services:
       - OMP_NUM_THREADS=4
       - MKL_NUM_THREADS=4
       - OPENBLAS_NUM_THREADS=4
+      - WORKER_NAME=runpod-gpu
     volumes:
       - ./src:/app/src
       - ./log:/app/log
@@ -53,11 +54,14 @@ services:
       - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/gorm_ai
       - FINETUNED_MODEL_PATH=/models/timesfm_finetuned
       - HF_HUB_CACHE=/models/hf_cache
+      - SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/timesfm_finetuned/
+      - SYNC_EVERY=5
     volumes:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./log:/app/log
       - models:/models
+      - /root/.ssh:/root/.ssh:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
