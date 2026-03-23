@@ -289,6 +289,8 @@
       "statsNInfo": "Number of outlet-day data points used to compute the statistics.",
       "resumeButton": "Resume Simulation",
       "resumeDescription": "Resume this simulation from where it left off. A new task will be created to complete the remaining dates.",
+      "resumeSameWorker": "Resume on same worker",
+      "resumeAnyWorker": "Resume on any worker",
       "resumeSuccess": "Simulation resumed",
       "resumeError": "Failed to resume simulation",
       "deleteButton": "Delete Simulation",

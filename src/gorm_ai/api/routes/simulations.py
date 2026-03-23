@@ -161,6 +161,7 @@ async def resume_simulation(
     record_id: str,
     task_service: TaskServiceDep,
     service: SimulationService = Depends(get_simulation_service),
+    worker: str | None = Query(None),
 ) -> SimulationTaskStatus:
     """Resume a failed or cancelled simulation from where it left off.
 
@@ -196,9 +197,17 @@ async def resume_simulation(
             detail="No simulation record found — task may have failed before starting",
         )
 
+    # Determine target worker queue
+    # Default: use the same worker that ran the original task
+    # worker="" means "any worker" (default celery queue)
+    target_queue = worker if worker is not None else record.worker_name
+
     # Dispatch resume task
     request_data = {"resume_simulation_id": sim.id}
-    task = run_simulation_task.apply_async(args=[request_data])
+    dispatch_kwargs: dict = {"args": [request_data]}
+    if target_queue:
+        dispatch_kwargs["queue"] = target_queue
+    task = run_simulation_task.apply_async(**dispatch_kwargs)
     name = f"Resume: {sim.name}" if sim.name else "Resume simulation"
     await task_service.create(task.id, "simulation", sim.customer_id, name=name)
 

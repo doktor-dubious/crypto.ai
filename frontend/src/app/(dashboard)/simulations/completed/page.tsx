@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon, RotateCcw,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon, RotateCcw, Globe,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -14,6 +14,7 @@ import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { AnimateIcon } from "@/components/animate-ui/icons/icon"
 import { Button } from "@/components/ui/button"
+import { ButtonGroup } from "@/components/ui/button-group"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -1709,7 +1710,8 @@ export default function SimulationsCompletedPage() {
   })
 
   const resumeMutation = useMutation({
-    mutationFn: (recordId: string) => simulationsApi.resume(recordId),
+    mutationFn: ({ recordId, worker }: { recordId: string; worker?: string }) =>
+      simulationsApi.resume(recordId, worker),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["simulations-completed"] })
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
@@ -2373,15 +2375,47 @@ export default function SimulationsCompletedPage() {
                       <p className="text-sm font-semibold">{t("resumeButton")}</p>
                       <p className="text-xs text-[var(--muted-foreground)]">{t("resumeDescription")}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      className="shrink-0 cursor-pointer"
-                      disabled={resumeMutation.isPending}
-                      onClick={() => resumeMutation.mutate(selected.id)}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                      {t("resumeButton")}
-                    </Button>
+                    <ButtonGroup className="shrink-0">
+                      <Button
+                        size="sm"
+                        className="cursor-pointer"
+                        disabled={resumeMutation.isPending}
+                        onClick={() => resumeMutation.mutate({ recordId: selected.id })}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                        {t("resumeButton")}
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            className="cursor-pointer px-1.5"
+                            disabled={resumeMutation.isPending}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => resumeMutation.mutate({ recordId: selected.id })}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            {t("resumeSameWorker")}
+                            {selected.worker_name && (
+                              <span className="ml-1 text-[var(--muted-foreground)]">
+                                ({selected.worker_name})
+                              </span>
+                            )}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => resumeMutation.mutate({ recordId: selected.id, worker: "" })}
+                          >
+                            <Globe className="h-3.5 w-3.5" />
+                            {t("resumeAnyWorker")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </ButtonGroup>
                   </div>
                 )}
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">

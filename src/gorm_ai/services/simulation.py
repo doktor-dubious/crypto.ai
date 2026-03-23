@@ -1409,6 +1409,7 @@ class SimulationService:
                 "outlet_group_id": sim.outlet_group_id if sim else None,
                 "outlet_group_name": sim.outlet_group.name if sim and sim.outlet_group else None,
                 "prediction_strategy_name": sim.prediction_strategy.name if sim and sim.prediction_strategy else None,
+                "worker_name": tr.worker_name,
                 "error": tr.error,
                 "warnings": sim.warnings if sim else None,
                 "created_at": tr.created_at,

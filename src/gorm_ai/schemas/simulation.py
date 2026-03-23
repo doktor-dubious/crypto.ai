@@ -233,6 +233,7 @@ class CompletedSimulationResponse(BaseModel):
     prediction_strategy_name: str | None = None
     error: str | None = None
     warnings: list[str] | None = None
+    worker_name: str | None = None
     created_at: datetime
     started_at: datetime | None = None
     ended_at: datetime | None = None

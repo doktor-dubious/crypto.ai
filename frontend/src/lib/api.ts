@@ -1138,6 +1138,7 @@ export interface CompletedSimulationResponse {
   prediction_strategy_name: string | null
   error: string | null
   warnings: string[] | null
+  worker_name: string | null
   created_at: string
   started_at: string | null
   ended_at: string | null
@@ -1304,10 +1305,12 @@ export const simulationsApi = {
   deleteByRecordId: (recordId: string) =>
     apiFetch<void>(`/simulations/records/${recordId}`, { method: "DELETE" }),
 
-  resume: (recordId: string) =>
-    apiFetch<SimulationTaskResponse>(`/simulations/records/${recordId}/resume`, {
+  resume: (recordId: string, worker?: string) => {
+    const qs = worker !== undefined ? `?worker=${encodeURIComponent(worker)}` : ""
+    return apiFetch<SimulationTaskResponse>(`/simulations/records/${recordId}/resume${qs}`, {
       method: "POST",
-    }),
+    })
+  },
 
   getZeroShot: (simulationId: string, column = "delivered", weekdays?: number[]) => {
     const qs = new URLSearchParams({ column })
