@@ -497,8 +497,7 @@ class TimesFMEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
-        return float(all_quantiles[day_index, nearest_idx])
+        return float(np.interp(tau, _QUANTILE_LEVELS, all_quantiles[day_index]))
 
     @staticmethod
     def _compute_weekday_cvs(

@@ -374,8 +374,7 @@ class AutoGluonEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        nearest_idx = int(np.argmin(np.abs(_QUANTILE_LEVELS - tau)))
-        return float(q_vals[nearest_idx])
+        return float(np.interp(tau, _QUANTILE_LEVELS, q_vals))
 
     @staticmethod
     def _compute_weekday_cvs(

@@ -1082,8 +1082,19 @@ function DataDumpTab({
   const fmtN = (n: number | null | undefined) => n != null ? formatNumber(n) : "—"
   const fmtC = (n: number | null | undefined) => n != null ? formatCurrency(n, currencySymbol) : "—"
   const fmtQ = (n: number | null | undefined) => n != null ? n.toFixed(1) : "—"
-  const isEoQ = (q: number | null | undefined, eo: number | null | undefined) =>
-    q != null && eo != null && Math.abs(q - eo) < 0.01
+  const isEoQ = (q: number | null | undefined, eo: number | null | undefined, qIdx: number, qs: (number | null)[]) => {
+    if (q == null || eo == null) return false
+    // Find the quantile closest to the (interpolated) EO value
+    let bestIdx = -1
+    let bestDist = Infinity
+    for (let k = 0; k < qs.length; k++) {
+      if (qs[k] != null) {
+        const d = Math.abs(qs[k]! - eo)
+        if (d < bestDist) { bestDist = d; bestIdx = k }
+      }
+    }
+    return bestIdx === qIdx
+  }
   const delta = (a: number | null | undefined, b: number | null | undefined) => {
     if (a == null || b == null) return null
     return a - b
@@ -1344,16 +1355,16 @@ function DataDumpTab({
                         <div className="text-xs text-[var(--muted-foreground)]">{fmtN(row.actual_returned)}</div>
                         <div className={cn("text-xs", dReturned != null && dReturned < 0 ? "text-green-500" : dReturned != null && dReturned > 0 ? "text-red-500" : "text-[var(--muted-foreground)]")}>{fmtDelta(dReturned)}</div>
                       </TableCell>
-                      {([row.q10, row.q20, row.q30, row.q40, row.q50, row.q60, row.q70, row.q80, row.q90] as (number | null)[]).map((q, i) => (
+                      {((_qs) => _qs.map((q, i) => (
                         <TableCell key={i} className="text-right tabular-nums text-xs">
-                          {isEoQ(q, row.eo) ? (
+                          {isEoQ(q, row.eo, i, _qs) ? (
                             <span className="relative inline-block px-1">
                               <span className="absolute inset-[-14px] bg-[url('/red-circle-brush.png')] bg-contain bg-center bg-no-repeat pointer-events-none" />
                               <span className="relative">{fmtQ(q)}</span>
                             </span>
                           ) : fmtQ(q)}
                         </TableCell>
-                      ))}
+                      )))([row.q10, row.q20, row.q30, row.q40, row.q50, row.q60, row.q70, row.q80, row.q90] as (number | null)[])}
                       <TableCell className={cn("text-right tabular-nums", row.g1 != null && row.g1 > 0 && "text-green-500")}>{fmtC(row.g1)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g2 != null && row.g2 < 0 && "text-red-500")}>{fmtC(row.g2)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g3 != null && row.g3 < 0 && "text-red-500")}>{fmtC(row.g3)}</TableCell>
