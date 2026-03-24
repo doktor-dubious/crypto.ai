@@ -657,7 +657,10 @@ async def _main_async(args: argparse.Namespace) -> None:
     )
 
     # Resume from existing local checkpoint if available; otherwise use base.
-    if os.path.isdir(effective_output):
+    has_local = os.path.isdir(effective_output) and any(
+        f.endswith((".safetensors", ".bin")) for f in os.listdir(effective_output)
+    )
+    if has_local:
         log.info(
             "Resuming from existing checkpoint: '%s' "
             "(delete this directory to start over from the base model)",

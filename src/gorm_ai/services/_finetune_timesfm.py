@@ -144,7 +144,11 @@ async def run_finetune(
     """Fine-tune TimesFM on the provided outlet series."""
     import timesfm
 
-    checkpoint = output_dir if os.path.isdir(output_dir) else "google/timesfm-2.5-200m-pytorch"
+    # Use local checkpoint only if it contains actual model files
+    has_local = os.path.isdir(output_dir) and any(
+        f.endswith((".safetensors", ".bin")) for f in os.listdir(output_dir)
+    )
+    checkpoint = output_dir if has_local else "google/timesfm-2.5-200m-pytorch"
     model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(checkpoint)
     model.compile(timesfm.ForecastConfig(
         max_context=1024, max_horizon=128,
