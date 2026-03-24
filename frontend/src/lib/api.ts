@@ -130,7 +130,12 @@ export const tasksApi = {
     apiFetch<void>("/tasks/workers/restart", { method: "POST" }),
 
   listWorkers: () =>
-    apiFetch<string[]>("/tasks/workers/list"),
+    apiFetch<WorkerInfo[]>("/tasks/workers/list"),
+}
+
+export interface WorkerInfo {
+  name: string
+  models: string[]
 }
 
 export interface CustomerUpdate {
@@ -251,6 +256,9 @@ export interface PredictionEngineResponse {
   name: string
   description: string | null
   notes: string | null
+  finetuned_model_path: string | null
+  finetune_sync_every: number | null
+  finetune_sync_target: string | null
 }
 
 export interface PredictionEngineCreate {
@@ -264,6 +272,9 @@ export interface PredictionEngineUpdate {
   name?: string | null
   description?: string | null
   notes?: string | null
+  finetuned_model_path?: string | null
+  finetune_sync_every?: number | null
+  finetune_sync_target?: string | null
 }
 
 export interface PredictionEngineParameterResponse {

@@ -92,7 +92,6 @@ class CustomerConfiguration(Base):
         nullable=True,
         index=True,
     )
-
     # Relationships
     customer: Mapped["Customer"] = relationship(
         "Customer",

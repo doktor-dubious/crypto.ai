@@ -59,7 +59,8 @@ async def _run_prediction_async(task_id: str, request_data: dict, hostname: str 
         await session.commit()
 
     async def _on_progress(progress: int, message: str | None = None) -> None:
-        from gorm_ai.tasks.celery_app import get_current_metrics
+        from gorm_ai.tasks.celery_app import get_current_metrics, refresh_worker_registry
+        refresh_worker_registry()
         async with task_session() as session:
             ts = TaskService(session)
             await ts.update_progress(task_id, progress, message)

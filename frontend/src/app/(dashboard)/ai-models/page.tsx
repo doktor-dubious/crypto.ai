@@ -342,6 +342,9 @@ export default function AIModelsPage() {
         name: selectedModel.name,
         description: selectedModel.description,
         notes: selectedModel.notes,
+        finetuned_model_path: selectedModel.finetuned_model_path,
+        finetune_sync_every: selectedModel.finetune_sync_every,
+        finetune_sync_target: selectedModel.finetune_sync_target,
       })
     }
   }, [selectedModel?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -357,7 +360,10 @@ export default function AIModelsPage() {
     return (
       draft.name !== selectedModel.name ||
       draft.description !== selectedModel.description ||
-      draft.notes !== selectedModel.notes
+      draft.notes !== selectedModel.notes ||
+      draft.finetuned_model_path !== selectedModel.finetuned_model_path ||
+      draft.finetune_sync_every !== selectedModel.finetune_sync_every ||
+      draft.finetune_sync_target !== selectedModel.finetune_sync_target
     )
   }, [draft, selectedModel])
 
@@ -367,6 +373,9 @@ export default function AIModelsPage() {
       name: selectedModel.name,
       description: selectedModel.description,
       notes: selectedModel.notes,
+      finetuned_model_path: selectedModel.finetuned_model_path,
+      finetune_sync_every: selectedModel.finetune_sync_every,
+      finetune_sync_target: selectedModel.finetune_sync_target,
     })
   }
 
@@ -875,12 +884,12 @@ export default function AIModelsPage() {
                               </DropdownMenuItem>
                               {ftWorkers.map((w) => (
                                 <DropdownMenuItem
-                                  key={w}
-                                  onClick={() => setFtWorker(w)}
+                                  key={w.name}
+                                  onClick={() => setFtWorker(w.name)}
                                   className="flex items-center justify-between"
                                 >
-                                  <span>{w}</span>
-                                  {ftWorker === w && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                                  <span>{w.name}</span>
+                                  {ftWorker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
                                 </DropdownMenuItem>
                               ))}
                             </DropdownMenuContent>
@@ -901,7 +910,7 @@ export default function AIModelsPage() {
                     <Separator orientation="vertical" className="h-auto min-h-[200px]" />
 
                     {/* Right side */}
-                    <div className="grid grid-cols-2 gap-8 flex-1 min-w-0">
+                    <div className="grid grid-cols-3 gap-8 flex-1 min-w-0">
                       {/* Column 1: Filters */}
                       <div className="flex flex-col gap-4">
                         <h3 className="text-sm font-medium">{t("finetuneSelectOutlets")}</h3>
@@ -1036,6 +1045,75 @@ export default function AIModelsPage() {
                             />
                           </div>
                         ))}
+                      </div>
+
+                      {/* Column 3: Sync Parameters */}
+                      <div className="flex flex-col gap-4">
+                        <h3 className="text-sm font-medium">{t("finetuneSyncParameters")}</h3>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneSyncModelPath")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneSyncModelPathInfo")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Input
+                            value={draft.finetuned_model_path ?? ""}
+                            placeholder={t("finetuneSyncModelPathPlaceholder")}
+                            onChange={(e) => setDraft((d) => ({ ...d, finetuned_model_path: e.target.value || null }))}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneSyncEvery")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneSyncEveryInfo")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={100}
+                            step={1}
+                            value={draft.finetune_sync_every ?? ""}
+                            placeholder="5"
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setDraft((d) => ({ ...d, finetune_sync_every: v === "" ? null : Math.max(1, Math.min(100, parseInt(v, 10) || 5)) }))
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneSyncTarget")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneSyncTargetInfo")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Input
+                            value={draft.finetune_sync_target ?? ""}
+                            placeholder={t("finetuneSyncTargetPlaceholder")}
+                            onChange={(e) => setDraft((d) => ({ ...d, finetune_sync_target: e.target.value || null }))}
+                            className="h-9 text-xs"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

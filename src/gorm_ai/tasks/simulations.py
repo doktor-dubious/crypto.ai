@@ -48,7 +48,8 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
         resume_simulation_id = request_data.pop("resume_simulation_id", None)
 
         async def _on_progress(progress: int, message: str) -> None:
-            from gorm_ai.tasks.celery_app import get_current_metrics
+            from gorm_ai.tasks.celery_app import get_current_metrics, refresh_worker_registry
+            refresh_worker_registry()
             async with task_session() as s:
                 ts = TaskService(s)
                 await ts.update_progress(task_id, progress, message)

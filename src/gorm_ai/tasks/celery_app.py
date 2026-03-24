@@ -48,13 +48,30 @@ def get_current_metrics(task_id: str) -> tuple[float | None, float | None]:
 
 
 def _refresh_worker_registry() -> None:
-    """Refresh this worker's TTL in the Redis registry."""
+    """Refresh this worker's TTL in the Redis registry.
+
+    Called from Celery signals (prerun/postrun) and can also be called
+    from within a running task via ``refresh_worker_registry()`` to keep
+    long-running tasks alive in the registry.
+    """
     try:
         hostname = celery_app.current_worker.hostname  # type: ignore[union-attr]
         r = _get_redis()
         r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")
+        models = _get_worker_models()
+        if models:
+            r.setex(f"{WORKER_MODELS_PREFIX}{hostname}", WORKER_REGISTRY_TTL, models)
     except Exception:
         pass
+
+
+def refresh_worker_registry() -> None:
+    """Public alias for refreshing this worker's Redis registry TTL.
+
+    Call from long-running tasks (e.g. progress callbacks) to prevent the
+    2-hour TTL from expiring while the task is still computing.
+    """
+    _refresh_worker_registry()
 
 
 @task_prerun.connect
@@ -99,6 +116,7 @@ def on_task_postrun(task_id: str, **kwargs) -> None:
 
 
 WORKER_REGISTRY_PREFIX = "gorm:worker:"
+WORKER_MODELS_PREFIX = "gorm:worker-models:"
 WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
 
 
@@ -108,6 +126,11 @@ def _get_redis():
     return redis.Redis.from_url(settings.celery_broker_url)
 
 
+def _get_worker_models() -> str:
+    """Return the WORKER_MODELS env var (comma-separated engine slugs)."""
+    return os.environ.get("WORKER_MODELS", "")
+
+
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
     """Register this worker in Redis so the API can list it even when busy."""
@@ -115,6 +138,9 @@ def on_worker_ready(sender, **kwargs):
     try:
         r = _get_redis()
         r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")
+        models = _get_worker_models()
+        if models:
+            r.setex(f"{WORKER_MODELS_PREFIX}{hostname}", WORKER_REGISTRY_TTL, models)
     except Exception:
         pass
 
@@ -126,6 +152,7 @@ def on_worker_shutdown(sender, **kwargs):
     try:
         r = _get_redis()
         r.delete(f"{WORKER_REGISTRY_PREFIX}{hostname}")
+        r.delete(f"{WORKER_MODELS_PREFIX}{hostname}")
     except Exception:
         pass
 

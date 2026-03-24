@@ -68,8 +68,8 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
     """Ping Celery workers. Returns alive=True if at least one worker responds.
 
     With --pool=solo the worker can't respond to inspect while running a task.
-    We fall back to checking whether the Docker container is running, which is
-    reliable regardless of what the solo pool is doing.
+    We fall back to the Redis worker registry (refreshed on task start) and
+    Docker container health for the local worker.
 
     Also detects orphaned tasks: if a worker (e.g. a RunPod instance) has died
     but other workers are still alive, tasks from the dead worker are marked
@@ -89,11 +89,18 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
         for key in result:
             alive_workers.add(key.split("@", 1)[-1])
 
-    # Solo pool fallback: the local worker can't respond to ping while busy,
-    # so check if its Docker container is running.
+    # Solo pool fallback: workers running a task on --pool=solo can't respond
+    # to inspect commands.  Check the Redis worker registry (refreshed on task
+    # start with a 2-hour TTL) to see if any additional workers are registered.
+    registered = await asyncio.to_thread(_get_registered_workers)
+    alive_workers.update(registered)
+
+    # Extra fallback for the local worker: check Docker container health.
     local_name = await asyncio.to_thread(_get_local_worker_name)
     if local_name not in alive_workers:
-        container_up = await asyncio.to_thread(_is_worker_container_healthy)
+        container_up = await asyncio.to_thread(
+            _is_worker_container_healthy,
+        )
         if container_up:
             alive_workers.add(local_name)
 
@@ -107,6 +114,28 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
     await service.mark_orphaned_worker_tasks_failed(alive_workers)
 
     return WorkerPingResponse(alive=True)
+
+
+def _get_registered_workers() -> set[str]:
+    """Return short names of workers with a valid Redis registry key.
+
+    Workers refresh their key on task_prerun (TTL 2 hours), so a solo-pool
+    worker that is busy computing will still have a valid key even though
+    it can't respond to inspect/ping.
+    """
+    try:
+        from gorm_ai.tasks.celery_app import WORKER_REGISTRY_PREFIX, celery_app
+
+        import redis
+        r = redis.Redis.from_url(str(celery_app.conf.broker_url))
+        keys = r.keys(f"{WORKER_REGISTRY_PREFIX}*")
+        prefix_len = len(WORKER_REGISTRY_PREFIX)
+        return {
+            k.decode()[prefix_len:].split("@", 1)[-1]
+            for k in keys
+        }
+    except Exception:
+        return set()
 
 
 def _get_local_worker_name() -> str:
@@ -154,12 +183,17 @@ def _is_worker_container_healthy() -> bool:
         return False
 
 
-@router.get("/workers/list", response_model=list[str])
-async def list_workers() -> list[str]:
-    """Return names of registered Celery workers (including busy ones)."""
-    from gorm_ai.tasks.celery_app import WORKER_REGISTRY_PREFIX, celery_app
+class WorkerInfoResponse(BaseModel):
+    name: str
+    models: list[str]
 
-    def _get_workers() -> list[str]:
+
+@router.get("/workers/list", response_model=list[WorkerInfoResponse])
+async def list_workers() -> list[WorkerInfoResponse]:
+    """Return registered Celery workers with their supported models."""
+    from gorm_ai.tasks.celery_app import WORKER_MODELS_PREFIX, WORKER_REGISTRY_PREFIX, celery_app
+
+    def _get_workers() -> list[WorkerInfoResponse]:
         import redis
 
         # Primary source: Redis registry (works even when solo-pool workers
@@ -178,8 +212,16 @@ async def list_workers() -> list[str]:
         except Exception:
             pass
 
-        # Worker keys are like "celery@GORM" — extract the name after @
-        return sorted(key.split("@", 1)[-1] for key in registered)
+        # Build worker info with models from Redis
+        result = []
+        for key in sorted(registered):
+            name = key.split("@", 1)[-1]
+            models_raw = r.get(f"{WORKER_MODELS_PREFIX}{key}")
+            models: list[str] = []
+            if models_raw:
+                models = [s.strip() for s in models_raw.decode().split(",") if s.strip()]
+            result.append(WorkerInfoResponse(name=name, models=models))
+        return result
 
     return await asyncio.to_thread(_get_workers)
 

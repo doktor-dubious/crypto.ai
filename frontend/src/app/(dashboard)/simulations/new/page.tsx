@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -19,7 +19,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { simulationsApi, predictionStrategiesApi, outletGroupsApi, customerConfigurationApi, salesApi, tasksApi, type SimulationRunRequest } from "@/lib/api"
+import { simulationsApi, predictionStrategiesApi, predictionEnginesApi, outletGroupsApi, customerConfigurationApi, salesApi, tasksApi, type SimulationRunRequest } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -197,10 +197,16 @@ export default function SimulationsNewPage() {
   const [endDate, setEndDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "endDate", null); return v ? new Date(v) : undefined })
   const [worker, setWorker] = useState<string | null>(null)
 
-  const { data: workers = [] } = useQuery({
+  const { data: allWorkers = [] } = useQuery({
     queryKey: ["workers"],
     queryFn: () => tasksApi.listWorkers(),
     staleTime: 30_000,
+  })
+
+  const { data: engines = [] } = useQuery({
+    queryKey: ["prediction-engines"],
+    queryFn: () => predictionEnginesApi.list(),
+    staleTime: 5 * 60_000,
   })
 
   const { data: strategies = [] } = useQuery({
@@ -267,6 +273,25 @@ export default function SimulationsNewPage() {
   const resolvedGroupId = outletGroupId === null && defaultGroupId ? defaultGroupId : outletGroupId
 
   const selectedStrategy = strategies.find((s) => s.id === strategyId) ?? null
+
+  // Resolve strategy engine slug and filter workers by model support
+  const neededSlug = useMemo(() => {
+    if (!selectedStrategy?.prediction_engine_id) return null
+    return engines.find((e) => e.id === selectedStrategy.prediction_engine_id)?.slug ?? null
+  }, [selectedStrategy, engines])
+
+  const workers = useMemo(() => {
+    return allWorkers.filter((w) => {
+      if (w.models.length === 0) return true
+      if (!neededSlug) return true
+      return w.models.includes(neededSlug)
+    })
+  }, [allWorkers, neededSlug])
+
+  // Clear worker selection if it was filtered out
+  useEffect(() => {
+    if (worker && !workers.some((w) => w.name === worker)) setWorker(null)
+  }, [worker, workers])
 
   const selectedTypeLabel = t(SIMULATION_TYPES.find((s) => s.value === simType)!.labelKey as Parameters<typeof t>[0])
 
@@ -479,12 +504,12 @@ export default function SimulationsNewPage() {
                 </DropdownMenuItem>
                 {workers.map((w) => (
                   <DropdownMenuItem
-                    key={w}
-                    onClick={() => setWorker(w)}
+                    key={w.name}
+                    onClick={() => setWorker(w.name)}
                     className="flex items-center justify-between"
                   >
-                    <span>{w}</span>
-                    {worker === w && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                    <span>{w.name}</span>
+                    {worker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

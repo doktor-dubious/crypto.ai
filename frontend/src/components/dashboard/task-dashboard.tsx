@@ -44,10 +44,12 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
   const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
   const completedRoute = task.type === "prediction"
     ? `/predictions/completed?task_id=${task.task_id}`
-    : `/simulations/completed?task_id=${task.task_id}`
+    : task.type === "simulation"
+    ? `/simulations/completed?task_id=${task.task_id}`
+    : null
 
   function handleClick() {
-    if (isFinished) router.push(completedRoute)
+    if (isFinished && completedRoute) router.push(completedRoute)
   }
 
   const [confirmOpen, setConfirmOpen] = useState(false)

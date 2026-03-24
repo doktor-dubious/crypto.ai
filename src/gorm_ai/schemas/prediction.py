@@ -277,6 +277,9 @@ class PredictionEngineResponse(BaseModel):
     name: str
     description: str | None
     notes: str | None
+    finetuned_model_path: str | None = None
+    finetune_sync_every: int | None = None
+    finetune_sync_target: str | None = None
 
 
 class PredictionEngineCreate(BaseModel):
@@ -294,6 +297,9 @@ class PredictionEngineUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     notes: str | None = None
+    finetuned_model_path: str | None = None
+    finetune_sync_every: int | None = None
+    finetune_sync_target: str | None = None
 
 
 class PredictionStrategyResponse(BaseModel):

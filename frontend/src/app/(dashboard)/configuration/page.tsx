@@ -586,20 +586,28 @@ function WorkersTab({
 function FineTuningTab({
   draft,
   setDraft,
+  isGorm,
+  gormDefaults,
   t,
 }: {
   draft: Record<string, unknown>
   setDraft: (fn: (d: Record<string, unknown>) => Record<string, unknown>) => void
+  isGorm: boolean
+  gormDefaults?: { finetuned_model_path?: string; finetune_sync_every?: number }
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
   const set = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }))
+
+  const pathPlaceholder = gormDefaults?.finetuned_model_path || "models/timesfm_finetuned"
+  const syncPlaceholder = gormDefaults?.finetune_sync_every ?? 5
 
   return (
     <>
       <FieldRow label={t("fieldFinetunedModelPath")} info={t("fieldFinetunedModelPathInfo")}>
         <Input
-          value={(draft.finetuned_model_path as string) ?? "models/timesfm_finetuned"}
-          onChange={(e) => set("finetuned_model_path", e.target.value)}
+          value={(draft.finetuned_model_path as string) ?? (isGorm ? pathPlaceholder : "")}
+          onChange={(e) => set("finetuned_model_path", e.target.value || (isGorm ? null : null))}
+          placeholder={isGorm ? undefined : pathPlaceholder}
         />
       </FieldRow>
 
@@ -609,11 +617,16 @@ function FineTuningTab({
           min={1}
           max={100}
           step={1}
-          value={draft.finetune_sync_every != null ? String(draft.finetune_sync_every) : "5"}
+          value={draft.finetune_sync_every != null ? String(draft.finetune_sync_every) : (isGorm ? String(syncPlaceholder) : "")}
           onChange={(e) => {
             const v = e.target.value
-            set("finetune_sync_every", v === "" ? 5 : Math.max(1, Math.min(100, parseInt(v, 10) || 5)))
+            if (v === "") {
+              set("finetune_sync_every", isGorm ? syncPlaceholder : null)
+            } else {
+              set("finetune_sync_every", Math.max(1, Math.min(100, parseInt(v, 10) || syncPlaceholder)))
+            }
           }}
+          placeholder={isGorm ? undefined : String(syncPlaceholder)}
           className="h-8 text-sm max-w-[140px]"
         />
       </FieldRow>
@@ -896,7 +909,7 @@ export default function ConfigurationPage() {
                   <WorkersTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
                 <TabsContent value="finetuning" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
-                  <FineTuningTab draft={gormDraft} setDraft={setGormDraft} t={t} />
+                  <FineTuningTab draft={gormDraft} setDraft={setGormDraft} isGorm={true} t={t} />
                 </TabsContent>
               </>
             )

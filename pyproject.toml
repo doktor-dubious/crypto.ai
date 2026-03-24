@@ -42,6 +42,17 @@ chronos = [
 moirai = [
     "uni2ts>=2.0.0",
 ]
+kairos = [
+    "kairos @ git+https://github.com/foundation-model-research/Kairos",
+]
+tirex = [
+    "tirex-ts",
+]
+# FlowState (IBM): requires transformers<4.51 via granite-tsfm, which conflicts
+# with the base transformers>=4.57.6 needed by YingLong. Cannot coexist.
+# flowstate = [
+#     "granite-tsfm @ git+https://github.com/ibm-granite/granite-tsfm@gift-flowstate",
+# ]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -55,6 +66,7 @@ conflicts = [
     [
         { extra = "autogluon" },
         { extra = "moirai" },
+        { extra = "kairos" },
     ],
 ]
 

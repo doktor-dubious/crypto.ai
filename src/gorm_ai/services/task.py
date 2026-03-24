@@ -57,7 +57,10 @@ class TaskService:
         message: str | None = None,
     ) -> None:
         """Update progress (0-100) and optional message for a running task."""
-        values: dict = {"progress": progress}
+        values: dict = {
+            "progress": progress,
+            "updated_at": datetime.now(UTC),
+        }
         if message is not None:
             values["progress_message"] = message
         await self.session.execute(

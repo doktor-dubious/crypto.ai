@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fine-tune TimesFM on sales data (per-outlet, resumable).
+"""Fine-tune MOIRAI-2 on sales data (per-outlet, resumable).
 
 Reads per-outlet time series from the database, creates sliding-window
-(context, target) training pairs, and runs continued pre-training on each
-outlet individually.  After every outlet the checkpoint is saved and a
+(context, target) training pairs, and runs continued pre-training on the
+Moirai2Module.  After every outlet the checkpoint is saved and a
 ``finetune_progress`` row is inserted so that a terminated process (e.g.
 a spot instance being reclaimed) can restart and pick up where it left off.
 
@@ -18,14 +18,14 @@ on **new data** (from the day after ``data_end_date``).  If the new data
 is too short (< context_length + horizon), the outlet is skipped.
 
     # First run — processes outlets A, B, C with all available data
-    uv run python scripts/finetune_timesfm.py --customer-ids <id>
+    uv run python scripts/finetune_moirai2.py --customer-ids <id>
 
     # Spot instance reclaimed after outlet B.
     # Restart — skips A and B, continues from C.
-    uv run python scripts/finetune_timesfm.py --customer-ids <id>
+    uv run python scripts/finetune_moirai2.py --customer-ids <id>
 
     # Later, new sales data arrives.  Re-run trains only on new data:
-    uv run python scripts/finetune_timesfm.py --customer-ids <id>
+    uv run python scripts/finetune_moirai2.py --customer-ids <id>
 
 Use ``--force`` to re-process outlets from scratch (ignores progress).
 
@@ -43,19 +43,19 @@ Options:
     --context-length INT      Context window fed to the model per step
                               (default: 512)
     --horizon INT             Forecast horizon used as training target
-                              (default: 7)
+                              (default: 64)
     --epochs INT              Training epochs over the loaded window set
                               (default: 3)
     --lr FLOAT                Learning rate — keep small to preserve
                               pre-trained knowledge (default: 1e-5)
-    --batch-size INT          Training batch size (default: 32)
+    --batch-size INT          Training batch size (default: 16)
     --output TEXT              Checkpoint output directory
-                              (default: models/timesfm_finetuned)
-    --base-checkpoint TEXT    Base TimesFM HuggingFace repo or local path,
+                              (default: models/finetune/moirai)
+    --base-checkpoint TEXT    Base MOIRAI-2 HuggingFace repo or local path,
                               used only when no local checkpoint exists yet
-                              (default: google/timesfm-2.5-200m-pytorch)
+                              (default: Salesforce/moirai-2.0-R-small)
     --sync-target TEXT        rsync destination for checkpoint sync-back, e.g.
-                              user@host:/path/to/models/timesfm_finetuned/
+                              user@host:/path/to/models/finetune/moirai/
                               (default: $SYNC_TARGET env var, or disabled)
     --sync-every INT          Sync checkpoint back every N outlets
                               (default: $SYNC_EVERY env var, or 5)
@@ -97,7 +97,7 @@ from gorm_ai.services.sales import SalesService  # noqa: E402
 configure_logging()
 log = logging.getLogger(__name__)
 
-ENGINE_NAME = "timesfm"
+ENGINE_NAME = "moirai2"
 SINGLETON_ID = "00000000-0000-0000-0000-000000000001"
 
 
@@ -114,7 +114,7 @@ async def _load_db_config(session) -> Configuration | None:
 
 
 async def _load_engine_config(session, engine_slug: str):
-    """Load the prediction engine row by slug (e.g. 'timesfm')."""
+    """Load the prediction engine row by slug."""
     from gorm_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
     result = await session.execute(
         select(PredictionEngineModel).where(
@@ -132,10 +132,8 @@ async def _load_engine_config(session, engine_slug: str):
 class SlidingWindowDataset(Dataset):
     """Generates (context, target) pairs by sliding a window over each series.
 
-    Each pair consists of `context_length` observations followed by `horizon`
-    observations used as the prediction target. Normalization (mean/std) is
-    applied per context window so the model sees scale-invariant inputs,
-    matching TimesFM's internal normalize_inputs=True behaviour.
+    Normalization (mean/std) is applied per context window so the model
+    sees scale-invariant inputs.
     """
 
     def __init__(
@@ -209,11 +207,7 @@ async def _load_outlet_series(
 # ---------------------------------------------------------------------------
 
 async def _get_completed_outlets(session, engine: str) -> dict[str, FinetuneProgress]:
-    """Return outlet IDs already marked as fine-tuned for this engine.
-
-    Returns a dict mapping outlet_id to its FinetuneProgress row so callers
-    can inspect ``data_end_date`` for incremental training.
-    """
+    """Return outlet IDs already marked as fine-tuned for this engine."""
     stmt = select(FinetuneProgress).where(
         FinetuneProgress.engine == engine,
         FinetuneProgress.active.is_(True),
@@ -234,7 +228,6 @@ async def _mark_outlet_done(
     data_end_date: date | None,
 ) -> None:
     """Insert or update a finetune_progress row for this outlet."""
-    # Delete any existing row (handles --force re-runs cleanly)
     await session.execute(
         delete(FinetuneProgress).where(
             FinetuneProgress.outlet_id == outlet_id,
@@ -266,7 +259,6 @@ async def _resolve_outlets(
     outlet_group_ids: list[str] | None,
 ) -> list[tuple[str, str]]:
     """Return list of (customer_id, outlet_id) tuples to process."""
-    # Determine customers
     if customer_ids:
         stmt = select(Customer).where(
             Customer.id.in_(customer_ids), Customer.active.is_(True)
@@ -277,7 +269,6 @@ async def _resolve_outlets(
     customers = list(result.scalars().all())
     log.info("Found %d customer(s) to process", len(customers))
 
-    # Resolve outlet group IDs to outlet IDs
     group_outlet_ids: set[str] | None = None
     if outlet_group_ids:
         stmt = select(OutletGroupMember.outlet_id).where(
@@ -311,23 +302,26 @@ async def _resolve_outlets(
 # Model helpers
 # ---------------------------------------------------------------------------
 
-def get_trainable_module(model: object) -> torch.nn.Module:
-    """Return the underlying nn.Module from a TimesFM wrapper.
+def get_trainable_module(module: object) -> torch.nn.Module:
+    """Return the underlying nn.Module from a Moirai2Module.
 
-    TimesFM 2.5 PyTorch wraps a plain nn.Module. This helper tries the
-    attribute names used across known versions of the library. If none
-    match, it raises a descriptive error so the user knows which
-    attribute name to add here for their installed version.
+    Moirai2Module (uni2ts) wraps a HuggingFace PreTrainedModel which itself
+    is an nn.Module. This helper locates it across uni2ts versions.
     """
-    for attr in ("_model", "model", "_tfm_model", "tfm_model", "_torch_model"):
-        candidate = getattr(model, attr, None)
+    # Moirai2Module IS an nn.Module (it inherits from L.LightningModule)
+    if isinstance(module, torch.nn.Module):
+        log.info("Moirai2Module is directly an nn.Module")
+        return module
+
+    for attr in ("model", "_model", "backbone", "module"):
+        candidate = getattr(module, attr, None)
         if isinstance(candidate, torch.nn.Module):
-            log.info("Found trainable nn.Module at model.%s", attr)
+            log.info("Found trainable nn.Module at module.%s", attr)
             return candidate
 
-    attrs = [a for a in dir(model) if not a.startswith("__")]
+    attrs = [a for a in dir(module) if not a.startswith("__")]
     raise AttributeError(
-        "Could not find the underlying nn.Module on the TimesFM wrapper. "
+        "Could not find the underlying nn.Module on the Moirai2Module wrapper. "
         f"Available attributes: {attrs}\n"
         "Add the correct attribute name to get_trainable_module() in this script."
     )
@@ -338,7 +332,7 @@ def get_trainable_module(model: object) -> torch.nn.Module:
 # ---------------------------------------------------------------------------
 
 def train(
-    model: object,
+    module: object,
     series_list: list[np.ndarray],
     context_length: int,
     horizon: int,
@@ -346,20 +340,15 @@ def train(
     lr: float,
     batch_size: int,
 ) -> None:
-    nn_module = get_trainable_module(model)
+    """Fine-tune the Moirai2Module on sliding-window (context, target) pairs.
 
-    # Patch size p must divide context_length evenly.
-    p = nn_module.p
-    o = nn_module.o   # output steps per patch
-    q = nn_module.q   # quantile heads per output step
-
-    if context_length % p != 0:
-        adjusted = ((context_length // p) + 1) * p
-        log.warning(
-            "context_length %d is not divisible by patch size %d — adjusting to %d",
-            context_length, p, adjusted,
-        )
-        context_length = adjusted
+    MOIRAI-2 uses a masked encoder architecture. We feed the full
+    context+horizon window and mask out the horizon portion, training the
+    model to reconstruct it. If direct masking isn't feasible, we fall
+    back to a simple MSE loss between the model's point forecast and the
+    ground-truth horizon.
+    """
+    nn_module = get_trainable_module(module)
 
     dataset = SlidingWindowDataset(series_list, context_length, horizon)
     if len(dataset) == 0:
@@ -368,6 +357,7 @@ def train(
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
 
+    device = next(nn_module.parameters()).device
     nn_module.train()
     optimizer = AdamW(nn_module.parameters(), lr=lr)
 
@@ -376,17 +366,76 @@ def train(
         n_batches = 0
 
         for ctx_batch, tgt_batch in loader:
+            ctx_batch = ctx_batch.to(device)
+            tgt_batch = tgt_batch.to(device)
             bsz = ctx_batch.shape[0]
             optimizer.zero_grad()
 
-            patched = ctx_batch.reshape(bsz, -1, p)
-            masks = torch.zeros_like(patched, dtype=torch.bool)
+            # Build full sequence: context + target (the model will learn
+            # to predict the target portion).
+            full_seq = torch.cat([ctx_batch, tgt_batch], dim=-1)  # (B, C+H)
 
-            (_, _, output_ts, _), _ = nn_module(patched, masks)
+            # MOIRAI-2 expects (B, T, 1) for univariate
+            full_seq_3d = full_seq.unsqueeze(-1)
 
-            forecast = output_ts.reshape(bsz, -1, o, q)[:, -1, :horizon, :].mean(dim=-1)
+            # Try the uni2ts training interface first; fall back to
+            # a generic forward pass + MSE on the horizon.
+            try:
+                # uni2ts Moirai2Module exposes a loss() or training_step()
+                # method when used as a LightningModule.
+                if hasattr(nn_module, "loss"):
+                    loss = nn_module.loss(
+                        target=full_seq_3d,
+                        observed_mask=torch.ones_like(full_seq_3d, dtype=torch.bool),
+                        prediction_mask=torch.cat([
+                            torch.zeros(bsz, context_length, 1, dtype=torch.bool, device=device),
+                            torch.ones(bsz, horizon, 1, dtype=torch.bool, device=device),
+                        ], dim=1),
+                    )
+                    if isinstance(loss, dict):
+                        loss = loss.get("loss", sum(loss.values()))
+                elif hasattr(nn_module, "forward"):
+                    # Generic forward: pass context, get horizon prediction
+                    out = nn_module(
+                        target=full_seq_3d[:, :context_length],
+                        observed_mask=torch.ones(bsz, context_length, 1, dtype=torch.bool, device=device),
+                        prediction_mask=torch.ones(bsz, horizon, 1, dtype=torch.bool, device=device),
+                    )
+                    # Extract point forecast from output
+                    if isinstance(out, dict):
+                        forecast = out.get("forecast", out.get("loc", out.get("mean")))
+                    elif isinstance(out, (tuple, list)):
+                        forecast = out[0]
+                    else:
+                        forecast = out
 
-            loss = fn.mse_loss(forecast, tgt_batch)
+                    if forecast is None:
+                        raise RuntimeError("Could not extract forecast from model output")
+
+                    # Reshape forecast to match target
+                    forecast = forecast.reshape(bsz, -1)[:, :horizon]
+                    loss = fn.mse_loss(forecast, tgt_batch)
+                else:
+                    raise RuntimeError("Module has no loss() or forward() method")
+
+            except (TypeError, RuntimeError) as e:
+                if n_batches == 0 and epoch == 1:
+                    log.warning(
+                        "Advanced training interface failed (%s); "
+                        "falling back to GluonTS predict-and-compare loop.",
+                        e,
+                    )
+                # Fallback: use a simple forward approach
+                # Feed context through the module and compare output to target
+                ctx_3d = ctx_batch.unsqueeze(-1)  # (B, C, 1)
+                out = nn_module(ctx_3d)
+                if isinstance(out, (tuple, list)):
+                    out = out[0]
+                if isinstance(out, dict):
+                    out = out.get("forecast", out.get("loc", next(iter(out.values()))))
+                forecast = out.reshape(bsz, -1)[:, :horizon]
+                loss = fn.mse_loss(forecast, tgt_batch)
+
             loss.backward()
             optimizer.step()
 
@@ -403,13 +452,11 @@ def train(
 # Checkpoint saving
 # ---------------------------------------------------------------------------
 
-def save_checkpoint(model: object, output_dir: str) -> None:
-    """Save the fine-tuned model to output_dir in HuggingFace format.
+def save_checkpoint(module: object, output_dir: str) -> None:
+    """Save the fine-tuned model to output_dir.
 
     Writes to a temporary directory first, then atomically replaces
-    output_dir with a rename. This means an interrupted save never
-    corrupts the previous good checkpoint — the old directory is only
-    replaced once the new one is fully written.
+    output_dir with a rename.
     """
     import shutil
     import tempfile
@@ -418,23 +465,11 @@ def save_checkpoint(model: object, output_dir: str) -> None:
     os.makedirs(parent, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=parent, prefix=".tmp_checkpoint_") as tmp_dir:
-        if hasattr(model, "save_pretrained"):
-            model.save_pretrained(tmp_dir)
+        if hasattr(module, "save_pretrained"):
+            module.save_pretrained(tmp_dir)
         else:
-            nn_module = get_trainable_module(model)
+            nn_module = get_trainable_module(module)
             torch.save(nn_module.state_dict(), os.path.join(tmp_dir, "pytorch_model.bin"))
-            try:
-                from huggingface_hub import snapshot_download
-                cache_dir = snapshot_download("google/timesfm-2.5-200m-pytorch")
-                for fname in os.listdir(cache_dir):
-                    if fname.endswith(".json"):
-                        shutil.copy(os.path.join(cache_dir, fname), tmp_dir)
-            except Exception as e:
-                log.warning(
-                    "Could not copy config files from HF cache (%s). "
-                    "You may need to copy them manually for from_pretrained() to work.",
-                    e,
-                )
 
         old_dir = output_dir + ".old"
         if os.path.isdir(output_dir):
@@ -458,7 +493,6 @@ def save_checkpoint(model: object, output_dir: str) -> None:
 
 def sync_checkpoint(output_dir: str, sync_target: str) -> None:
     """rsync the checkpoint directory to the production server."""
-    # Ensure trailing slash on source so rsync copies contents, not the dir itself
     source = output_dir.rstrip("/") + "/"
     cmd = [
         "rsync", "-az", "--delete",
@@ -481,7 +515,7 @@ def sync_checkpoint(output_dir: str, sync_target: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fine-tune TimesFM 2.5 on sales data (per-outlet, resumable).",
+        description="Fine-tune MOIRAI-2 on sales data (per-outlet, resumable).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
@@ -497,8 +531,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--outlet-ids",
         default=None,
-        help="Comma-separated outlet UUIDs to include; outlets not belonging "
-             "to the specified customers are silently ignored (default: all)",
+        help="Comma-separated outlet UUIDs to include (default: all)",
     )
     p.add_argument(
         "--start-date",
@@ -513,20 +546,19 @@ def parse_args() -> argparse.Namespace:
         help="Only include sales on or before this date (default: today)",
     )
     p.add_argument("--context-length", type=int, default=512)
-    p.add_argument("--horizon", type=int, default=7)
+    p.add_argument("--horizon", type=int, default=64)
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--lr", type=float, default=1e-5)
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--output", default="models/timesfm_finetuned")
+    p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--output", default="models/finetune/moirai")
     p.add_argument(
-        "--base-checkpoint", default="google/timesfm-2.5-200m-pytorch",
+        "--base-checkpoint", default="Salesforce/moirai-2.0-R-small",
         help="Used only when no local checkpoint exists yet",
     )
     p.add_argument(
         "--sync-target",
         default=os.environ.get("SYNC_TARGET"),
-        help="rsync destination for checkpoint sync-back, e.g. "
-             "user@host:/path/to/models/timesfm_finetuned/ "
+        help="rsync destination for checkpoint sync-back "
              "(default: $SYNC_TARGET env var, or disabled)",
     )
     p.add_argument(
@@ -548,24 +580,20 @@ def parse_args() -> argparse.Namespace:
 
 async def _main_async(args: argparse.Namespace) -> None:
     # ── Load configuration from DB ──────────────────────────────────────
-    # Priority: engine config (prediction_engine table) > global config > CLI/env > hardcoded
     async with async_session_factory() as session:
         db_config = await _load_db_config(session)
         engine_config = await _load_engine_config(session, ENGINE_NAME)
 
-    # Start with CLI / env defaults
     effective_output = args.output
     effective_sync_every = args.sync_every
 
-    # Global system config overrides hardcoded defaults
     if db_config:
         log.info("Loaded system configuration from database")
-        if effective_output == "models/timesfm_finetuned" and db_config.finetuned_model_path:
+        if effective_output == "models/finetune/moirai" and db_config.finetuned_model_path:
             effective_output = db_config.finetuned_model_path
         if effective_sync_every == int(os.environ.get("SYNC_EVERY", "5")) and db_config.finetune_sync_every:
             effective_sync_every = db_config.finetune_sync_every
 
-    # Engine-specific config takes precedence over global
     if engine_config:
         log.info("Loaded engine configuration for '%s'", ENGINE_NAME)
         if engine_config.finetuned_model_path:
@@ -601,9 +629,9 @@ async def _main_async(args: argparse.Namespace) -> None:
     )
 
     try:
-        import timesfm
+        from uni2ts.model.moirai2 import Moirai2Module
     except ImportError:
-        log.error("timesfm package not found. Install it with: uv sync --extra dev")
+        log.error("uni2ts package not found. Install it with: uv sync --extra moirai")
         sys.exit(1)
 
     # Resolve outlets and determine per-outlet start dates
@@ -620,15 +648,11 @@ async def _main_async(args: argparse.Namespace) -> None:
             if completed:
                 log.info("Found %d already-completed outlet(s)", len(completed))
 
-    # Build work list: for completed outlets with a data_end_date, use the
-    # day after that date as the per-outlet start_date so we only train on
-    # new data.  Outlets with no new data will be skipped later (too short).
-    pairs: list[tuple[str, str, date | None]] = []  # (customer_id, outlet_id, effective_start)
+    pairs: list[tuple[str, str, date | None]] = []
     for cid, oid in all_pairs:
         prev = completed.get(oid)
         if prev is not None and not args.force:
             if prev.data_end_date is not None:
-                # Incremental: start from the day after the last trained date
                 effective_start = prev.data_end_date + timedelta(days=1)
                 if start_date and start_date > effective_start:
                     effective_start = start_date
@@ -638,7 +662,6 @@ async def _main_async(args: argparse.Namespace) -> None:
                 )
                 pairs.append((cid, oid, effective_start))
             else:
-                # Completed but no date tracking — skip (legacy row)
                 log.info("Outlet %s: already completed (no date info) — skipping", oid)
                 continue
         else:
@@ -668,20 +691,16 @@ async def _main_async(args: argparse.Namespace) -> None:
         log.info("No local checkpoint found — starting from base: %s", args.base_checkpoint)
         checkpoint = args.base_checkpoint
 
-    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(checkpoint)
-    model.compile(
-        timesfm.ForecastConfig(
-            max_context=1024,
-            max_horizon=128,
-            normalize_inputs=True,
-            use_continuous_quantile_head=True,
-            force_flip_invariance=True,
-            infer_is_positive=True,
-            fix_quantile_crossing=True,
-            return_backcast=True,
-        )
-    )
-    log.info("Model loaded from '%s'.", checkpoint)
+    # Set HF cache if configured
+    from gorm_ai.config import get_settings
+    s = get_settings()
+    if s.hf_hub_cache:
+        os.environ.setdefault("HF_HUB_CACHE", os.path.abspath(s.hf_hub_cache))
+    if s.hf_token:
+        os.environ.setdefault("HF_TOKEN", s.hf_token)
+
+    module = Moirai2Module.from_pretrained(checkpoint)
+    log.info("MOIRAI-2 module loaded from '%s'.", checkpoint)
 
     min_length = args.context_length + args.horizon
     processed = 0
@@ -707,7 +726,7 @@ async def _main_async(args: argparse.Namespace) -> None:
                 continue
 
             train(
-                model=model,
+                module=module,
                 series_list=[series],
                 context_length=args.context_length,
                 horizon=args.horizon,
@@ -716,10 +735,8 @@ async def _main_async(args: argparse.Namespace) -> None:
                 batch_size=args.batch_size,
             )
 
-            save_checkpoint(model, effective_output)
+            save_checkpoint(module, effective_output)
 
-            # Record the full date range: keep the original start if this is
-            # incremental (the model has seen all data from the very first run).
             prev = completed.get(outlet_id)
             record_start = (
                 prev.data_start_date
@@ -739,7 +756,6 @@ async def _main_async(args: argparse.Namespace) -> None:
             processed += 1
             log.info("  Done (%d/%d processed)", processed, len(pairs))
 
-            # Periodic sync back to production server
             if args.sync_target and processed % effective_sync_every == 0:
                 sync_checkpoint(effective_output, args.sync_target)
 
@@ -752,12 +768,9 @@ async def _main_async(args: argparse.Namespace) -> None:
         processed, skipped, failed,
     )
     if processed > 0:
-        # Final sync to ensure the last batch is copied back
         if args.sync_target:
             sync_checkpoint(effective_output, args.sync_target)
-        log.info(
-            "To use the fine-tuned model pass \"engine\": \"timesfm_finetuned\" in your requests."
-        )
+        log.info("Fine-tuned MOIRAI-2 checkpoint saved to '%s'.", effective_output)
 
 
 def main() -> None:

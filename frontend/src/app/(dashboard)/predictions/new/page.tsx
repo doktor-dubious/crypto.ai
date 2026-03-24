@@ -12,7 +12,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { predictionStrategiesApi, padsApi, predictionsApi, tasksApi } from "@/lib/api"
+import { predictionStrategiesApi, predictionEnginesApi, padsApi, predictionsApi, tasksApi } from "@/lib/api"
 import { toast } from "sonner"
 import {
   PredictionCalendar,
@@ -67,11 +67,53 @@ export default function NewPredictionPage() {
     enabled: !!activeCustomer,
   })
 
-  const { data: workers = [] } = useQuery({
+  const { data: allWorkers = [] } = useQuery({
     queryKey: ["workers"],
     queryFn: () => tasksApi.listWorkers(),
     staleTime: 30_000,
   })
+
+  const { data: engines = [] } = useQuery({
+    queryKey: ["prediction-engines"],
+    queryFn: () => predictionEnginesApi.list(),
+    staleTime: 5 * 60_000,
+  })
+
+  // Build engine id → slug map for filtering workers by model support
+  const engineSlugMap = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const e of engines) m[e.id] = e.slug
+    return m
+  }, [engines])
+
+  // Collect engine slugs needed by current assignments
+  const neededSlugs = useMemo(() => {
+    const slugs = new Set<string>()
+    for (const a of assignments) {
+      const strat = strategies.find((s) => s.id === a.strategyId)
+      if (strat?.prediction_engine_id) {
+        const slug = engineSlugMap[strat.prediction_engine_id]
+        if (slug) slugs.add(slug)
+      }
+    }
+    return slugs
+  }, [assignments, strategies, engineSlugMap])
+
+  // Filter workers: show only those that support all needed engines
+  const workers = useMemo(() => {
+    return allWorkers.filter((w) => {
+      if (w.models.length === 0) return true // no restriction = supports all
+      for (const slug of neededSlugs) {
+        if (!w.models.includes(slug)) return false
+      }
+      return true
+    })
+  }, [allWorkers, neededSlugs])
+
+  // Clear worker selection if it was filtered out
+  useEffect(() => {
+    if (worker && !workers.some((w) => w.name === worker)) setWorker(null)
+  }, [worker, workers])
 
   // ─── Persist state to localStorage ─────────────────────────────────────────
 
@@ -197,9 +239,9 @@ export default function NewPredictionPage() {
                     {worker === null && <Check className="h-3 w-3 ml-2" />}
                   </DropdownMenuItem>
                   {workers.map((w) => (
-                    <DropdownMenuItem key={w} onClick={() => setWorker(w)} className="flex items-center justify-between text-xs">
-                      <span>{w}</span>
-                      {worker === w && <Check className="h-3 w-3 ml-2" />}
+                    <DropdownMenuItem key={w.name} onClick={() => setWorker(w.name)} className="flex items-center justify-between text-xs">
+                      <span>{w.name}</span>
+                      {worker === w.name && <Check className="h-3 w-3 ml-2" />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
