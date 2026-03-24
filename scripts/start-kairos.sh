@@ -36,7 +36,7 @@ export WORKER_NAME="RunPod Kairos"
 export WORKER_MODELS=kairos
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/kairos/
 export SYNC_EVERY=10
-export HF_HUB_CACHE=/models/huggingface
+export HF_HUB_CACHE=/workspace/models/huggingface
 export FINETUNED_MODEL_PATH=/models/finetune/kairos
 
 cd /workspace/gormai

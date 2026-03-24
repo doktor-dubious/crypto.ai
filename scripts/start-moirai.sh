@@ -36,7 +36,7 @@ export WORKER_NAME="RunPod Moirai"
 export WORKER_MODELS=moirai2
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/moirai/
 export SYNC_EVERY=10
-export HF_HUB_CACHE=/models/huggingface
+export HF_HUB_CACHE=/workspace/models/huggingface
 export FINETUNED_MODEL_PATH=/models/finetune/moirai
 
 cd /workspace/gormai

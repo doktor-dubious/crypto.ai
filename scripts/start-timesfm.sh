@@ -36,7 +36,7 @@ export WORKER_NAME="RunPod TimesFM"
 export WORKER_MODELS=timesfm
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/timesfm/
 export SYNC_EVERY=10
-export HF_HUB_CACHE=/models/huggingface
+export HF_HUB_CACHE=/workspace/models/huggingface
 export FINETUNED_MODEL_PATH=/models/finetune/timesfm
 
 cd /workspace/gormai

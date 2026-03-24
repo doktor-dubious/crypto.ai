@@ -36,7 +36,7 @@ export WORKER_NAME="RunPod FlowState"
 export WORKER_MODELS=flowstate
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/flowstate/
 export SYNC_EVERY=10
-export HF_HUB_CACHE=/models/huggingface
+export HF_HUB_CACHE=/workspace/models/huggingface
 export FINETUNED_MODEL_PATH=/models/finetune/flowstate
 
 cd /workspace/gormai
