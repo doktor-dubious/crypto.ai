@@ -347,6 +347,7 @@ export interface FinetuneRequest {
   epochs?: number
   learning_rate?: number
   batch_size?: number
+  early_stopping_patience?: number
   worker?: string | null
 }
 

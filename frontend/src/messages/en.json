@@ -1307,6 +1307,8 @@
     "finetuneHorizonInfo": "Number of future time steps the model predicts in a single forward pass. Should match your typical prediction window.",
     "finetuneEpochs": "Epochs",
     "finetuneEpochsInfo": "Number of complete passes through the training data. More epochs can improve accuracy but risk overfitting on small datasets.",
+    "finetuneEarlyStoppingPatience": "Early Stopping Patience",
+    "finetuneEarlyStoppingPatienceInfo": "Stop training an outlet when loss hasn't improved for this many epochs. Set to 0 to disable. A value of 5-10 can save significant time without sacrificing quality.",
     "finetuneLearningRate": "Learning Rate",
     "finetuneLearningRateInfo": "Step size for gradient updates during training. Lower values train more slowly but produce more stable results. Typical range: 1e-5 to 1e-3.",
     "finetuneBatchSize": "Batch Size",

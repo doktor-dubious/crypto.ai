@@ -151,6 +151,7 @@ export default function AIModelsPage() {
   const [ftContextLength, setFtContextLength] = useState(() => loadJson<number>("ftContextLength", 512))
   const [ftHorizon, setFtHorizon] = useState(() => loadJson<number>("ftHorizon", 64))
   const [ftEpochs, setFtEpochs] = useState(() => loadJson<number>("ftEpochs", 50))
+  const [ftEarlyStoppingPatience, setFtEarlyStoppingPatience] = useState(() => loadJson<number>("ftEarlyStoppingPatience", 0))
   const [ftLearningRate, setFtLearningRate] = useState(() => loadJson<number>("ftLearningRate", 0.001))
   const [ftBatchSize, setFtBatchSize] = useState(() => loadJson<number>("ftBatchSize", 32))
   const [ftWorker, setFtWorker] = useState<string | null>(() => loadJson<string | null>("ftWorker", null))
@@ -224,6 +225,7 @@ export default function AIModelsPage() {
       context_length: ftContextLength,
       horizon: ftHorizon,
       epochs: ftEpochs,
+      early_stopping_patience: ftEarlyStoppingPatience,
       learning_rate: ftLearningRate,
       batch_size: ftBatchSize,
       worker: ftWorker,
@@ -245,6 +247,7 @@ export default function AIModelsPage() {
   useEffect(() => { saveJson("ftContextLength", ftContextLength) }, [ftContextLength])
   useEffect(() => { saveJson("ftHorizon", ftHorizon) }, [ftHorizon])
   useEffect(() => { saveJson("ftEpochs", ftEpochs) }, [ftEpochs])
+  useEffect(() => { saveJson("ftEarlyStoppingPatience", ftEarlyStoppingPatience) }, [ftEarlyStoppingPatience])
   useEffect(() => { saveJson("ftLearningRate", ftLearningRate) }, [ftLearningRate])
   useEffect(() => { saveJson("ftBatchSize", ftBatchSize) }, [ftBatchSize])
   useEffect(() => { saveJson("ftWorker", ftWorker) }, [ftWorker])
@@ -1021,6 +1024,7 @@ export default function AIModelsPage() {
                           { key: "finetuneContextLength", value: ftContextLength, set: (v: number) => setFtContextLength(v), type: "int" },
                           { key: "finetuneHorizon", value: ftHorizon, set: (v: number) => setFtHorizon(v), type: "int" },
                           { key: "finetuneEpochs", value: ftEpochs, set: (v: number) => setFtEpochs(v), type: "int" },
+                          { key: "finetuneEarlyStoppingPatience", value: ftEarlyStoppingPatience, set: (v: number) => setFtEarlyStoppingPatience(v), type: "int" },
                           { key: "finetuneLearningRate", value: ftLearningRate, set: (v: number) => setFtLearningRate(v), type: "float" },
                           { key: "finetuneBatchSize", value: ftBatchSize, set: (v: number) => setFtBatchSize(v), type: "int" },
                         ] as const).map(({ key, value, set, type }) => (

@@ -29,6 +29,7 @@ class FinetuneRequest(BaseModel):
     epochs: int = 50
     learning_rate: float = 0.001
     batch_size: int = 32
+    early_stopping_patience: int = 0
     worker: str | None = None
 
 

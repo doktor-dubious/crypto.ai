@@ -106,6 +106,7 @@ class FinetuneService:
         epochs = request_data.get("epochs", 50)
         learning_rate = request_data.get("learning_rate", 0.001)
         batch_size = request_data.get("batch_size", 32)
+        early_stopping_patience = request_data.get("early_stopping_patience", 0)
 
         start_date = date.fromisoformat(start_date_str) if start_date_str else None
         end_date = date.fromisoformat(end_date_str) if end_date_str else date.today()
@@ -198,6 +199,7 @@ class FinetuneService:
             on_progress=on_progress,
             sync_target=sync_target,
             sync_every=sync_every,
+            early_stopping_patience=early_stopping_patience,
         )
 
         # ── Record progress for each outlet ──────────────────────────────

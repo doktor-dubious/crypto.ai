@@ -48,7 +48,7 @@ def _get_trainable_module(model):
     raise AttributeError("Could not find nn.Module on TimesFM wrapper")
 
 
-def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr, batch_size):
+def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr, batch_size, patience: int = 0):
     nn_module = _get_trainable_module(model)
     device = next(nn_module.parameters()).device
     p = nn_module.p
@@ -65,6 +65,9 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     nn_module.train()
     optimizer = AdamW(nn_module.parameters(), lr=lr)
+
+    best_loss = float("inf")
+    stale = 0
 
     for epoch in range(1, epochs + 1):
         epoch_loss = 0.0
@@ -83,7 +86,19 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
             optimizer.step()
             epoch_loss += loss.item()
             n += 1
-        logger.info("  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, epoch_loss / max(n, 1))
+        avg_loss = epoch_loss / max(n, 1)
+        logger.info("  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, avg_loss)
+
+        # Early stopping: stop when loss hasn't improved for `patience` epochs
+        if patience > 0:
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                stale = 0
+            else:
+                stale += 1
+                if stale >= patience:
+                    logger.info("  Early stopping at epoch %d (no improvement for %d epochs)", epoch, patience)
+                    break
 
     nn_module.eval()
     return True
@@ -143,6 +158,7 @@ async def run_finetune(
     on_progress: Callable[[int, str | None], Awaitable[None]] | None = None,
     sync_target: str | None = None,
     sync_every: int = 5,
+    early_stopping_patience: int = 0,
 ) -> None:
     """Fine-tune TimesFM on the provided outlet series."""
     import timesfm
@@ -179,7 +195,7 @@ async def run_finetune(
 
         logger.info("  Training on outlet %s (%d points)", outlet_id, len(series))
         trained = await asyncio.get_event_loop().run_in_executor(
-            None, _train_outlet, model, series, context_length, horizon, epochs, learning_rate, batch_size,
+            None, _train_outlet, model, series, context_length, horizon, epochs, learning_rate, batch_size, early_stopping_patience,
         )
         if trained:
             await asyncio.get_event_loop().run_in_executor(None, _save_checkpoint, model, output_dir)

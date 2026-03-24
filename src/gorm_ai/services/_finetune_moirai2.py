@@ -179,6 +179,7 @@ async def run_finetune(
     on_progress: Callable[[int, str | None], Awaitable[None]] | None = None,
     sync_target: str | None = None,
     sync_every: int = 5,
+    early_stopping_patience: int = 0,
 ) -> None:
     """Fine-tune MOIRAI-2 on the provided outlet series."""
     from uni2ts.model.moirai2 import Moirai2Module
