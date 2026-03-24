@@ -163,12 +163,19 @@ async def run_finetune(
 
     total = len(outlet_series)
     processed = 0
+    idx = 0
 
     for outlet_id, values in outlet_series.items():
+        idx += 1
         series = np.array(values, dtype=np.float32)
         if len(series) < context_length + horizon:
             logger.info("  Outlet %s: too short (%d) — skipping", outlet_id, len(series))
             continue
+
+        # Report progress before training so ETA tracks per-outlet, not just completions
+        if on_progress:
+            pct = 30 + int(60 * ((idx - 1) / max(total, 1)))
+            await on_progress(pct, f"Training outlet {idx}/{total}")
 
         logger.info("  Training on outlet %s (%d points)", outlet_id, len(series))
         trained = await asyncio.get_event_loop().run_in_executor(
@@ -180,7 +187,7 @@ async def run_finetune(
             if sync_target and processed % sync_every == 0:
                 _sync_checkpoint(output_dir, sync_target)
 
-        pct = 30 + int(60 * (processed / max(total, 1)))
+        pct = 30 + int(60 * (idx / max(total, 1)))
         if on_progress:
             await on_progress(pct, f"Trained {processed}/{total} outlets")
 
