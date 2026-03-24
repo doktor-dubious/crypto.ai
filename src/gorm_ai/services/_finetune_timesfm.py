@@ -50,6 +50,7 @@ def _get_trainable_module(model):
 
 def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr, batch_size):
     nn_module = _get_trainable_module(model)
+    device = next(nn_module.parameters()).device
     p = nn_module.p
     o = nn_module.o
     q = nn_module.q
@@ -69,6 +70,8 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
         epoch_loss = 0.0
         n = 0
         for ctx_batch, tgt_batch in loader:
+            ctx_batch = ctx_batch.to(device)
+            tgt_batch = tgt_batch.to(device)
             bsz = ctx_batch.shape[0]
             optimizer.zero_grad()
             patched = ctx_batch.reshape(bsz, -1, p)
