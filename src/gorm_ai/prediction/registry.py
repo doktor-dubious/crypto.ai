@@ -97,6 +97,46 @@ class EngineRegistry:
         except ImportError:
             pass  # uni2ts not available
 
+        # Register direct Toto engine (Datadog, no AutoGluon wrapper)
+        try:
+            from gorm_ai.prediction.engines.toto_direct_engine import TotoDirectEngine
+
+            self.register(PredictionEngineEnum.TOTO, TotoDirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
+        # Register YingLong engine (Alibaba)
+        try:
+            from gorm_ai.prediction.engines.yinglong_engine import YingLongEngine
+
+            self.register(PredictionEngineEnum.YINGLONG, YingLongEngine)
+        except ImportError:
+            pass  # transformers not available
+
+        # Register Kairos engine (ShanghaiTech)
+        try:
+            from gorm_ai.prediction.engines.kairos_engine import KairosEngine
+
+            self.register(PredictionEngineEnum.KAIROS, KairosEngine)
+        except ImportError:
+            pass  # tsfm (Kairos) not available
+
+        # Register TiRex engine (NX-AI)
+        try:
+            from gorm_ai.prediction.engines.tirex_engine import TiRexEngine
+
+            self.register(PredictionEngineEnum.TIREX, TiRexEngine)
+        except ImportError:
+            pass  # tirex-ts not available
+
+        # Register FlowState engine (IBM Research)
+        try:
+            from gorm_ai.prediction.engines.flowstate_engine import FlowStateEngine
+
+            self.register(PredictionEngineEnum.FLOWSTATE, FlowStateEngine)
+        except ImportError:
+            pass  # tsfm_public not available
+
 
     def register(
         self,

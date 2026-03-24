@@ -1,8 +1,9 @@
 """Fine-tune progress tracking model."""
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,3 +38,5 @@ class FinetuneProgress(Base):
     context_length: Mapped[int] = mapped_column(Integer)
     horizon: Mapped[int] = mapped_column(Integer)
     epochs: Mapped[int] = mapped_column(Integer)
+    data_start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    data_end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

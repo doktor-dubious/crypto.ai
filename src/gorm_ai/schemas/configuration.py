@@ -44,6 +44,8 @@ class ConfigurationUpdate(BaseModel):
     simultaneous_tasks: int | None = None
     periodic_check_workers: int | None = None
     auto_restart_workers: bool | None = None
+    finetuned_model_path: str | None = None
+    finetune_sync_every: int | None = None
 
 
 class ConfigurationResponse(BaseModel):
@@ -91,3 +93,5 @@ class ConfigurationResponse(BaseModel):
     simultaneous_tasks: int = 1
     periodic_check_workers: int = 2
     auto_restart_workers: bool = True
+    finetuned_model_path: str = "models/timesfm_finetuned"
+    finetune_sync_every: int = 5

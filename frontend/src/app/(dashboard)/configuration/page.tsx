@@ -583,6 +583,44 @@ function WorkersTab({
   )
 }
 
+function FineTuningTab({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: Record<string, unknown>
+  setDraft: (fn: (d: Record<string, unknown>) => Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations<"configuration">>
+}) {
+  const set = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }))
+
+  return (
+    <>
+      <FieldRow label={t("fieldFinetunedModelPath")} info={t("fieldFinetunedModelPathInfo")}>
+        <Input
+          value={(draft.finetuned_model_path as string) ?? "models/timesfm_finetuned"}
+          onChange={(e) => set("finetuned_model_path", e.target.value)}
+        />
+      </FieldRow>
+
+      <FieldRow label={t("fieldFinetuneSyncEvery")} info={t("fieldFinetuneSyncEveryInfo")}>
+        <Input
+          type="number"
+          min={1}
+          max={100}
+          step={1}
+          value={draft.finetune_sync_every != null ? String(draft.finetune_sync_every) : "5"}
+          onChange={(e) => {
+            const v = e.target.value
+            set("finetune_sync_every", v === "" ? 5 : Math.max(1, Math.min(100, parseInt(v, 10) || 5)))
+          }}
+          className="h-8 text-sm max-w-[140px]"
+        />
+      </FieldRow>
+    </>
+  )
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
@@ -837,6 +875,7 @@ export default function ConfigurationPage() {
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
                 { value: "workers", label: t("tabWorkers") },
+                { value: "finetuning", label: t("tabFineTuning") },
               ],
               <>
                 <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -855,6 +894,9 @@ export default function ConfigurationPage() {
                 </TabsContent>
                 <TabsContent value="workers" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WorkersTab draft={gormDraft} setDraft={setGormDraft} t={t} />
+                </TabsContent>
+                <TabsContent value="finetuning" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <FineTuningTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
               </>
             )

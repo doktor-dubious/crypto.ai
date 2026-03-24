@@ -671,6 +671,8 @@ class PredictionService:
         import math
 
         def _round(v: float) -> int:
+            if math.isnan(v):
+                return 1
             if rounding == 2:
                 return max(1, math.ceil(v))
             if rounding == 3:

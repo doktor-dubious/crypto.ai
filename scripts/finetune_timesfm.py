@@ -10,17 +10,24 @@ a spot instance being reclaimed) can restart and pick up where it left off.
 Incremental fine-tuning
 -----------------------
 The script automatically resumes from the output checkpoint when it
-already exists, **and** skips outlets that already have a
-``finetune_progress`` record for this engine.
+already exists, **and** tracks each outlet's trained date range in the
+``finetune_progress`` table (``data_start_date`` / ``data_end_date``).
 
-    # First run — processes outlets A, B, C, …
+On re-run, outlets that were previously fine-tuned will only be trained
+on **new data** (from the day after ``data_end_date``).  If the new data
+is too short (< context_length + horizon), the outlet is skipped.
+
+    # First run — processes outlets A, B, C with all available data
     uv run python scripts/finetune_timesfm.py --customer-ids <id>
 
     # Spot instance reclaimed after outlet B.
     # Restart — skips A and B, continues from C.
     uv run python scripts/finetune_timesfm.py --customer-ids <id>
 
-Use ``--force`` to re-process outlets that are already marked as done.
+    # Later, new sales data arrives.  Re-run trains only on new data:
+    uv run python scripts/finetune_timesfm.py --customer-ids <id>
+
+Use ``--force`` to re-process outlets from scratch (ignores progress).
 
 Options:
     --customer-ids TEXT       Comma-separated customer UUIDs to include
@@ -47,6 +54,11 @@ Options:
     --base-checkpoint TEXT    Base TimesFM HuggingFace repo or local path,
                               used only when no local checkpoint exists yet
                               (default: google/timesfm-2.5-200m-pytorch)
+    --sync-target TEXT        rsync destination for checkpoint sync-back, e.g.
+                              user@host:/path/to/models/timesfm_finetuned/
+                              (default: $SYNC_TARGET env var, or disabled)
+    --sync-every INT          Sync checkpoint back every N outlets
+                              (default: $SYNC_EVERY env var, or 5)
     --force                   Re-process outlets already marked as done
 """
 
@@ -56,8 +68,9 @@ import argparse
 import asyncio
 import logging
 import os
+import subprocess
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
 import torch
@@ -73,6 +86,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sqlalchemy import delete, select  # noqa: E402
 
 from gorm_ai.database.connection import async_session_factory  # noqa: E402
+from gorm_ai.database.models.configuration import Configuration  # noqa: E402
 from gorm_ai.database.models.customer import Customer  # noqa: E402
 from gorm_ai.database.models.finetune_progress import FinetuneProgress  # noqa: E402
 from gorm_ai.database.models.outlet import Outlet  # noqa: E402
@@ -84,6 +98,19 @@ configure_logging()
 log = logging.getLogger(__name__)
 
 ENGINE_NAME = "timesfm"
+SINGLETON_ID = "00000000-0000-0000-0000-000000000001"
+
+
+# ---------------------------------------------------------------------------
+# Load system configuration from database
+# ---------------------------------------------------------------------------
+
+async def _load_db_config(session) -> Configuration | None:
+    """Load the system configuration singleton."""
+    result = await session.execute(
+        select(Configuration).where(Configuration.id == SINGLETON_ID)
+    )
+    return result.scalar_one_or_none()
 
 
 # ---------------------------------------------------------------------------
@@ -169,14 +196,18 @@ async def _load_outlet_series(
 # Progress helpers
 # ---------------------------------------------------------------------------
 
-async def _get_completed_outlet_ids(session, engine: str) -> set[str]:
-    """Return outlet IDs already marked as fine-tuned for this engine."""
-    stmt = select(FinetuneProgress.outlet_id).where(
+async def _get_completed_outlets(session, engine: str) -> dict[str, FinetuneProgress]:
+    """Return outlet IDs already marked as fine-tuned for this engine.
+
+    Returns a dict mapping outlet_id to its FinetuneProgress row so callers
+    can inspect ``data_end_date`` for incremental training.
+    """
+    stmt = select(FinetuneProgress).where(
         FinetuneProgress.engine == engine,
         FinetuneProgress.active.is_(True),
     )
     result = await session.execute(stmt)
-    return set(result.scalars().all())
+    return {row.outlet_id: row for row in result.scalars().all()}
 
 
 async def _mark_outlet_done(
@@ -187,6 +218,8 @@ async def _mark_outlet_done(
     context_length: int,
     horizon: int,
     epochs: int,
+    data_start_date: date | None,
+    data_end_date: date | None,
 ) -> None:
     """Insert or update a finetune_progress row for this outlet."""
     # Delete any existing row (handles --force re-runs cleanly)
@@ -204,6 +237,8 @@ async def _mark_outlet_done(
         context_length=context_length,
         horizon=horizon,
         epochs=epochs,
+        data_start_date=data_start_date,
+        data_end_date=data_end_date,
     ))
     await session.commit()
 
@@ -406,6 +441,29 @@ def save_checkpoint(model: object, output_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sync checkpoint back to production server
+# ---------------------------------------------------------------------------
+
+def sync_checkpoint(output_dir: str, sync_target: str) -> None:
+    """rsync the checkpoint directory to the production server."""
+    # Ensure trailing slash on source so rsync copies contents, not the dir itself
+    source = output_dir.rstrip("/") + "/"
+    cmd = [
+        "rsync", "-az", "--delete",
+        "-e", "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30",
+        source, sync_target,
+    ]
+    log.info("Syncing checkpoint to %s ...", sync_target)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+        log.info("Sync complete.")
+    except subprocess.TimeoutExpired:
+        log.warning("Sync timed out after 600s — will retry next interval.")
+    except subprocess.CalledProcessError as e:
+        log.warning("Sync failed (rc=%d): %s", e.returncode, e.stderr.strip())
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -453,6 +511,19 @@ def parse_args() -> argparse.Namespace:
         help="Used only when no local checkpoint exists yet",
     )
     p.add_argument(
+        "--sync-target",
+        default=os.environ.get("SYNC_TARGET"),
+        help="rsync destination for checkpoint sync-back, e.g. "
+             "user@host:/path/to/models/timesfm_finetuned/ "
+             "(default: $SYNC_TARGET env var, or disabled)",
+    )
+    p.add_argument(
+        "--sync-every",
+        type=int,
+        default=int(os.environ.get("SYNC_EVERY", "5")),
+        help="Sync checkpoint back every N outlets (default: $SYNC_EVERY or 5)",
+    )
+    p.add_argument(
         "--force", action="store_true",
         help="Re-process outlets already marked as fine-tuned",
     )
@@ -464,6 +535,22 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 async def _main_async(args: argparse.Namespace) -> None:
+    # ── Load system configuration from DB and apply as defaults ──────────
+    async with async_session_factory() as session:
+        db_config = await _load_db_config(session)
+
+    if db_config:
+        log.info("Loaded system configuration from database")
+        # CLI args / env vars override DB values; DB values override hardcoded defaults
+        if args.output == "models/timesfm_finetuned" and db_config.finetuned_model_path:
+            args.output = db_config.finetuned_model_path
+            log.info("  Model path (from DB): %s", args.output)
+        if args.sync_every == int(os.environ.get("SYNC_EVERY", "5")) and db_config.finetune_sync_every:
+            args.sync_every = db_config.finetune_sync_every
+            log.info("  Sync every (from DB): %d outlets", args.sync_every)
+    else:
+        log.warning("No system configuration found in database — using CLI defaults")
+
     customer_ids = (
         [c.strip() for c in args.customer_ids.split(",")]
         if args.customer_ids
@@ -519,21 +606,43 @@ async def _main_async(args: argparse.Namespace) -> None:
     )
     log.info("Model loaded from '%s'.", checkpoint)
 
-    # Resolve outlets and filter out already-completed ones
+    # Resolve outlets and determine per-outlet start dates
     async with async_session_factory() as session:
         all_pairs = await _resolve_outlets(
             session, customer_ids, outlet_ids_filter, outlet_group_ids,
         )
 
         if args.force:
-            completed: set[str] = set()
+            completed: dict[str, FinetuneProgress] = {}
             log.info("--force: will re-process all outlets")
         else:
-            completed = await _get_completed_outlet_ids(session, ENGINE_NAME)
+            completed = await _get_completed_outlets(session, ENGINE_NAME)
             if completed:
-                log.info("Skipping %d already-completed outlet(s)", len(completed))
+                log.info("Found %d already-completed outlet(s)", len(completed))
 
-    pairs = [(cid, oid) for cid, oid in all_pairs if oid not in completed]
+    # Build work list: for completed outlets with a data_end_date, use the
+    # day after that date as the per-outlet start_date so we only train on
+    # new data.  Outlets with no new data will be skipped later (too short).
+    pairs: list[tuple[str, str, date | None]] = []  # (customer_id, outlet_id, effective_start)
+    for cid, oid in all_pairs:
+        prev = completed.get(oid)
+        if prev is not None and not args.force:
+            if prev.data_end_date is not None:
+                # Incremental: start from the day after the last trained date
+                effective_start = prev.data_end_date + timedelta(days=1)
+                if start_date and start_date > effective_start:
+                    effective_start = start_date
+                log.info(
+                    "Outlet %s: incremental fine-tune from %s (previously trained up to %s)",
+                    oid, effective_start, prev.data_end_date,
+                )
+                pairs.append((cid, oid, effective_start))
+            else:
+                # Completed but no date tracking — skip (legacy row)
+                log.info("Outlet %s: already completed (no date info) — skipping", oid)
+                continue
+        else:
+            pairs.append((cid, oid, start_date))
 
     if not pairs:
         log.info("All outlets already processed. Use --force to re-run.")
@@ -552,15 +661,16 @@ async def _main_async(args: argparse.Namespace) -> None:
     skipped = 0
     failed = 0
 
-    for idx, (customer_id, outlet_id) in enumerate(pairs, 1):
+    for idx, (customer_id, outlet_id, effective_start) in enumerate(pairs, 1):
         log.info(
-            "[%d/%d] Outlet %s (customer %s)",
+            "[%d/%d] Outlet %s (customer %s) — data from %s",
             idx, len(pairs), outlet_id, customer_id,
+            effective_start or "beginning",
         )
         try:
             async with async_session_factory() as session:
                 series = await _load_outlet_series(
-                    session, customer_id, outlet_id, start_date, end_date,
+                    session, customer_id, outlet_id, effective_start, end_date,
                 )
 
             if series is None or len(series) < min_length:
@@ -581,14 +691,30 @@ async def _main_async(args: argparse.Namespace) -> None:
 
             save_checkpoint(model, args.output)
 
+            # Record the full date range: keep the original start if this is
+            # incremental (the model has seen all data from the very first run).
+            prev = completed.get(outlet_id)
+            record_start = (
+                prev.data_start_date
+                if prev and prev.data_start_date
+                else effective_start
+            )
+            record_end = end_date or date.today()
+
             async with async_session_factory() as session:
                 await _mark_outlet_done(
                     session, outlet_id, customer_id, ENGINE_NAME,
                     args.context_length, args.horizon, args.epochs,
+                    data_start_date=record_start,
+                    data_end_date=record_end,
                 )
 
             processed += 1
             log.info("  Done (%d/%d processed)", processed, len(pairs))
+
+            # Periodic sync back to production server
+            if args.sync_target and processed % args.sync_every == 0:
+                sync_checkpoint(args.output, args.sync_target)
 
         except Exception:
             failed += 1
@@ -599,6 +725,9 @@ async def _main_async(args: argparse.Namespace) -> None:
         processed, skipped, failed,
     )
     if processed > 0:
+        # Final sync to ensure the last batch is copied back
+        if args.sync_target:
+            sync_checkpoint(args.output, args.sync_target)
         log.info(
             "To use the fine-tuned model pass \"engine\": \"timesfm_finetuned\" in your requests."
         )

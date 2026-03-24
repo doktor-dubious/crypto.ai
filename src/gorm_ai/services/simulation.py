@@ -798,13 +798,17 @@ class SimulationService:
                         pred.date, covariates, default_cost, default_profit
                     )
 
-                    group, profit_impact, potential_profit = self._classify(
-                        pred.predicted_value, actual_draw, actual_sale, cost, profit_unit
+                    _pred_is_nan = math.isnan(pred.predicted_value)
+
+                    group, profit_impact, potential_profit = (
+                        self._classify(pred.predicted_value, actual_draw, actual_sale, cost, profit_unit)
+                        if not _pred_is_nan
+                        else (None, None, None)
                     )
 
                     eco_group, eco_profit_impact, eco_potential_profit = (
                         self._classify(pred.economic_optimal, actual_draw, actual_sale, cost, profit_unit)
-                        if pred.economic_optimal is not None
+                        if pred.economic_optimal is not None and not math.isnan(pred.economic_optimal)
                         else (None, None, None)
                     )
 
@@ -836,7 +840,7 @@ class SimulationService:
                     _acc_scenario_delivered = actual_sale is not None
 
                     # prediction scenario: diff metrics + group profit (same logic as delivered, using rounded predicted)
-                    if actual_draw is not None and actual_sale is not None:
+                    if actual_draw is not None and actual_sale is not None and not _pred_is_nan:
                         p_draw = max(1, round(pred.predicted_value))
                         _cost = cost or 0.0
                         _profit = profit_unit or 0.0
@@ -880,7 +884,7 @@ class SimulationService:
                                 pred_g_profit[3] -= increase * _cost
 
                     # eo scenario: diff metrics + group profit (same logic as delivered, using rounded eo)
-                    if actual_draw is not None and actual_sale is not None and pred.economic_optimal is not None:
+                    if actual_draw is not None and actual_sale is not None and pred.economic_optimal is not None and not math.isnan(pred.economic_optimal):
                         if rounding == 2:
                             eo_draw = max(1, math.ceil(pred.economic_optimal))
                         elif rounding == 3:
@@ -995,8 +999,8 @@ class SimulationService:
                         outlet_id=outlet_id,
                         date=str(pred.date),
                         weekday=weekday,
-                        predicted_draw=round(pred.predicted_value, 4),
-                        economic_optimal=round(pred.economic_optimal, 4) if pred.economic_optimal is not None else None,
+                        predicted_draw=round(pred.predicted_value, 4) if not _pred_is_nan else None,
+                        economic_optimal=round(pred.economic_optimal, 4) if pred.economic_optimal is not None and not math.isnan(pred.economic_optimal) else None,
                         actual_draw=actual_draw,
                         actual_sale=actual_sale,
                         group=int(group) if group is not None else None,

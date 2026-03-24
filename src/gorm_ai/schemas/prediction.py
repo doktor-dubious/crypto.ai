@@ -21,6 +21,11 @@ class PredictionEngine(StrEnum):
     CHRONOS_BOLT = "chronos-bolt"
     SUNDIAL = "sundial"
     MOIRAI2 = "moirai2"
+    TOTO = "toto"
+    YINGLONG = "yinglong"
+    KAIROS = "kairos"
+    TIREX = "tirex"
+    FLOWSTATE = "flowstate"
 
 
 class TaskStatus(StrEnum):

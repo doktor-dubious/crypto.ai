@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,6 +59,10 @@ class Configuration(Base):
     simultaneous_tasks: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     periodic_check_workers: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     auto_restart_workers: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    finetuned_model_path: Mapped[str] = mapped_column(
+        String(500), default="models/timesfm_finetuned", nullable=False,
+    )
+    finetune_sync_every: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     prediction_engine_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("prediction_engine.id", ondelete="SET NULL"),
