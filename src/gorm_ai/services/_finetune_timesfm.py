@@ -143,6 +143,8 @@ def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
         logger.info("Sync complete.")
+    except FileNotFoundError:
+        logger.warning("rsync not found — install rsync to enable checkpoint sync")
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
         logger.warning("Sync failed: %s", e)
 
