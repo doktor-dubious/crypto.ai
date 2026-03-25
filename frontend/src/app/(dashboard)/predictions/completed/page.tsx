@@ -32,6 +32,7 @@ import { useCustomer } from "@/components/providers/customer-provider"
 import {
   predictionsApi,
   type CompletedPredictionResponse,
+  type PredictionDataDumpRow,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -39,7 +40,9 @@ import { toast } from "sonner"
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
+const DUMP_PAGE_SIZE = 25
 type SortField = "strategy_name" | "date" | "created_at" | "status" | "starred"
+type DumpSortField = "outlet_name" | "date" | "delivered" | "profit" | "starred"
 
 type PredictionStatus = "success" | "failure" | "revoked"
 
@@ -132,6 +135,282 @@ function loadPredCJson<T>(customerId: string, key: string, fallback: T): T {
 function savePredCJson(customerId: string, key: string, value: unknown) {
   if (typeof window === "undefined") return
   localStorage.setItem(`${PREDC_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
+}
+
+// ─── Prediction Data Tab ─────────────────────────────────────────────────────
+
+function PredictionDataTab({ predictionId }: { predictionId: string }) {
+  const t = useTranslations("predictions.completed")
+
+  const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [sortField, setSortField] = useState<DumpSortField>("outlet_name")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  const [showOnlyChecked, setShowOnlyChecked] = useState(false)
+
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(id)
+  }, [search])
+
+  useEffect(() => { setCurrentPage(1) }, [debouncedSearch, sortField, sortDir])
+
+  const serverSortBy = (sortField === "profit" || sortField === "starred") ? "outlet_name" : sortField
+  const serverSortDir = (sortField === "profit" || sortField === "starred") ? "asc" : sortDir
+
+  const { data: dumpData, isLoading } = useQuery({
+    queryKey: ["prediction-data-dump", predictionId, currentPage, serverSortBy, serverSortDir, debouncedSearch],
+    queryFn: () => predictionsApi.getDataDump(predictionId, {
+      limit: DUMP_PAGE_SIZE,
+      offset: (currentPage - 1) * DUMP_PAGE_SIZE,
+      sortBy: serverSortBy,
+      sortDir: serverSortDir,
+      search: debouncedSearch || undefined,
+    }),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  })
+
+  const allRows = dumpData?.rows ?? []
+  const totalCount = dumpData?.total_count ?? 0
+  const rowKey = (r: PredictionDataDumpRow) => `${r.outlet_id}::${r.date}`
+
+  const displayRows = useMemo(() => {
+    let items = showOnlyChecked
+      ? allRows.filter((r) => checkedIds.has(rowKey(r)))
+      : allRows
+
+    if (sortField === "profit" || sortField === "starred") {
+      return [...items].sort((a, b) => {
+        let va: number, vb: number
+        if (sortField === "profit") {
+          va = a.profit ?? 0; vb = b.profit ?? 0
+        } else {
+          va = starredIds.has(rowKey(a)) ? 1 : 0; vb = starredIds.has(rowKey(b)) ? 1 : 0
+        }
+        return sortDir === "asc" ? va - vb : vb - va
+      })
+    }
+    return items
+  }, [allRows, sortField, sortDir, showOnlyChecked, checkedIds, starredIds])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / DUMP_PAGE_SIZE))
+  const safePage = Math.min(currentPage, totalPages)
+  const pageItems = displayRows
+
+  function handleSort(field: DumpSortField) {
+    if (sortField === field) setSortDir((d) => d === "asc" ? "desc" : "asc")
+    else { setSortField(field); setSortDir("asc") }
+  }
+
+  const allPageChecked = pageItems.length > 0 && pageItems.every((r) => checkedIds.has(rowKey(r)))
+  const somePageChecked = pageItems.some((r) => checkedIds.has(rowKey(r)))
+
+  function handleHeaderCheckbox() {
+    if (allPageChecked) {
+      setCheckedIds((prev) => { const n = new Set(prev); pageItems.forEach((r) => n.delete(rowKey(r))); return n })
+    } else {
+      setCheckedIds((prev) => { const n = new Set(prev); pageItems.forEach((r) => n.add(rowKey(r))); return n })
+    }
+  }
+
+  function handleStar(key: string) {
+    setStarredIds((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+  }
+
+  function DumpSortHeader({ field, label }: { field: DumpSortField; label: string }) {
+    const active = sortField === field
+    return (
+      <button
+        onClick={() => handleSort(field)}
+        className="flex items-center gap-1 font-medium hover:text-foreground transition-colors text-left whitespace-nowrap"
+      >
+        {label}
+        {active
+          ? (sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)
+          : <ArrowUpDown className="h-3 w-3 opacity-40" />}
+      </button>
+    )
+  }
+
+  const fmtN = (n: number | null | undefined) => n != null ? formatNumber(n) : "—"
+  const fmtQ = (n: number | null | undefined) => n != null ? n.toFixed(1) : "—"
+  const isEoQ = (q: number | null | undefined, eo: number | null | undefined, qIdx: number, qs: (number | null)[]) => {
+    if (q == null || eo == null) return false
+    let bestIdx = -1
+    let bestDist = Infinity
+    for (let k = 0; k < qs.length; k++) {
+      if (qs[k] != null) {
+        const d = Math.abs(qs[k]! - eo)
+        if (d < bestDist) { bestDist = d; bestIdx = k }
+      }
+    }
+    return bestIdx === qIdx
+  }
+
+  return (
+    <div className="flex flex-col gap-2 h-full">
+      {/* Toolbar */}
+      <div className="flex items-center justify-end">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+          <Input
+            placeholder={t("searchPlaceholder")}
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setCurrentPage(1) }}
+            className="h-7 pl-8 w-52 text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Table */}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">Loading…</div>
+      ) : allRows.length === 0 ? (
+        <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">No data</div>
+      ) : (
+        <div className="overflow-auto flex-1">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10 pl-4 sticky left-0 bg-background z-10">
+                  <div className="flex items-center gap-0.5">
+                    <Checkbox
+                      checked={allPageChecked ? true : somePageChecked ? "indeterminate" : false}
+                      onCheckedChange={handleHeaderCheckbox}
+                    />
+                  </div>
+                </TableHead>
+                <TableHead><DumpSortHeader field="outlet_name" label={t("dumpColOutlet")} /></TableHead>
+                <TableHead><DumpSortHeader field="date" label={t("dumpColDate")} /></TableHead>
+                <TableHead className="text-right"><DumpSortHeader field="profit" label={t("dumpColProfit")} /></TableHead>
+                <TableHead className="text-right"><DumpSortHeader field="delivered" label={t("dumpColDelivered")} /></TableHead>
+                <TableHead className="text-right">{t("dumpColSold")}</TableHead>
+                <TableHead className="text-right">{t("dumpColReturned")}</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q10</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q20</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q30</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q40</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q50</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q60</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q70</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q80</TableHead>
+                <TableHead className="text-right whitespace-nowrap">Q90</TableHead>
+                <TableHead className="text-right whitespace-nowrap">{t("dumpColCV")}</TableHead>
+                <TableHead className="w-10 text-center">
+                  <button
+                    onClick={() => handleSort("starred")}
+                    className="flex items-center gap-1 font-medium hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    <Star className={cn("h-4 w-4", sortField === "starred" ? "" : "opacity-40")} />
+                    {sortField === "starred" && (sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                  </button>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pageItems.map((row) => {
+                const key = rowKey(row)
+                const qs = [row.q10, row.q20, row.q30, row.q40, row.q50, row.q60, row.q70, row.q80, row.q90] as (number | null)[]
+                return (
+                  <TableRow
+                    key={key}
+                    onContextMenu={(e) => { e.preventDefault(); handleStar(key) }}
+                  >
+                    <TableCell className="pl-4 sticky left-0 bg-background z-10" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={checkedIds.has(key)}
+                        onCheckedChange={(c) => setCheckedIds((prev) => { const n = new Set(prev); c ? n.add(key) : n.delete(key); return n })}
+                      />
+                    </TableCell>
+                    <TableCell className="font-medium max-w-[180px] truncate">{row.outlet_name}</TableCell>
+                    <TableCell className="text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">{formatDate(row.date)}</TableCell>
+                    <TableCell className={cn("text-right tabular-nums", row.profit != null && row.profit > 0 ? "text-green-500" : row.profit != null && row.profit < 0 ? "text-red-500" : "")}>{fmtN(row.profit)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtN(row.delivered)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtN(row.sold)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtN(row.returned)}</TableCell>
+                    {qs.map((q, i) => (
+                      <TableCell key={i} className="text-right tabular-nums text-xs">
+                        {isEoQ(q, row.eo, i, qs) ? (
+                          <span className="relative inline-block px-1">
+                            <span className="absolute inset-[-14px] bg-[url('/red-circle-brush.png')] bg-contain bg-center bg-no-repeat pointer-events-none" />
+                            <span className="relative">{fmtQ(q)}</span>
+                          </span>
+                        ) : fmtQ(q)}
+                      </TableCell>
+                    ))}
+                    <TableCell className="text-right tabular-nums text-xs text-[var(--muted-foreground)]">
+                      {row.cv != null ? row.cv.toFixed(2) : "—"}
+                    </TableCell>
+                    <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => handleStar(key)} className="hover:text-amber-400 transition-colors cursor-pointer" aria-label="Toggle star">
+                        <Star className={cn("h-4 w-4", starredIds.has(key) ? "fill-amber-400 text-amber-400" : "text-[var(--muted-foreground)]")} />
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Pagination + selection bar */}
+      {totalCount > 0 && (
+        <div className="shrink-0 border-t bg-background">
+          <div className="flex items-center justify-between px-4 py-1.5">
+            <span className="text-xs text-[var(--muted-foreground)]">
+              {t("showing", {
+                from: (safePage - 1) * DUMP_PAGE_SIZE + 1,
+                to: Math.min(safePage * DUMP_PAGE_SIZE, totalCount),
+                total: totalCount,
+              })}
+            </span>
+            {totalPages > 1 && (
+              <Pagination className="w-auto mx-0">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} />
+                  </PaginationItem>
+                  {buildPaginationPages(safePage, totalPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <PaginationItem key={`e${i}`}><PaginationEllipsis /></PaginationItem>
+                    ) : (
+                      <PaginationItem key={p}>
+                        <PaginationLink isActive={safePage === p} onClick={() => setCurrentPage(p)}>{p}</PaginationLink>
+                      </PaginationItem>
+                    )
+                  )}
+                  <PaginationItem>
+                    <PaginationNext onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            )}
+          </div>
+
+          {checkedIds.size > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 border-t bg-[var(--muted)]/30">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {checkedIds.size} selected
+              </span>
+              <Button
+                variant="ghost" size="sm" className="h-7 gap-1.5 px-2 cursor-pointer"
+                onClick={() => setShowOnlyChecked((v) => !v)}
+                title={showOnlyChecked ? "Show all" : "Show only selected"}
+              >
+                <Focus className={cn("h-3.5 w-3.5", showOnlyChecked && "text-primary")} />
+                {showOnlyChecked && <span className="text-xs">Show all</span>}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -551,8 +830,9 @@ export default function PredictionsCompletedPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 text-destructive data-[state=active]:text-destructive" value="tab0">{t("tabError")}</TabsTrigger>
                 )}
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
-                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabAnalytics")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabSpecs")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabAnalytics")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tabData">{t("tabData")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabActions")}</TabsTrigger>
                 <div
                   className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
@@ -636,6 +916,17 @@ export default function PredictionsCompletedPage() {
                 <StatRow label={t("fieldDelay")} value={selected.delay ?? "—"} />
                 <StatRow label={t("fieldUseFinancials")} value={selected.use_financials == null ? "—" : selected.use_financials ? "Yes" : "No"} />
                 <StatRow label={t("fieldUsePad")} value={selected.use_pad == null ? "—" : selected.use_pad ? "Yes" : "No"} />
+              </TabsContent>
+
+              {/* ─ Data ─ */}
+              <TabsContent value="tabData" className="mt-4 px-4 flex-1 flex flex-col min-h-0">
+                {selected.status !== "success" ? (
+                  <div className="text-sm text-[var(--muted-foreground)] italic">
+                    Data is only available for completed predictions.
+                  </div>
+                ) : (
+                  <PredictionDataTab predictionId={selected.id} />
+                )}
               </TabsContent>
 
               {/* ─ Actions ─ */}

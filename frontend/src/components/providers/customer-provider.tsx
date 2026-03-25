@@ -30,17 +30,17 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60 * 1000,
   })
 
-  const [activeCustomerId, setActiveCustomerId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null
-    return localStorage.getItem(STORAGE_KEY)
-  })
+  const [activeCustomerId, setActiveCustomerId] = useState<string | null>(null)
 
-  // Auto-select first customer if none stored
+  // Hydrate from localStorage after mount, then auto-select first customer if none stored
   useEffect(() => {
-    if (customers.length > 0 && !activeCustomerId) {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored) {
+      setActiveCustomerId(stored)
+    } else if (customers.length > 0) {
       setActiveCustomerId(customers[0].id)
     }
-  }, [customers, activeCustomerId])
+  }, [customers])
 
   const sortedCustomers = useMemo(
     () => [...customers].sort((a, b) => a.name.localeCompare(b.name)),

@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 
 _QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
 
+
+def _sanitize_nan(arr: np.ndarray) -> np.ndarray:
+    """Replace NaN values with 0.  A zero forecast is always safer than NaN."""
+    result = np.array(arr)
+    mask = np.isnan(result)
+    if mask.any():
+        logger.warning("chronos2: replaced %d NaN values with 0 in forecast output", int(mask.sum()))
+        result[mask] = 0.0
+    return result
+
 # Outlets per forward pass.  T5-based Chronos uses autoregressive sampling
 # which is far more memory-intensive than Bolt's single forward pass.
 BATCH_SIZE = 8
@@ -292,10 +302,10 @@ class Chronos2DirectEngine(PredictionEngine):
         for i, item in enumerate(items):
             preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
             pp = prepared[i]["preprocessor"]
-            preds = pp.denormalize(preds_norm)
-            lower = pp.denormalize(lower_norm)
-            upper = pp.denormalize(upper_norm)
-            quantiles = pp.denormalize(quantiles_norm)
+            preds = _sanitize_nan(pp.denormalize(preds_norm))
+            lower = _sanitize_nan(pp.denormalize(lower_norm))
+            upper = _sanitize_nan(pp.denormalize(upper_norm))
+            quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
             wpc = item.get("weekday_profile_correction", {})
             if wpc.get("enabled") if isinstance(wpc, dict) else wpc:
@@ -430,10 +440,10 @@ class Chronos2DirectEngine(PredictionEngine):
             })
 
             results.append((
-                base_pred + adj,
-                base_lower + adj,
-                base_upper + adj,
-                base_quantiles + adj[:, np.newaxis],
+                _sanitize_nan(base_pred + adj),
+                _sanitize_nan(base_lower + adj),
+                _sanitize_nan(base_upper + adj),
+                _sanitize_nan(base_quantiles + adj[:, np.newaxis]),
             ))
 
         return results, ridge_infos

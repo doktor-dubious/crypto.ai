@@ -19,6 +19,10 @@ class TimesFMFinetunedEngine(TimesFMEngine):
     fine-tuned checkpoint directory is missing or fails to load.
     """
 
+    def __init__(self, checkpoint_path: str | None = None):
+        super().__init__()
+        self._checkpoint_path = checkpoint_path
+
     def get_capabilities(self) -> EngineCapabilities:
         caps = super().get_capabilities()
         caps.name = "Google TimesFM (fine-tuned)"
@@ -29,7 +33,7 @@ class TimesFMFinetunedEngine(TimesFMEngine):
         from gorm_ai.config import get_settings
 
         self._apply_hf_env()
-        path = get_settings().finetuned_model_path
+        path = self._checkpoint_path or get_settings().finetuned_model_path
 
         if not os.path.isdir(path):
             logger.warning(

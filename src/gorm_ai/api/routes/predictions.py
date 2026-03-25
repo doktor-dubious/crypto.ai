@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from gorm_ai.api.deps import PredictionServiceDep, TaskServiceDep
 from gorm_ai.schemas.prediction import (
@@ -14,6 +14,7 @@ from gorm_ai.schemas.prediction import (
     PredictionAnalyticsSummary,
     PredictionComparisonItem,
     PredictionComparisonResponse,
+    PredictionDataDumpResponse,
     PredictionEngine,
     PredictionRequest,
     PredictionResponse,
@@ -72,6 +73,32 @@ async def delete_prediction(
     """Soft-delete a prediction."""
     if not await service.delete_prediction(prediction_id):
         raise HTTPException(status_code=404, detail="Prediction not found")
+
+
+@router.get("/{prediction_id}/data-dump", response_model=PredictionDataDumpResponse)
+async def get_prediction_data_dump(
+    prediction_id: str,
+    outlet_ids: list[str] | None = Query(default=None),
+    limit: int = 25,
+    offset: int = 0,
+    sort_by: str = "outlet_name",
+    sort_dir: str = "asc",
+    search: str | None = None,
+    service: PredictionServiceDep = ...,
+) -> PredictionDataDumpResponse:
+    """Get per-outlet data for a completed prediction."""
+    result = await service.get_data_dump(
+        prediction_id,
+        outlet_ids=outlet_ids,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        search=search,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    return PredictionDataDumpResponse(**result)
 
 
 @router.post("", response_model=PredictionResponse, status_code=201)

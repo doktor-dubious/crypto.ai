@@ -1357,30 +1357,25 @@ class SimulationService:
                     # Simulation was deleted but TaskRecord wasn't — clean up
                     deleted_task_ids.add(s.task_id)
 
-        # Back-fill actual_total_sale for simulations that pre-date the column
-        sims_needing_actual = [s for s in sim_by_task.values() if s.actual_total_sale is None and s.id]
-        if sims_needing_actual:
+        # Count completed days per simulation (for progress display on failed/revoked)
+        days_completed_map: dict[str, int] = {}
+        sim_ids_for_days = [s.id for s in sim_by_task.values() if s.id]
+        if sim_ids_for_days:
             from sqlalchemy import func as sqlfunc
 
             from gorm_ai.database.models.simulation_date import SimulationDate
-            rows = await self.session.execute(
+            from gorm_ai.database.models.prediction import Prediction as PredictionModel2
+
+            day_rows = await self.session.execute(
                 select(
                     SimulationDate.simulation_id,
-                    sqlfunc.sum(PredictionOutlet.actual_sale).label("total_sale"),
+                    sqlfunc.count(sqlfunc.distinct(PredictionModel2.date)).label("days"),
                 )
-                .join(PredictionOutlet, PredictionOutlet.prediction_id == SimulationDate.prediction_id)
-                .where(SimulationDate.simulation_id.in_([s.id for s in sims_needing_actual]))
+                .join(PredictionModel2, PredictionModel2.id == SimulationDate.prediction_id)
+                .where(SimulationDate.simulation_id.in_(sim_ids_for_days))
                 .group_by(SimulationDate.simulation_id)
             )
-            actual_sale_by_sim: dict[str, float] = {row.simulation_id: row.total_sale for row in rows}
-            for s in sims_needing_actual:
-                s.actual_total_sale = actual_sale_by_sim.get(s.id)
-                # Derive delivered and returned from stored delivered-scenario stats
-                if s.d_total_delivered is not None and s.d_diff_delivered is not None:
-                    s.actual_total_delivered = s.d_total_delivered - s.d_diff_delivered
-                if s.actual_total_delivered is not None and s.actual_total_sale is not None:
-                    s.actual_total_returned = max(0.0, s.actual_total_delivered - s.actual_total_sale)
-            await self.session.flush()
+            days_completed_map = {row.simulation_id: row.days for row in day_rows}
 
         # Deactivate orphaned TaskRecords whose simulation was already deleted
         for tr in paged:
@@ -1395,6 +1390,11 @@ class SimulationService:
                 continue
             sim = sim_by_task.get(tr.task_id) if tr.task_id else None
             outlet_count = len(sim.outlet_ids) if sim and sim.outlet_ids else 0
+            # Compute days progress
+            days_completed = days_completed_map.get(sim.id, 0) if sim else None
+            days_total: int | None = None
+            if sim and sim.simulation_from and sim.simulation_to:
+                days_total = (sim.simulation_to - sim.simulation_from).days + 1
             items.append({
                 "id": tr.id,
                 "task_id": tr.task_id,
@@ -1416,6 +1416,8 @@ class SimulationService:
                 "worker_name": tr.worker_name,
                 "error": tr.error,
                 "warnings": sim.warnings if sim else None,
+                "days_completed": days_completed,
+                "days_total": days_total,
                 "created_at": tr.created_at,
                 "started_at": sim.started_at if sim else None,
                 "ended_at": sim.ended_at if sim else None,
@@ -1876,162 +1878,254 @@ class SimulationService:
         to_date: date | None = None,
         weekdays: list[int] | None = None,
     ) -> dict | None:
-        """Return per-date aggregated actual_sale and delivered for a simulation."""
+        """Return per-date aggregated model-fit data for a simulation.
+
+        Uses two separate queries (prediction_outlets and sales) to avoid
+        expensive row-by-row joins with the TimescaleDB sales hypertable.
+        """
+        import math
+
+        from sqlalchemy import Float, case, cast, extract, func, literal
+
         from gorm_ai.database.models.outlet import Outlet
+        from gorm_ai.database.models.outlet_financials import (
+            OutletFinancials,
+        )
+        from gorm_ai.database.models.prediction import (
+            Prediction as PredictionModel,
+        )
         from gorm_ai.database.models.simulation_date import SimulationDate
 
         sim = await self.session.get(SimulationModel, simulation_id)
         if not sim or not sim.active:
             return None
 
-        # Fetch outlet names for the simulation
+        # Fetch outlet names
         sim_outlet_ids: list[str] = sim.outlet_ids or []
         outlets_result = await self.session.execute(
             select(Outlet.id, Outlet.name)
             .where(Outlet.id.in_(sim_outlet_ids))
             .order_by(Outlet.name)
         )
-        outlets = [{"id": str(row.id), "name": row.name} for row in outlets_result.all()]
+        outlets = [
+            {"id": str(row.id), "name": row.name}
+            for row in outlets_result.all()
+        ]
 
-        # Build aggregated time series
-        from sqlalchemy import extract, func
-
-        from gorm_ai.database.models.prediction import Prediction as PredictionModel
-
-        filters = [SimulationDate.simulation_id == simulation_id]
-        if outlet_ids:
-            filters.append(PredictionOutlet.outlet_id.in_(outlet_ids))
-        if from_date:
-            filters.append(PredictionModel.date >= from_date)
-        if to_date:
-            filters.append(PredictionModel.date <= to_date)
-        if weekdays:
-            filters.append(extract("isodow", PredictionModel.date).in_(weekdays))
-
-        from gorm_ai.database.models.outlet_financials import OutletFinancials
-
-        # Fetch per-outlet rows (not aggregated) so we can compute profit
-        rows = await self.session.execute(
-            select(
-                PredictionModel.date,
-                extract("isodow", PredictionModel.date).label("weekday"),
-                PredictionOutlet.outlet_id,
-                PredictionOutlet.actual_sale,
-                PredictionOutlet.delivered,
-                PredictionOutlet.eo,
-                PredictionOutlet.predicted,
-                PredictionOutlet.lower_bound,
-                PredictionOutlet.upper_bound,
-                Sales.delivered.label("actual_delivered"),
-                Sales.sold.label("actual_sold"),
-            )
-            .join(SimulationDate, SimulationDate.prediction_id == PredictionOutlet.prediction_id)
-            .join(PredictionModel, PredictionModel.id == PredictionOutlet.prediction_id)
-            .outerjoin(
-                Sales,
-                (Sales.outlet_id == PredictionOutlet.outlet_id)
-                & (Sales.date == PredictionModel.date),
-            )
-            .where(*filters)
-            .order_by(PredictionModel.date)
-        )
-        raw_rows = rows.all()
-
-        # Load financials
-        all_outlet_ids = list({r.outlet_id for r in raw_rows})
-        fin_result = await self.session.execute(
-            select(
-                OutletFinancials.outlet_id,
-                OutletFinancials.weekday,
-                OutletFinancials.cost_per_unit,
-                OutletFinancials.profit_per_unit,
-            ).where(OutletFinancials.outlet_id.in_(all_outlet_ids))
-        ) if all_outlet_ids else None
-        fin_map: dict[tuple[str, int], tuple[float | None, float | None]] = {}
-        if fin_result:
-            fin_map = {
-                (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
-                for r in fin_result
-            }
+        # Default financials
         default_cost, default_profit = await self._get_default_financials(
             sim.customer_id
         )
+        dc = literal(default_cost or 0.0).cast(Float)
+        dp = literal(default_profit or 0.0).cast(Float)
 
-        # Aggregate by date
-        from collections import defaultdict
-        date_agg: dict[date, dict] = {}
-        for r in raw_rows:
-            d = r.date
-            if d not in date_agg:
-                date_agg[d] = {
-                    "actual_sale": 0.0, "delivered": 0.0, "eo": 0.0, "predicted": 0.0,
-                    "lower_bound": 0.0, "upper_bound": 0.0,
-                    "actual_delivered": 0.0, "actual_sold": 0.0,
-                    "sim_delivered": 0.0, "sim_sold": 0.0,
-                    "sim_profit": 0.0, "actual_profit": 0.0,
-                    "_has_actual": False, "_has_sim": False,
-                }
-            agg = date_agg[d]
-            if r.actual_sale is not None:
-                agg["actual_sale"] += float(r.actual_sale)
-            if r.delivered is not None:
-                agg["delivered"] += float(r.delivered)
-            if r.eo is not None:
-                agg["eo"] += float(r.eo)
-            if r.predicted is not None:
-                agg["predicted"] += float(r.predicted)
-            if r.lower_bound is not None:
-                agg["lower_bound"] += float(r.lower_bound)
-            if r.upper_bound is not None:
-                agg["upper_bound"] += float(r.upper_bound)
-
-            weekday = int(r.weekday)
-            cost, profit_unit = fin_map.get(
-                (r.outlet_id, weekday), (None, None)
+        # Build shared filters
+        base_filters = [SimulationDate.simulation_id == simulation_id]
+        effective_outlet_ids = outlet_ids
+        if outlet_ids:
+            base_filters.append(
+                PredictionOutlet.outlet_id.in_(outlet_ids)
             )
-            _cost = (cost if cost is not None else default_cost) or 0.0
-            _profit = (profit_unit if profit_unit is not None else default_profit) or 0.0
+        if from_date:
+            base_filters.append(PredictionModel.date >= from_date)
+        if to_date:
+            base_filters.append(PredictionModel.date <= to_date)
+        if weekdays:
+            base_filters.append(
+                extract("isodow", PredictionModel.date).in_(weekdays)
+            )
 
-            # Actual values
-            if r.actual_delivered is not None:
-                a_del = float(r.actual_delivered)
-                a_sold = float(r.actual_sold) if r.actual_sold is not None else 0.0
-                a_ret = a_del - a_sold
-                agg["actual_delivered"] += a_del
-                agg["actual_sold"] += a_sold
-                agg["actual_profit"] += a_sold * _profit - a_ret * _cost
-                agg["_has_actual"] = True
+        # Financials expressions with fallback
+        cost_expr = func.coalesce(OutletFinancials.cost_per_unit, dc)
+        profit_expr = func.coalesce(
+            OutletFinancials.profit_per_unit, dp
+        )
 
-            # Sim values
-            if r.delivered is not None and r.actual_sale is not None:
-                s_draw = max(1.0, round(float(r.delivered)))
-                s_sold = min(s_draw, float(r.actual_sale))
-                s_ret = s_draw - s_sold
-                agg["sim_delivered"] += s_draw
-                agg["sim_sold"] += s_sold
-                agg["sim_profit"] += s_sold * _profit - s_ret * _cost
-                agg["_has_sim"] = True
+        sim_draw = func.greatest(
+            literal(1).cast(Float),
+            func.round(cast(PredictionOutlet.delivered, Float)),
+        )
+        sim_sold = func.least(sim_draw, PredictionOutlet.actual_sale)
 
-        data = [
-            {
-                "date": d,
-                "actual_sale": agg["actual_sale"] or None,
-                "delivered": agg["delivered"] or None,
-                "eo": agg["eo"] or None,
-                "predicted": agg["predicted"] or None,
-                "lower_bound": agg["lower_bound"] or None,
-                "upper_bound": agg["upper_bound"] or None,
-                "actual_delivered": agg["actual_delivered"] if agg["_has_actual"] else None,
-                "actual_sold": agg["actual_sold"] if agg["_has_actual"] else None,
-                "actual_returned": (agg["actual_delivered"] - agg["actual_sold"]) if agg["_has_actual"] else None,
-                "actual_profit": round(agg["actual_profit"], 2) if agg["_has_actual"] else None,
-                "sim_delivered": agg["sim_delivered"] if agg["_has_sim"] else None,
-                "sim_sold": agg["sim_sold"] if agg["_has_sim"] else None,
-                "sim_returned": (agg["sim_delivered"] - agg["sim_sold"]) if agg["_has_sim"] else None,
-                "sim_profit": round(agg["sim_profit"], 2) if agg["_has_sim"] else None,
-            }
-            for d, agg in sorted(date_agg.items())
-        ]
+        # ── Query 1: prediction_outlets aggregated by date (fast)
+        # Use NULLIF to convert NaN → NULL so sum() ignores them
+        nan_lit = literal(float("nan")).cast(Float)
+
+        po_rows = await self.session.execute(
+            select(
+                PredictionModel.date,
+                func.sum(func.nullif(PredictionOutlet.actual_sale, nan_lit)).label(
+                    "actual_sale"
+                ),
+                func.sum(func.nullif(PredictionOutlet.delivered, nan_lit)).label("delivered"),
+                func.sum(func.nullif(PredictionOutlet.eo, nan_lit)).label("eo"),
+                func.sum(func.nullif(PredictionOutlet.predicted, nan_lit)).label("predicted"),
+                func.sum(func.nullif(PredictionOutlet.lower_bound, nan_lit)).label(
+                    "lower_bound"
+                ),
+                func.sum(func.nullif(PredictionOutlet.upper_bound, nan_lit)).label(
+                    "upper_bound"
+                ),
+                func.sum(
+                    case(
+                        (
+                            PredictionOutlet.delivered.isnot(None)
+                            & PredictionOutlet.actual_sale.isnot(None),
+                            sim_draw,
+                        ),
+                        else_=literal(0).cast(Float),
+                    )
+                ).label("sim_delivered"),
+                func.sum(
+                    case(
+                        (
+                            PredictionOutlet.delivered.isnot(None)
+                            & PredictionOutlet.actual_sale.isnot(None),
+                            sim_sold,
+                        ),
+                        else_=literal(0).cast(Float),
+                    )
+                ).label("sim_sold"),
+                func.sum(
+                    case(
+                        (
+                            PredictionOutlet.delivered.isnot(None)
+                            & PredictionOutlet.actual_sale.isnot(None),
+                            sim_sold * profit_expr
+                            - (sim_draw - sim_sold) * cost_expr,
+                        ),
+                        else_=literal(0).cast(Float),
+                    )
+                ).label("sim_profit"),
+                func.count(
+                    case(
+                        (
+                            PredictionOutlet.delivered.isnot(None)
+                            & PredictionOutlet.actual_sale.isnot(None),
+                            literal(1),
+                        ),
+                    )
+                ).label("sim_count"),
+            )
+            .join(
+                SimulationDate,
+                SimulationDate.prediction_id
+                == PredictionOutlet.prediction_id,
+            )
+            .join(
+                PredictionModel,
+                PredictionModel.id == PredictionOutlet.prediction_id,
+            )
+            .outerjoin(
+                OutletFinancials,
+                (
+                    OutletFinancials.outlet_id
+                    == PredictionOutlet.outlet_id
+                )
+                & (
+                    OutletFinancials.weekday
+                    == extract("isodow", PredictionModel.date)
+                ),
+            )
+            .where(*base_filters)
+            .group_by(PredictionModel.date)
+            .order_by(PredictionModel.date)
+        )
+        po_data = po_rows.all()
+
+        # ── Query 2: sales aggregated by date (separate, avoids
+        #    expensive per-row hypertable join)
+        oids = effective_outlet_ids or sim_outlet_ids
+        sales_filters = []
+        if oids:
+            sales_filters.append(Sales.outlet_id.in_(oids))
+        if sim.simulation_from:
+            sales_filters.append(Sales.date >= sim.simulation_from)
+        if sim.simulation_to:
+            sales_filters.append(Sales.date <= sim.simulation_to)
+        if weekdays:
+            sales_filters.append(
+                extract("isodow", Sales.date).in_(weekdays)
+            )
+        if from_date:
+            sales_filters.append(Sales.date >= from_date)
+        if to_date:
+            sales_filters.append(Sales.date <= to_date)
+
+        sales_by_date: dict[date, dict] = {}
+        if sales_filters:
+            # Load per-outlet sales + financials, aggregate in Python
+            # (still faster than the cross-join approach)
+            sales_cost = func.coalesce(OutletFinancials.cost_per_unit, dc)
+            sales_prof = func.coalesce(
+                OutletFinancials.profit_per_unit, dp
+            )
+            s_sold = func.coalesce(Sales.sold, literal(0))
+            s_ret = Sales.delivered - s_sold
+            sales_rows = await self.session.execute(
+                select(
+                    Sales.date,
+                    func.sum(Sales.delivered).label("delivered"),
+                    func.sum(Sales.sold).label("sold"),
+                    func.sum(
+                        s_sold * sales_prof - s_ret * sales_cost
+                    ).label("profit"),
+                )
+                .outerjoin(
+                    OutletFinancials,
+                    (OutletFinancials.outlet_id == Sales.outlet_id)
+                    & (
+                        OutletFinancials.weekday
+                        == extract("isodow", Sales.date)
+                    ),
+                )
+                .where(*sales_filters)
+                .group_by(Sales.date)
+            )
+            for sr in sales_rows:
+                sales_by_date[sr.date] = {
+                    "delivered": float(sr.delivered) if sr.delivered else 0.0,
+                    "sold": float(sr.sold) if sr.sold else 0.0,
+                    "profit": float(sr.profit) if sr.profit else 0.0,
+                }
+
+        # ── Merge results
+        def _safe_float(v: object) -> float | None:
+            """Convert to float, treating NaN and falsy as None."""
+            if not v:
+                return None
+            f = float(v)
+            return None if math.isnan(f) else f
+
+        data = []
+        for r in po_data:
+            has_sim = (r.sim_count or 0) > 0
+            sd = float(r.sim_delivered) if r.sim_delivered else 0.0
+            ss = float(r.sim_sold) if r.sim_sold else 0.0
+            sa = sales_by_date.get(r.date)
+            data.append({
+                "date": r.date,
+                "actual_sale": _safe_float(r.actual_sale),
+                "delivered": _safe_float(r.delivered),
+                "eo": _safe_float(r.eo),
+                "predicted": _safe_float(r.predicted),
+                "lower_bound": _safe_float(r.lower_bound),
+                "upper_bound": _safe_float(r.upper_bound),
+                "actual_delivered": sa["delivered"] if sa else None,
+                "actual_sold": sa["sold"] if sa else None,
+                "actual_returned": (
+                    (sa["delivered"] - sa["sold"]) if sa else None
+                ),
+                "actual_profit": (
+                    round(sa["profit"], 2) if sa else None
+                ),
+                "sim_delivered": sd if has_sim else None,
+                "sim_sold": ss if has_sim else None,
+                "sim_returned": (sd - ss) if has_sim else None,
+                "sim_profit": (
+                    round(float(r.sim_profit), 2) if has_sim else None
+                ),
+            })
 
         return {"outlets": outlets, "data": data}
 

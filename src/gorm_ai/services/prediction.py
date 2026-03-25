@@ -66,6 +66,8 @@ class PredictionService:
         """Create a prediction based on historical sales data."""
         # Load strategy and apply its columns as defaults (request params take precedence)
         strategy_engine_slug: str | None = None
+        finetuned_model: str | None = None
+        finetuned_model_base_path: str | None = None
         if request.prediction_strategy_id:
             strategy = await self._load_strategy(request.prediction_strategy_id)
             if strategy:
@@ -75,6 +77,8 @@ class PredictionService:
                     request = request.model_copy(update=updates)
                 if strategy.prediction_engine:
                     strategy_engine_slug = strategy.prediction_engine.slug
+                    finetuned_model_base_path = strategy.prediction_engine.finetuned_model_path
+                finetuned_model = strategy.finetuned_model
 
         # Resolve which engine to use (request → strategy → customer config → global config → default)
         engine_type = await self._resolve_engine(request.customer_id, request.engine, strategy_engine_slug)
@@ -84,7 +88,16 @@ class PredictionService:
         if horizon < 1:
             raise ValueError("prediction_to must be on or after prediction_from")
 
-        engine = self.engine_registry.get_engine(engine_type)
+        # When a finetuned model is selected, use the finetuned engine variant
+        # with the specific checkpoint path
+        if finetuned_model and finetuned_model_base_path:
+            import os
+            checkpoint_path = os.path.join(finetuned_model_base_path, finetuned_model)
+            from gorm_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
+            engine = TimesFMFinetunedEngine(checkpoint_path=checkpoint_path)
+            logger.info("Using finetuned model: %s", checkpoint_path)
+        else:
+            engine = self.engine_registry.get_engine(engine_type)
         resolved_engine_params = await self._apply_engine_parameters(
             engine, engine_type.value, request.prediction_strategy_id,
         )
@@ -2160,6 +2173,175 @@ class PredictionService:
             ))
 
         await self.session.flush()
+
+    # -------------------------------------------------------------------------
+    # Data Dump
+    # -------------------------------------------------------------------------
+
+    async def get_data_dump(
+        self,
+        prediction_id: str,
+        *,
+        outlet_ids: list[str] | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        sort_by: str = "outlet_name",
+        sort_dir: str = "asc",
+        search: str | None = None,
+    ) -> dict | None:
+        """Return per-outlet data for a prediction."""
+        from sqlalchemy import func
+
+        pred = await self.session.get(Prediction, prediction_id)
+        if not pred or not pred.active:
+            return None
+
+        filters: list = [PredictionOutlet.prediction_id == prediction_id]
+        if outlet_ids:
+            filters.append(PredictionOutlet.outlet_id.in_(outlet_ids))
+        if search:
+            filters.append(Outlet.name.ilike(f"%{search}%"))
+
+        # Count
+        count_query = (
+            select(func.count())
+            .select_from(PredictionOutlet)
+            .join(Outlet, Outlet.id == PredictionOutlet.outlet_id)
+            .where(*filters)
+        )
+        total_count = (await self.session.execute(count_query)).scalar() or 0
+
+        # Sort
+        _sort_columns: dict = {
+            "outlet_name": Outlet.name,
+            "date": Prediction.date,
+            "delivered": PredictionOutlet.delivered,
+        }
+        sort_col = _sort_columns.get(sort_by, Outlet.name)
+        order = sort_col.desc() if sort_dir == "desc" else sort_col.asc()
+
+        # Main query
+        rows = (
+            await self.session.execute(
+                select(
+                    PredictionOutlet.outlet_id,
+                    Outlet.name.label("outlet_name"),
+                    Prediction.date,
+                    PredictionOutlet.delivered,
+                    PredictionOutlet.eo,
+                    PredictionOutlet.predicted,
+                    PredictionOutlet.actual_sale,
+                    PredictionOutlet.lower_bound,
+                    PredictionOutlet.q20,
+                    PredictionOutlet.q30,
+                    PredictionOutlet.q40,
+                    PredictionOutlet.q50,
+                    PredictionOutlet.q60,
+                    PredictionOutlet.q70,
+                    PredictionOutlet.q80,
+                    PredictionOutlet.upper_bound,
+                    PredictionOutlet.cv,
+                    Sales.delivered.label("actual_delivered"),
+                )
+                .join(Prediction, Prediction.id == PredictionOutlet.prediction_id)
+                .join(Outlet, Outlet.id == PredictionOutlet.outlet_id)
+                .outerjoin(
+                    Sales,
+                    (Sales.outlet_id == PredictionOutlet.outlet_id)
+                    & (Sales.date == Prediction.date),
+                )
+                .where(*filters)
+                .order_by(order, Outlet.name)
+                .limit(limit)
+                .offset(offset)
+            )
+        ).all()
+
+        # Financials for profit calculation
+        all_oids = list({r.outlet_id for r in rows})
+        fin_map: dict[tuple[str, int], tuple[float | None, float | None]] = {}
+        if all_oids:
+            fin_result = await self.session.execute(
+                select(
+                    OutletFinancials.outlet_id,
+                    OutletFinancials.weekday,
+                    OutletFinancials.cost_per_unit,
+                    OutletFinancials.profit_per_unit,
+                ).where(OutletFinancials.outlet_id.in_(all_oids))
+            )
+            fin_map = {
+                (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
+                for r in fin_result
+            }
+        default_cost, default_profit = await self._get_default_financials(pred.customer_id)
+
+        import math
+
+        def _safe(v: object) -> float | None:
+            """Convert NaN / None to None, otherwise float."""
+            if v is None:
+                return None
+            f = float(v)  # type: ignore[arg-type]
+            return None if math.isnan(f) else f
+
+        result_rows = []
+        for r in rows:
+            actual_draw = _safe(r.actual_delivered)
+            actual_sale = _safe(r.actual_sale)
+            pred_delivered = _safe(r.delivered)
+
+            sold: float | None = None
+            returned: float | None = None
+            profit: float | None = None
+
+            if pred_delivered is not None and actual_sale is not None:
+                s_draw = max(1, round(pred_delivered))
+                sold = float(round(min(s_draw, actual_sale)))
+                returned = float(round(max(0.0, s_draw - actual_sale)))
+
+                if actual_draw is not None:
+                    weekday = r.date.weekday()
+                    cost, profit_unit = fin_map.get((r.outlet_id, weekday), (None, None))
+                    _cost = (cost if cost is not None else default_cost) or 0.0
+                    _profit = (profit_unit if profit_unit is not None else default_profit) or 0.0
+
+                    if s_draw < actual_draw:
+                        reduction = actual_draw - s_draw
+                        if s_draw >= actual_sale:
+                            profit = reduction * _cost  # G1
+                        else:
+                            profit = reduction * _cost - (actual_sale - s_draw) * _profit  # G2
+                    elif s_draw > actual_draw:
+                        a_returned = max(0.0, actual_draw - actual_sale)
+                        if a_returned == 0.0:
+                            profit = 0.0  # sold-out, simplified
+                        else:
+                            profit = -(s_draw - actual_draw) * _cost  # G3
+            elif pred_delivered is not None:
+                s_draw = max(1, round(pred_delivered))
+
+            result_rows.append({
+                "outlet_id": r.outlet_id,
+                "outlet_name": r.outlet_name,
+                "date": r.date,
+                "delivered": pred_delivered,
+                "sold": sold,
+                "returned": returned,
+                "q10": _safe(r.lower_bound),
+                "q20": _safe(r.q20),
+                "q30": _safe(r.q30),
+                "q40": _safe(r.q40),
+                "q50": _safe(r.q50),
+                "q60": _safe(r.q60),
+                "q70": _safe(r.q70),
+                "q80": _safe(r.q80),
+                "q90": _safe(r.upper_bound),
+                "eo": _safe(r.eo),
+                "cv": _safe(r.cv),
+                "profit": profit,
+            })
+
+        return {"rows": result_rows, "total_count": total_count}
 
 
 def _classify_covariate(name: str) -> tuple[str, str | None, str | None]:

@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
-  ChevronDown, ChevronUp, Info,
+  ChevronDown, ChevronUp, Info, Copy,
 } from "lucide-react"
 import { Maximize } from "@/components/animate-ui/icons/maximize"
 import { Minimize } from "@/components/animate-ui/icons/minimize"
@@ -339,6 +339,34 @@ export default function PredictionStrategiesPage() {
     },
     onError: () => { toast.error(t("toastParameterDeleteError")) },
   })
+
+  const [copyingParams, setCopyingParams] = useState(false)
+  const copyEngineParams = useCallback(async () => {
+    if (!selectedStrategy || !effectiveEngineId) return
+    setCopyingParams(true)
+    try {
+      const engineParams = await predictionEnginesApi.listParameters(effectiveEngineId)
+      if (engineParams.length === 0) {
+        toast.info(t("copyParametersEmpty"))
+        return
+      }
+      for (const p of engineParams) {
+        await predictionStrategiesApi.createParameter(selectedStrategy.id, {
+          name: p.name,
+          value: p.value,
+          parameter: p.parameter ?? null,
+          description: p.description ?? null,
+          sort_order: p.sort_order,
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: ["strategy-parameters", selectedStrategy.id] })
+      toast.success(t("toastParametersCopied"))
+    } catch {
+      toast.error(t("toastParametersCopyError"))
+    } finally {
+      setCopyingParams(false)
+    }
+  }, [selectedStrategy, effectiveEngineId, queryClient, t])
 
   // ── Sync draft when selected strategy changes ──────────────────────────────
 
@@ -953,16 +981,28 @@ export default function PredictionStrategiesPage() {
                 <TooltipProvider>
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-medium">{t("tabParameters")}</h3>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      className="h-7 text-xs gap-1.5"
-                      onClick={() => setNewParamDialogOpen(true)}
-                      disabled={!draft.prediction_engine_id && !defaultEngineId}
-                    >
-                      <Plus className="h-3 w-3" />
-                      {t("addParameter")}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs gap-1.5"
+                        onClick={copyEngineParams}
+                        disabled={(!draft.prediction_engine_id && !defaultEngineId) || copyingParams}
+                      >
+                        <Copy className="h-3 w-3" />
+                        {t("copyParameters")}
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="h-7 text-xs gap-1.5"
+                        onClick={() => setNewParamDialogOpen(true)}
+                        disabled={!draft.prediction_engine_id && !defaultEngineId}
+                      >
+                        <Plus className="h-3 w-3" />
+                        {t("addParameter")}
+                      </Button>
+                    </div>
                   </div>
 
                   {strategyParameters.length === 0 ? (

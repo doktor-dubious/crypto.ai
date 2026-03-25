@@ -505,7 +505,7 @@ function StatsInfoItem({ label, info, value }: { label: string; info: string; va
 }
 
 function ModelFitStatsBar({ stats, t }: { stats: AccuracyStatsResponse | undefined; t: TFunc }) {
-  if (!stats) return null
+  if (!stats || stats.mae == null) return null
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex items-center gap-4 text-xs border rounded-md px-3 py-1.5 bg-[var(--muted)]/20">
@@ -1692,7 +1692,7 @@ export default function SimulationsCompletedPage() {
     setSelected(match)
     setSelectedIds(new Set([match.id]))
     setShowOnlySelected(true)
-    setActiveTab(match.status === "failure" ? "tab0" : "tab1")
+    setActiveTab(match.status === "failure" || match.status === "revoked" ? "tab0" : "tab1")
     handledTaskIdRef.current = deepLinkTaskId
   }, [deepLinkTaskId, simulations])
 
@@ -2027,7 +2027,7 @@ export default function SimulationsCompletedPage() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
             <div className="relative w-full">
               <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
-                {selected.status === "failure" && (
+                {(selected.status === "failure" || selected.status === "revoked") && (
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 text-destructive data-[state=active]:text-destructive" value="tab0">{t("tabError")}</TabsTrigger>
                 )}
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
@@ -2054,8 +2054,24 @@ export default function SimulationsCompletedPage() {
             <div className="flex-1 overflow-y-auto">
 
               {/* ─ Error ─ */}
-              {selected.status === "failure" && (
-                <TabsContent value="tab0" className="max-w-2xl mt-6 px-4">
+              {(selected.status === "failure" || selected.status === "revoked") && (
+                <TabsContent value="tab0" className="max-w-2xl mt-6 px-4 space-y-3">
+                  {selected.days_total != null && selected.days_total > 0 && (
+                    <div className="rounded-md border border-[var(--border)] bg-[var(--muted)]/30 p-4">
+                      <p className="text-xs font-semibold text-[var(--foreground)] mb-2">{t("progressTitle")}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-2 rounded-full bg-[var(--muted)] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-destructive/70 transition-all"
+                            style={{ width: `${Math.min(100, Math.round(((selected.days_completed ?? 0) / selected.days_total) * 100))}%` }}
+                          />
+                        </div>
+                        <span className="text-xs font-mono text-[var(--muted-foreground)] whitespace-nowrap">
+                          {selected.days_completed ?? 0} / {selected.days_total} {t("progressDays")} ({Math.round(((selected.days_completed ?? 0) / selected.days_total) * 100)}%)
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4">
                     <p className="text-xs font-semibold text-destructive mb-2">{t("tabError")}</p>
                     <p className="text-xs text-[var(--muted-foreground)] font-mono whitespace-pre-wrap break-all">

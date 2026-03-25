@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 _QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
 
+
+def _sanitize_nan(arr: np.ndarray) -> np.ndarray:
+    """Replace NaN values with 0.  A zero forecast is always safer than NaN."""
+    result = np.array(arr)
+    mask = np.isnan(result)
+    if mask.any():
+        logger.warning("timesfm: replaced %d NaN values with 0 in forecast output", int(mask.sum()))
+        result[mask] = 0.0
+    return result
+
 # Number of outlets packed into a single TimesFM forward pass.
 # Increase if GPU VRAM allows; decrease if you hit OOM errors.
 BATCH_SIZE = 32
@@ -107,12 +117,12 @@ class TimesFMEngine(PredictionEngine):
             predictions, lower, upper = self._stub_forecast(values, horizon)
             all_quantiles = None
 
-        # Denormalize predictions
-        predictions = self.preprocessor.denormalize(predictions)
-        lower = self.preprocessor.denormalize(lower)
-        upper = self.preprocessor.denormalize(upper)
+        # Denormalize predictions and sanitize NaN
+        predictions = _sanitize_nan(self.preprocessor.denormalize(predictions))
+        lower = _sanitize_nan(self.preprocessor.denormalize(lower))
+        upper = _sanitize_nan(self.preprocessor.denormalize(upper))
         if all_quantiles is not None:
-            all_quantiles = self.preprocessor.denormalize(all_quantiles)  # (horizon, n_quantiles)
+            all_quantiles = _sanitize_nan(self.preprocessor.denormalize(all_quantiles))
 
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
@@ -232,10 +242,10 @@ class TimesFMEngine(PredictionEngine):
         for i, item in enumerate(items):
             preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
             pp = prepared[i]["preprocessor"]
-            preds = pp.denormalize(preds_norm)
-            lower = pp.denormalize(lower_norm)
-            upper = pp.denormalize(upper_norm)
-            quantiles = pp.denormalize(quantiles_norm)
+            preds = _sanitize_nan(pp.denormalize(preds_norm))
+            lower = _sanitize_nan(pp.denormalize(lower_norm))
+            upper = _sanitize_nan(pp.denormalize(upper_norm))
+            quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
             wpc = item.get("weekday_profile_correction", {})
             if wpc.get("enabled") if isinstance(wpc, dict) else wpc:
@@ -297,6 +307,16 @@ class TimesFMEngine(PredictionEngine):
         point_forecast, quantile_forecast = self._model.forecast(
             horizon=horizon, inputs=inputs
         )
+        if np.isnan(point_forecast).any():
+            n_nan = int(np.isnan(point_forecast).sum())
+            n_outlets_nan = int(np.isnan(point_forecast[:, -horizon:]).any(axis=1).sum())
+            logger.error(
+                "timesfm: model returned %d NaN values in point_forecast "
+                "(%d/%d outlets affected, batch=%d, horizon=%d, "
+                "input lengths=%s)",
+                n_nan, n_outlets_nan, len(batch), len(batch), horizon,
+                [len(item["values"]) for item in batch],
+            )
         n_backcast = point_forecast.shape[1] - horizon
 
         results = []
@@ -339,10 +359,10 @@ class TimesFMEngine(PredictionEngine):
             })
 
             results.append((
-                base_pred + adj,
-                base_lower + adj,
-                base_upper + adj,
-                base_all_q + adj[:, np.newaxis],
+                _sanitize_nan(base_pred + adj),
+                _sanitize_nan(base_lower + adj),
+                _sanitize_nan(base_upper + adj),
+                _sanitize_nan(base_all_q + adj[:, np.newaxis]),
             ))
 
         return results, ridge_infos
@@ -722,10 +742,10 @@ class TimesFMEngine(PredictionEngine):
             xreg_adjustment = ridge.predict(fut_X)
 
             return (
-                base_pred + xreg_adjustment,
-                base_lower + xreg_adjustment,
-                base_upper + xreg_adjustment,
-                base_all_quantiles + xreg_adjustment[:, np.newaxis],
+                _sanitize_nan(base_pred + xreg_adjustment),
+                _sanitize_nan(base_lower + xreg_adjustment),
+                _sanitize_nan(base_upper + xreg_adjustment),
+                _sanitize_nan(base_all_quantiles + xreg_adjustment[:, np.newaxis]),
             )
 
         return await loop.run_in_executor(None, _infer)

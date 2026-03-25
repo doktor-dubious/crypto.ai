@@ -222,6 +222,32 @@ export interface PredictionComparisonResponse {
   items: PredictionComparisonItem[]
 }
 
+export interface PredictionDataDumpRow {
+  outlet_id: string
+  outlet_name: string
+  date: string
+  delivered: number | null
+  sold: number | null
+  returned: number | null
+  q10: number | null
+  q20: number | null
+  q30: number | null
+  q40: number | null
+  q50: number | null
+  q60: number | null
+  q70: number | null
+  q80: number | null
+  q90: number | null
+  eo: number | null
+  cv: number | null
+  profit: number | null
+}
+
+export interface PredictionDataDumpResponse {
+  rows: PredictionDataDumpRow[]
+  total_count: number
+}
+
 export const predictionsApi = {
   createAsync: (data: PredictionRequest) =>
     apiFetch<PredictionTaskStatus>("/predictions/async", {
@@ -248,6 +274,25 @@ export const predictionsApi = {
 
   delete: (predictionId: string) =>
     apiFetch<void>(`/predictions/${predictionId}`, { method: "DELETE" }),
+
+  getDataDump: (predictionId: string, params?: {
+    outletIds?: string[]
+    limit?: number
+    offset?: number
+    sortBy?: string
+    sortDir?: string
+    search?: string
+  }) => {
+    const qs = new URLSearchParams()
+    params?.outletIds?.forEach((id) => qs.append("outlet_ids", id))
+    if (params?.limit) qs.set("limit", String(params.limit))
+    if (params?.offset != null) qs.set("offset", String(params.offset))
+    if (params?.sortBy) qs.set("sort_by", params.sortBy)
+    if (params?.sortDir) qs.set("sort_dir", params.sortDir)
+    if (params?.search) qs.set("search", params.search)
+    const q = qs.toString()
+    return apiFetch<PredictionDataDumpResponse>(`/predictions/${predictionId}/data-dump${q ? `?${q}` : ""}`)
+  },
 }
 
 export interface PredictionEngineResponse {
@@ -1156,6 +1201,8 @@ export interface CompletedSimulationResponse {
   prediction_strategy_name: string | null
   error: string | null
   warnings: string[] | null
+  days_completed: number | null
+  days_total: number | null
   worker_name: string | null
   created_at: string
   started_at: string | null

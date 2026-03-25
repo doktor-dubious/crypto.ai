@@ -341,3 +341,33 @@ class PadEffectResponse(BaseModel):
     effect: float | None                # pad_predicted - baseline_avg
     effect_pct: float | None            # effect as % of baseline_avg
     baseline_count: int                 # number of baseline dates used
+
+
+class PredictionDataDumpRow(BaseModel):
+    """Single prediction-outlet row for the prediction data dump view."""
+
+    outlet_id: str
+    outlet_name: str
+    date: date
+    delivered: float | None = None
+    sold: float | None = None
+    returned: float | None = None
+    q10: float | None = None
+    q20: float | None = None
+    q30: float | None = None
+    q40: float | None = None
+    q50: float | None = None
+    q60: float | None = None
+    q70: float | None = None
+    q80: float | None = None
+    q90: float | None = None
+    eo: float | None = None
+    cv: float | None = None
+    profit: float | None = None
+
+
+class PredictionDataDumpResponse(BaseModel):
+    """Paginated prediction-outlet rows for a prediction."""
+
+    rows: list[PredictionDataDumpRow]
+    total_count: int
