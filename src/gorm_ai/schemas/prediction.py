@@ -158,6 +158,7 @@ class PredictionStrategyUpdate(BaseModel):
     description: str | None = None
     type: int | None = None
     prediction_engine_id: str | None = None
+    finetuned_model: str | None = None
     increase_total_by_number: float | None = None
     increase_total_by_percentage: float | None = None
     increase_outlets_by_number: float | None = None
@@ -313,6 +314,7 @@ class PredictionStrategyResponse(BaseModel):
     description: str | None
     type: int
     prediction_engine_id: str | None
+    finetuned_model: str | None = None
     increase_total_by_number: float | None
     increase_total_by_percentage: float | None
     increase_outlets_by_number: float | None

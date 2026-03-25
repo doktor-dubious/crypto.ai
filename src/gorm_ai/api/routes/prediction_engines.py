@@ -162,6 +162,33 @@ async def delete_engine_parameter(
 # ── Fine-tuning ──────────────────────────────────────────────────────────────
 
 
+@router.get("/{engine_id}/finetune/models")
+async def list_finetune_models(
+    engine_id: str,
+    engine_service: PredictionEngineServiceDep,
+) -> list[str]:
+    """List available finetuned model subdirectories for an engine."""
+    import os
+
+    engine = await engine_service.get(engine_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+    if not engine.finetuned_model_path:
+        return []
+    base = engine.finetuned_model_path
+    if not os.path.isdir(base):
+        return []
+    return sorted(
+        name
+        for name in os.listdir(base)
+        if os.path.isdir(os.path.join(base, name))
+        and any(
+            f.endswith((".safetensors", ".bin"))
+            for f in os.listdir(os.path.join(base, name))
+        )
+    )
+
+
 @router.get("/{engine_id}/finetune/count", response_model=FinetuneCountResponse)
 async def get_finetune_count(
     engine_id: str,

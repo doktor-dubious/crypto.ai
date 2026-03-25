@@ -105,7 +105,7 @@ function TabsContent({
     <div
       role="tabpanel"
       data-slot="tabs-content"
-      className={cn("flex-1 outline-none", className)}
+      className={cn("flex-1 min-h-0 outline-none", className)}
       {...props}
     />
   )

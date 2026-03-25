@@ -332,6 +332,9 @@ export const predictionEnginesApi = {
 
   deleteParameter: (paramId: string) =>
     apiFetch<void>(`/prediction-engines/parameters/${paramId}`, { method: "DELETE" }),
+
+  listFinetuneModels: (engineId: string) =>
+    apiFetch<string[]>(`/prediction-engines/${engineId}/finetune/models`),
 }
 
 // ─── Finetuning ──────────────────────────────────────────────────────────────
@@ -381,6 +384,7 @@ export interface PredictionStrategyResponse {
   description: string | null
   type: number
   prediction_engine_id: string | null
+  finetuned_model: string | null
   increase_total_by_number: number | null
   increase_total_by_percentage: number | null
   increase_outlets_by_number: number | null
@@ -408,6 +412,7 @@ export interface PredictionStrategyUpdate {
   description?: string | null
   type?: number | null
   prediction_engine_id?: string | null
+  finetuned_model?: string | null
   increase_total_by_number?: number | null
   increase_total_by_percentage?: number | null
   increase_outlets_by_number?: number | null

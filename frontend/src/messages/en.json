@@ -488,6 +488,8 @@
       "tabNotes": "Notes",
       "fieldEngine": "Engine",
       "fieldEngineNone": "None",
+      "fieldFinetunedModel": "Finetuned Model",
+      "fieldFinetunedModelNone": "Base model (no finetuning)",
       "fieldIncreaseTotalByNumber": "Increase total by number",
       "fieldIncreaseTotalByPercentage": "Increase total by percentage",
       "fieldIncreaseOutletsByNumber": "Increase outlets by number",

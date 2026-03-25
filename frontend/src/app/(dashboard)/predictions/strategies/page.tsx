@@ -223,6 +223,13 @@ export default function PredictionStrategiesPage() {
   })
 
   const defaultEngineId = customerConfig?.prediction_engine_id ?? globalConfig?.prediction_engine_id ?? null
+  const effectiveEngineId = draft.prediction_engine_id ?? defaultEngineId
+
+  const { data: finetunedModels = [] } = useQuery({
+    queryKey: ["finetune-models", effectiveEngineId],
+    queryFn: () => predictionEnginesApi.listFinetuneModels(effectiveEngineId!),
+    enabled: !!effectiveEngineId,
+  })
 
   // ── Persist state to localStorage ──────────────────────────────────────────
 
@@ -342,6 +349,7 @@ export default function PredictionStrategiesPage() {
         description: selectedStrategy.description,
         type: selectedStrategy.type,
         prediction_engine_id: selectedStrategy.prediction_engine_id ?? defaultEngineId,
+        finetuned_model: selectedStrategy.finetuned_model,
         increase_total_by_number: selectedStrategy.increase_total_by_number,
         increase_total_by_percentage: selectedStrategy.increase_total_by_percentage,
         increase_outlets_by_number: selectedStrategy.increase_outlets_by_number,
@@ -369,6 +377,7 @@ export default function PredictionStrategiesPage() {
       draft.description !== selectedStrategy.description ||
       draft.type !== selectedStrategy.type ||
       draft.prediction_engine_id !== (selectedStrategy.prediction_engine_id ?? defaultEngineId) ||
+      draft.finetuned_model !== selectedStrategy.finetuned_model ||
       draft.increase_total_by_number !== selectedStrategy.increase_total_by_number ||
       draft.increase_total_by_percentage !== selectedStrategy.increase_total_by_percentage ||
       draft.increase_outlets_by_number !== selectedStrategy.increase_outlets_by_number ||
@@ -389,6 +398,7 @@ export default function PredictionStrategiesPage() {
       description: selectedStrategy.description,
       type: selectedStrategy.type,
       prediction_engine_id: selectedStrategy.prediction_engine_id ?? defaultEngineId,
+      finetuned_model: selectedStrategy.finetuned_model,
       increase_total_by_number: selectedStrategy.increase_total_by_number,
       increase_total_by_percentage: selectedStrategy.increase_total_by_percentage,
       increase_outlets_by_number: selectedStrategy.increase_outlets_by_number,
@@ -914,7 +924,7 @@ export default function PredictionStrategiesPage() {
                 <FieldRow label={t("fieldEngine")}>
                   <select
                     value={draft.prediction_engine_id ?? defaultEngineId ?? ""}
-                    onChange={(e) => setDraft((d) => ({ ...d, prediction_engine_id: e.target.value || null }))}
+                    onChange={(e) => setDraft((d) => ({ ...d, prediction_engine_id: e.target.value || null, finetuned_model: null }))}
                     className="flex h-9 w-full rounded-md border border-[var(--input-border)] bg-[var(--input-background)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                   >
                     {engines.map((engine) => (
@@ -922,6 +932,21 @@ export default function PredictionStrategiesPage() {
                     ))}
                   </select>
                 </FieldRow>
+
+                {finetunedModels.length > 0 && (
+                  <FieldRow label={t("fieldFinetunedModel")}>
+                    <select
+                      value={draft.finetuned_model ?? ""}
+                      onChange={(e) => setDraft((d) => ({ ...d, finetuned_model: e.target.value || null }))}
+                      className="flex h-9 w-full rounded-md border border-[var(--input-border)] bg-[var(--input-background)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                    >
+                      <option value="">{t("fieldFinetunedModelNone")}</option>
+                      {finetunedModels.map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </FieldRow>
+                )}
 
                 {/* ── Parameters ── */}
                 <div className="border-t border-border pt-6">
