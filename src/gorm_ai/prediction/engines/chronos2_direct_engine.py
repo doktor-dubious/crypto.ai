@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine
+from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -27,7 +27,6 @@ def _sanitize_nan(arr: np.ndarray) -> np.ndarray:
     result = np.array(arr)
     mask = np.isnan(result)
     if mask.any():
-        logger.warning("chronos2: replaced %d NaN values with 0 in forecast output", int(mask.sum()))
         result[mask] = 0.0
     return result
 
@@ -593,7 +592,7 @@ class Chronos2DirectEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        return float(np.interp(tau, _QUANTILE_LEVELS, all_quantiles[day_index]))
+        return interpolate_quantile(tau, all_quantiles[day_index])
 
     @staticmethod
     def _compute_weekday_cvs(

@@ -40,7 +40,7 @@ import { toast } from "sonner"
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
-const DUMP_PAGE_SIZE = 25
+const DUMP_PAGE_SIZE = 15
 type SortField = "strategy_name" | "date" | "created_at" | "status" | "starred"
 type DumpSortField = "outlet_name" | "date" | "delivered" | "profit" | "starred"
 
@@ -272,7 +272,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
       ) : allRows.length === 0 ? (
         <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">No data</div>
       ) : (
-        <div className="overflow-auto flex-1">
+        <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -285,11 +285,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
                   </div>
                 </TableHead>
                 <TableHead><DumpSortHeader field="outlet_name" label={t("dumpColOutlet")} /></TableHead>
-                <TableHead><DumpSortHeader field="date" label={t("dumpColDate")} /></TableHead>
-                <TableHead className="text-right"><DumpSortHeader field="profit" label={t("dumpColProfit")} /></TableHead>
-                <TableHead className="text-right"><DumpSortHeader field="delivered" label={t("dumpColDelivered")} /></TableHead>
-                <TableHead className="text-right">{t("dumpColSold")}</TableHead>
-                <TableHead className="text-right">{t("dumpColReturned")}</TableHead>
+                <TableHead className="text-right"><div className="flex justify-end"><DumpSortHeader field="delivered" label={t("dumpColDelivered")} /></div></TableHead>
                 <TableHead className="text-right whitespace-nowrap">Q10</TableHead>
                 <TableHead className="text-right whitespace-nowrap">Q20</TableHead>
                 <TableHead className="text-right whitespace-nowrap">Q30</TableHead>
@@ -299,6 +295,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
                 <TableHead className="text-right whitespace-nowrap">Q70</TableHead>
                 <TableHead className="text-right whitespace-nowrap">Q80</TableHead>
                 <TableHead className="text-right whitespace-nowrap">Q90</TableHead>
+                <TableHead className="text-right whitespace-nowrap">EO</TableHead>
                 <TableHead className="text-right whitespace-nowrap">{t("dumpColCV")}</TableHead>
                 <TableHead className="w-10 text-center">
                   <button
@@ -327,11 +324,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
                       />
                     </TableCell>
                     <TableCell className="font-medium max-w-[180px] truncate">{row.outlet_name}</TableCell>
-                    <TableCell className="text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">{formatDate(row.date)}</TableCell>
-                    <TableCell className={cn("text-right tabular-nums", row.profit != null && row.profit > 0 ? "text-green-500" : row.profit != null && row.profit < 0 ? "text-red-500" : "")}>{fmtN(row.profit)}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmtN(row.delivered)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtN(row.sold)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtN(row.returned)}</TableCell>
                     {qs.map((q, i) => (
                       <TableCell key={i} className="text-right tabular-nums text-xs">
                         {isEoQ(q, row.eo, i, qs) ? (
@@ -342,6 +335,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
                         ) : fmtQ(q)}
                       </TableCell>
                     ))}
+                    <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.eo)}</TableCell>
                     <TableCell className="text-right tabular-nums text-xs text-[var(--muted-foreground)]">
                       {row.cv != null ? row.cv.toFixed(2) : "—"}
                     </TableCell>

@@ -88,7 +88,12 @@ class DataPreprocessor:
             return np.array(values)
 
         values = np.array(values)
-        return values * (self._max_value - self._min_value) + self._min_value
+        result = values * (self._max_value - self._min_value) + self._min_value
+        # Sales/delivery quantities cannot be negative — clamp to zero.
+        # Ridge adjustments or model uncertainty can push lower quantiles
+        # below zero, especially for low-volume outlets.
+        np.maximum(result, 0.0, out=result)
+        return result
 
     @staticmethod
     def generate_future_dates(start_date: date, horizon: int) -> list[date]:

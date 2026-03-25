@@ -46,18 +46,7 @@ class TimesFMFinetunedEngine(TimesFMEngine):
             import timesfm
 
             self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(path)
-            self._model.compile(
-                timesfm.ForecastConfig(
-                    max_context=1024,
-                    max_horizon=128,
-                    normalize_inputs=True,
-                    use_continuous_quantile_head=True,
-                    force_flip_invariance=True,
-                    infer_is_positive=True,
-                    fix_quantile_crossing=True,
-                    return_backcast=True,
-                )
-            )
+            self._compile_for_context(1024)
             logger.info("Fine-tuned TimesFM loaded from '%s'", path)
         except Exception as e:
             logger.warning(

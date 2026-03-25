@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine
+from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -593,7 +593,7 @@ class SundialEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        return float(np.interp(tau, _QUANTILE_LEVELS, all_quantiles[day_index]))
+        return interpolate_quantile(tau, all_quantiles[day_index])
 
     @staticmethod
     def _compute_weekday_cvs(

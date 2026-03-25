@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine
+from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -22,7 +22,6 @@ def _sanitize_nan(arr: np.ndarray) -> np.ndarray:
     result = np.array(arr)
     mask = np.isnan(result)
     if mask.any():
-        logger.warning("timesfm: replaced %d NaN values with 0 in forecast output", int(mask.sum()))
         result[mask] = 0.0
     return result
 
@@ -304,18 +303,21 @@ class TimesFMEngine(PredictionEngine):
         from sklearn.linear_model import Ridge
 
         inputs = [item["values"] for item in batch]
+        # Recompile with context matching the longest input in this batch
+        # to avoid zero-padding which causes NaN in TimesFM's attention.
+        max_len = max(len(v) for v in inputs)
+        self._compile_for_context(max_len)
         point_forecast, quantile_forecast = self._model.forecast(
             horizon=horizon, inputs=inputs
         )
-        if np.isnan(point_forecast).any():
-            n_nan = int(np.isnan(point_forecast).sum())
-            n_outlets_nan = int(np.isnan(point_forecast[:, -horizon:]).any(axis=1).sum())
-            logger.error(
-                "timesfm: model returned %d NaN values in point_forecast "
-                "(%d/%d outlets affected, batch=%d, horizon=%d, "
-                "input lengths=%s)",
-                n_nan, n_outlets_nan, len(batch), len(batch), horizon,
-                [len(item["values"]) for item in batch],
+        forecast_nan = np.isnan(point_forecast[:, -horizon:])
+        if forecast_nan.any():
+            n_outlets_nan = int(forecast_nan.any(axis=1).sum())
+            logger.warning(
+                "timesfm: model returned NaN forecast for %d/%d outlets "
+                "(horizon=%d, input_len=%d); replaced with 0",
+                n_outlets_nan, len(batch), horizon,
+                len(batch[0]["values"]),
             )
         n_backcast = point_forecast.shape[1] - horizon
 
@@ -517,7 +519,7 @@ class TimesFMEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        return float(np.interp(tau, _QUANTILE_LEVELS, all_quantiles[day_index]))
+        return interpolate_quantile(tau, all_quantiles[day_index])
 
     @staticmethod
     def _compute_weekday_cvs(
@@ -587,24 +589,45 @@ class TimesFMEngine(PredictionEngine):
             self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
                 "google/timesfm-2.5-200m-pytorch",
             )
-            self._model.compile(
-                timesfm.ForecastConfig(
-                    max_context=1024,
-                    max_horizon=128,
-                    normalize_inputs=True,
-                    use_continuous_quantile_head=True,
-                    force_flip_invariance=True,
-                    infer_is_positive=True,
-                    fix_quantile_crossing=True,
-                    return_backcast=True,  # required for forecast_with_covariates
-                )
-            )
+            self._compile_for_context(1024)
             logger.info("TimesFM 2.5 model loaded successfully")
         except Exception as e:
             logger.warning(f"Failed to load TimesFM model, falling back to stub: {e}")
             self._model = None
         finally:
             self._model_loaded = True
+
+    def _compile_for_context(self, max_context: int) -> None:
+        """(Re)compile the model for a specific max_context size.
+
+        TimesFM's masking is broken when data length < max_context (zero-padded
+        positions produce NaN).  To avoid this we recompile before each batch
+        with a max_context that matches the data, rounded up to the patch size.
+        Compilation is cheap — it only creates a closure, no torch.compile.
+        """
+        import timesfm
+
+        patch_size = self._model.model.p  # 32 for 200M
+        # Round up to nearest patch_size multiple
+        max_context = max(
+            ((max_context + patch_size - 1) // patch_size) * patch_size,
+            patch_size,
+        )
+        if getattr(self, "_compiled_context", None) == max_context:
+            return  # already compiled for this size
+        self._model.compile(
+            timesfm.ForecastConfig(
+                max_context=max_context,
+                max_horizon=128,
+                normalize_inputs=True,
+                use_continuous_quantile_head=True,
+                force_flip_invariance=True,
+                infer_is_positive=True,
+                fix_quantile_crossing=True,
+                return_backcast=True,
+            )
+        )
+        self._compiled_context = max_context
 
     def _build_covariate_arrays(
         self,
@@ -673,6 +696,7 @@ class TimesFMEngine(PredictionEngine):
         horizon: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run plain inference (no covariates). Offloaded to thread pool."""
+        self._compile_for_context(len(values))
         loop = asyncio.get_event_loop()
         point_forecast, quantile_forecast = await loop.run_in_executor(
             None,
@@ -716,6 +740,9 @@ class TimesFMEngine(PredictionEngine):
             hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
             fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
 
+            # Recompile with context matching the data length to avoid
+            # zero-padding which causes NaN in TimesFM's attention.
+            self._compile_for_context(n_hist)
             # Get base TimesFM forecast (includes backcast due to return_backcast=True)
             point_forecast, quantile_forecast = self._model.forecast(
                 horizon=horizon, inputs=[values]

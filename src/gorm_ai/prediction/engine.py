@@ -4,7 +4,38 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
+
 from gorm_ai.schemas.prediction import PredictionResult
+
+# Quantile levels produced by all engines (P10–P90).
+QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+
+
+def interpolate_quantile(tau: float, quantile_values: np.ndarray) -> float:
+    """Interpolate the forecast distribution at critical fractile *tau*.
+
+    Within the P10–P90 range this is plain linear interpolation.  Beyond P90
+    (high-margin or high-CV products) the Q80→Q90 slope is extrapolated
+    linearly, capped at Q90 + 2×(Q90 − Q80) — roughly a P99 proxy for a
+    normal distribution — to avoid runaway values in the tail.
+
+    Args:
+        tau: Newsvendor critical fractile, typically in (0, 1).
+        quantile_values: Array of quantile forecasts aligned with
+            ``QUANTILE_LEVELS`` (length 9, P10–P90).
+    """
+    if tau <= QUANTILE_LEVELS[-1]:
+        # Within range — standard interpolation
+        return float(np.interp(tau, QUANTILE_LEVELS, quantile_values))
+
+    # Extrapolate beyond P90 using the Q80→Q90 slope
+    q80 = float(quantile_values[-2])
+    q90 = float(quantile_values[-1])
+    spread = q90 - q80
+    extra = (tau - 0.9) / 0.1 * spread  # linear extension of the last segment
+    cap = 2.0 * spread  # ≈ P99 for a normal distribution
+    return float(q90 + min(extra, cap))
 
 
 @dataclass
