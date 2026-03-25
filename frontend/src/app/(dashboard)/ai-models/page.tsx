@@ -859,9 +859,11 @@ export default function AIModelsPage() {
                     {/* Left side: count + start */}
                     <div className="flex flex-col items-center gap-4 min-w-[180px] pt-2">
                       <div className="text-center">
-                        <p className="text-3xl font-bold tabular-nums">{ftCount?.count ?? 0}</p>
+                        <p className="text-3xl font-bold tabular-nums">{ftCount?.outlet_count ?? 0}</p>
                         <p className="text-xs text-muted-foreground mt-1">
-                          {(ftCount?.count ?? 0) === 0 ? t("finetuneCountZero") : t("finetuneCount", { count: ftCount?.count ?? 0 })}
+                          {(ftCount?.outlet_count ?? 0) === 0
+                            ? t("finetuneCountZero")
+                            : t("finetuneCount", { accounts: ftCount?.customer_count ?? 0, outlets: ftCount?.outlet_count ?? 0 })}
                         </p>
                       </div>
                       <Separator className="w-full" />

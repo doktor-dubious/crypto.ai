@@ -363,7 +363,8 @@ export interface FinetuneTaskResponse {
 }
 
 export interface FinetuneCountResponse {
-  count: number
+  customer_count: number
+  outlet_count: number
 }
 
 export const finetuneApi = {

@@ -42,7 +42,8 @@ class FinetuneTaskResponse(BaseModel):
 
 
 class FinetuneCountResponse(BaseModel):
-    count: int
+    customer_count: int
+    outlet_count: int
 
 router = APIRouter()
 
@@ -198,8 +199,8 @@ async def get_finetune_count(
     from gorm_ai.services.finetune import FinetuneService
 
     service = FinetuneService(task_service.session)
-    count = await service.count_finetuned(engine_id)
-    return FinetuneCountResponse(count=count)
+    counts = await service.count_finetuned(engine_id)
+    return FinetuneCountResponse(**counts)
 
 
 @router.post("/finetune", response_model=FinetuneTaskResponse, status_code=202)

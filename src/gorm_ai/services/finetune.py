@@ -63,15 +63,19 @@ class FinetuneService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def count_finetuned(self, engine_id: str) -> int:
-        """Count distinct customers that have been fine-tuned for an engine."""
+    async def count_finetuned(self, engine_id: str) -> dict[str, int]:
+        """Count distinct customers and outlets that have been fine-tuned for an engine."""
         result = await self._session.execute(
-            select(func.count(func.distinct(FinetuneProgress.customer_id))).where(
+            select(
+                func.count(func.distinct(FinetuneProgress.customer_id)),
+                func.count(func.distinct(FinetuneProgress.outlet_id)),
+            ).where(
                 FinetuneProgress.engine == engine_id,
                 FinetuneProgress.active.is_(True),
             )
         )
-        return result.scalar_one()
+        row = result.one()
+        return {"customer_count": row[0], "outlet_count": row[1]}
 
     async def _resolve_engine(self, engine_id: str) -> PredictionEngineModel:
         """Look up the prediction engine row by UUID."""
