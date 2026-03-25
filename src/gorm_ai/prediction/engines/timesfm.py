@@ -582,16 +582,35 @@ class TimesFMEngine(PredictionEngine):
             logger.debug("HF_HUB_CACHE set to '%s'", abs_cache)
 
     def _load_model(self) -> None:
-        """Load TimesFM 2.5 (200M PyTorch) from HuggingFace."""
+        """Load TimesFM 2.5 (200M PyTorch), using local cache when available.
+
+        The upstream ``_from_pretrained`` hardcodes ``force_download=True``,
+        which re-downloads the model on every call.  We bypass this by using
+        ``huggingface_hub.hf_hub_download`` with ``force_download=False`` to
+        get the cached checkpoint, then loading weights directly.
+        """
         if self._model_loaded:
             return
         self._apply_hf_env()
         try:
             import timesfm
+            from huggingface_hub import hf_hub_download
 
-            self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
-                "google/timesfm-2.5-200m-pytorch",
+            repo_id = "google/timesfm-2.5-200m-pytorch"
+
+            # Download only if not already cached
+            model_path = hf_hub_download(
+                repo_id=repo_id,
+                filename="model.safetensors",
+                force_download=False,
             )
+            logger.info("Loading TimesFM from: %s", model_path)
+
+            # Bypass from_pretrained() which hardcodes force_download=True
+            # and re-downloads on every call. Instead, instantiate the wrapper
+            # and load the checkpoint directly.
+            self._model = timesfm.TimesFM_2p5_200M_torch()
+            self._model.model.load_checkpoint(model_path)
             self._compile_for_context(1024)
             logger.info("TimesFM 2.5 model loaded successfully")
         except Exception as e:
