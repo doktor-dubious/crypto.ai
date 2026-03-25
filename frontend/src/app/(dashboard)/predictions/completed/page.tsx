@@ -272,7 +272,7 @@ function PredictionDataTab({ predictionId }: { predictionId: string }) {
       ) : allRows.length === 0 ? (
         <div className="flex items-center justify-center h-32 text-sm text-[var(--muted-foreground)]">No data</div>
       ) : (
-        <div className="overflow-x-auto">
+        <div>
           <Table>
             <TableHeader>
               <TableRow>
