@@ -303,10 +303,13 @@ class TimesFMEngine(PredictionEngine):
         from sklearn.linear_model import Ridge
 
         inputs = [item["values"] for item in batch]
-        # Recompile with context matching the longest input in this batch
-        # to avoid zero-padding which causes NaN in TimesFM's attention.
-        max_len = max(len(v) for v in inputs)
-        self._compile_for_context(max_len)
+        # Recompile with context matching the SHORTEST input in this batch.
+        # TimesFM's attention produces NaN for any zero-padded positions, so
+        # we size the context so that every input fills it completely.
+        # Longer inputs lose some old history (truncated by forecast()) but
+        # no input gets padded.
+        min_len = min(len(v) for v in inputs)
+        self._compile_for_context(min_len)
         point_forecast, quantile_forecast = self._model.forecast(
             horizon=horizon, inputs=inputs
         )

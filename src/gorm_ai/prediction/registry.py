@@ -9,6 +9,7 @@ class EngineRegistry:
 
     def __init__(self):
         self._engines: dict[PredictionEngineEnum, type[PredictionEngine]] = {}
+        self._instances: dict[PredictionEngineEnum, PredictionEngine] = {}
         self._register_default_engines()
 
     def _register_default_engines(self) -> None:
@@ -168,7 +169,9 @@ class EngineRegistry:
         if engine_type not in self._engines:
             raise ValueError(f"Engine type '{engine_type}' is not registered")
 
-        return self._engines[engine_type]()
+        if engine_type not in self._instances:
+            self._instances[engine_type] = self._engines[engine_type]()
+        return self._instances[engine_type]
 
     def get_available_engines(self) -> list[PredictionEngineEnum]:
         """
