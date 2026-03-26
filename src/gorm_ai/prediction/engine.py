@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 
+import math
+
 import numpy as np
 
 from gorm_ai.schemas.prediction import PredictionResult
@@ -29,7 +31,9 @@ def interpolate_quantile(
                      2 = snap to nearest quantile (legacy).
         extrapolation: 1 = extrapolate to ~E99 (cap = 2× spread),
                        2 = conservative extrapolation to ~E95 (cap = 1× spread),
-                       3 = cap at E90 (no extrapolation).
+                       3 = cap at E90 (no extrapolation),
+                       4 = dampened (exponential decay on growth rate,
+                           asymptotes to Q90 + spread).
     """
     if methodology == 2:
         # Legacy snap-to-nearest behaviour
@@ -55,6 +59,10 @@ def interpolate_quantile(
     q90 = float(quantile_values[-1])
     spread = q90 - q80
     t = (tau - 0.9) / 0.1  # normalized distance beyond P90
+    if extrapolation == 4:
+        # Dampened: exponential decay on growth rate.
+        # Responsive near Q90, flattens out, asymptotes to Q90 + spread.
+        return float(q90 + spread * (1.0 - math.exp(-2.0 * t)))
     if extrapolation == 2:
         # Conservative: half the slope, cap at 1× spread (≈ P95)
         extra = t * spread * 0.5

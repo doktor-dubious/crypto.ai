@@ -400,6 +400,7 @@ function CoreTab({
           {!isGorm && <option value="">{t("eoExtrapolationE99")}</option>}
           <option value="1">{t("eoExtrapolationE99")}</option>
           <option value="2">{t("eoExtrapolationE95")}</option>
+          <option value="4">{t("eoExtrapolationDampened")}</option>
           <option value="3">{t("eoExtrapolationCap")}</option>
         </select>
       </FieldRow>

@@ -947,6 +947,7 @@
     "eoExtrapolationInfo": "Controls how the Economic Optimal handles high-margin products where the critical fractile exceeds P90. E99 extrapolates aggressively, E95 is more conservative, and Cap at E90 uses no extrapolation.",
     "eoExtrapolationE99": "Extrapolate to ~E99",
     "eoExtrapolationE95": "Conservative (~E95)",
+    "eoExtrapolationDampened": "Dampened",
     "eoExtrapolationCap": "Cap at E90",
     "sectionCorrection": "Weekday Correction",
     "sectionCorrectionDesc": "Automatically adjust predictions using historical weekday patterns.",
