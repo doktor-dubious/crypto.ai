@@ -367,6 +367,7 @@ class SimulationService:
         weekday_correction = await self._prediction_service._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
         variation_params = await self._prediction_service._resolve_variation_adjustment(request.customer_id)
+        eo_params = await self._prediction_service._resolve_eo_params(request.customer_id)
         weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
         open_days_flags = await self._prediction_service._resolve_open_days(request.customer_id)
 
@@ -507,6 +508,7 @@ class SimulationService:
                     "weekday_correction": weekday_correction,
                     "weekday_profile_correction": weekday_profile_params,
                     "variation_adjustment": variation_params,
+                    "eo_params": eo_params,
                 })
                 batch_outlet_ids.append(outlet_id)
 
@@ -538,6 +540,7 @@ class SimulationService:
                             "covariates": covariates_cache[outlet_id],
                             "pad_dates": pad_covariates,
                             "weekday_correction": [False] * 7,
+                            "eo_params": eo_params,
                         })
                         wo_ids.append(outlet_id)
                     if not wo_items:
