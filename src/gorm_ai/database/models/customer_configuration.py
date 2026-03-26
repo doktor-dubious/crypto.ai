@@ -61,6 +61,12 @@ class CustomerConfiguration(Base):
     variation_history_days: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )
+    eo_methodology: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )  # 1=interpolate, 2=snap; None = inherit
+    eo_extrapolation: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )  # 1=extrapolate to ~E99, 2=conservative ~E95, 3=cap at E90; None = inherit
     open_monday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     open_tuesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     open_wednesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

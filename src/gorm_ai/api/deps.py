@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.connection import get_session
 from gorm_ai.services.configuration import ConfigurationService
-from gorm_ai.services.financial_date import FinancialDateService
 from gorm_ai.services.customer import CustomerService
 from gorm_ai.services.customer_configuration import CustomerConfigurationService
+from gorm_ai.services.financial_date import FinancialDateService
+from gorm_ai.services.import_template import ImportTemplateService
 from gorm_ai.services.outlet import OutletService
 from gorm_ai.services.outlet_group import OutletGroupService
 from gorm_ai.services.pad import PadService
@@ -22,7 +23,7 @@ from gorm_ai.services.prediction_engine_parameter import PredictionEngineParamet
 from gorm_ai.services.prediction_strategy import PredictionStrategyService
 from gorm_ai.services.sales import SalesService
 from gorm_ai.services.sales_filter import SalesFilterService
-from gorm_ai.services.import_template import ImportTemplateService
+from gorm_ai.services.simulation_filter import SimulationFilterService
 from gorm_ai.services.simulation_strategy import SimulationStrategyService
 from gorm_ai.services.task import TaskService
 
@@ -122,6 +123,11 @@ def get_import_template_service(session: DbSession) -> ImportTemplateService:
     return ImportTemplateService(session)
 
 
+def get_simulation_filter_service(session: DbSession) -> SimulationFilterService:
+    """Get simulation filter service."""
+    return SimulationFilterService(session)
+
+
 def get_simulation_strategy_service(session: DbSession) -> SimulationStrategyService:
     """Get simulation strategy service."""
     return SimulationStrategyService(session)
@@ -151,5 +157,8 @@ PredictionEngineParameterServiceDep = Annotated[
     PredictionEngineParameterService, Depends(get_prediction_engine_parameter_service)
 ]
 PredictionStrategyServiceDep = Annotated[PredictionStrategyService, Depends(get_prediction_strategy_service)]
+SimulationFilterServiceDep = Annotated[
+    SimulationFilterService, Depends(get_simulation_filter_service)
+]
 SimulationStrategyServiceDep = Annotated[SimulationStrategyService, Depends(get_simulation_strategy_service)]
 SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]

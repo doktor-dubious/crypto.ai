@@ -281,11 +281,16 @@ class Moirai2Engine(PredictionEngine):
                     p["historical_data"], days,
                 )
 
+            eo_params = p.get("eo_params", {})
+            eo_meth = eo_params.get("methodology", 1) if isinstance(eo_params, dict) else 1
+            eo_extrap = eo_params.get("extrapolation", 1) if isinstance(eo_params, dict) else 1
+
             day_results = []
             for idx, fd in enumerate(future_dates):
                 eo = self._compute_economic_optimal(
                     fd, idx, all_quantiles, p["covariates"],
                     weekday_cvs=weekday_cvs,
+                    eo_methodology=eo_meth, eo_extrapolation=eo_extrap,
                 )
                 day_results.append(PredictionResult(
                     date=fd,
@@ -308,6 +313,8 @@ class Moirai2Engine(PredictionEngine):
         all_quantiles: np.ndarray,
         covariates: dict[str, dict[date, float]] | None,
         weekday_cvs: dict[int, float] | None = None,
+        eo_methodology: int = 1,
+        eo_extrapolation: int = 1,
     ) -> float | None:
         """Newsvendor-optimal draw using τ = (selling_price − production_cost) / selling_price.
 
@@ -334,7 +341,10 @@ class Moirai2Engine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        return interpolate_quantile(tau, all_quantiles[day_index])
+        return interpolate_quantile(
+            tau, all_quantiles[day_index],
+            methodology=eo_methodology, extrapolation=eo_extrapolation,
+        )
 
     @staticmethod
     def _compute_weekday_cvs(

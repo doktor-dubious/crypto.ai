@@ -378,6 +378,31 @@ function CoreTab({
           </FieldRow>
         </div>
       )}
+
+      <FieldRow label={t("eoMethodology")} info={t("eoMethodologyInfo")}>
+        <select
+          value={String(draft.eo_methodology ?? (isGorm ? 1 : ""))}
+          onChange={(e) => set("eo_methodology", e.target.value === "" ? null : parseInt(e.target.value, 10))}
+          className={selectClassName}
+        >
+          {!isGorm && <option value="">{t("eoMethodologyInterpolate")}</option>}
+          <option value="1">{t("eoMethodologyInterpolate")}</option>
+          <option value="2">{t("eoMethodologySnap")}</option>
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("eoExtrapolation")} info={t("eoExtrapolationInfo")}>
+        <select
+          value={String(draft.eo_extrapolation ?? (isGorm ? 1 : ""))}
+          onChange={(e) => set("eo_extrapolation", e.target.value === "" ? null : parseInt(e.target.value, 10))}
+          className={selectClassName}
+        >
+          {!isGorm && <option value="">{t("eoExtrapolationE99")}</option>}
+          <option value="1">{t("eoExtrapolationE99")}</option>
+          <option value="2">{t("eoExtrapolationE95")}</option>
+          <option value="3">{t("eoExtrapolationCap")}</option>
+        </select>
+      </FieldRow>
     </>
   )
 }

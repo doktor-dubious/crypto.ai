@@ -49,6 +49,12 @@ class Configuration(Base):
     variation_history_days: Mapped[int] = mapped_column(
         Integer, default=365, nullable=False,
     )
+    eo_methodology: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False,
+    )  # 1=interpolate, 2=snap to nearest quantile
+    eo_extrapolation: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False,
+    )  # 1=extrapolate to ~E99, 2=conservative ~E95, 3=cap at E90
     open_monday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     open_tuesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     open_wednesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

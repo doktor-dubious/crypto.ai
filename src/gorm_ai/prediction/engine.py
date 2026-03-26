@@ -12,29 +12,57 @@ from gorm_ai.schemas.prediction import PredictionResult
 QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
 
 
-def interpolate_quantile(tau: float, quantile_values: np.ndarray) -> float:
-    """Interpolate the forecast distribution at critical fractile *tau*.
-
-    Within the P10–P90 range this is plain linear interpolation.  Beyond P90
-    (high-margin or high-CV products) the Q80→Q90 slope is extrapolated
-    linearly, capped at Q90 + 2×(Q90 − Q80) — roughly a P99 proxy for a
-    normal distribution — to avoid runaway values in the tail.
+def interpolate_quantile(
+    tau: float,
+    quantile_values: np.ndarray,
+    *,
+    methodology: int = 1,
+    extrapolation: int = 1,
+) -> float:
+    """Select the EO value from the forecast distribution at critical fractile *tau*.
 
     Args:
         tau: Newsvendor critical fractile, typically in (0, 1).
         quantile_values: Array of quantile forecasts aligned with
             ``QUANTILE_LEVELS`` (length 9, P10–P90).
+        methodology: 1 = interpolate between quantiles (smooth),
+                     2 = snap to nearest quantile (legacy).
+        extrapolation: 1 = extrapolate to ~E99 (cap = 2× spread),
+                       2 = conservative extrapolation to ~E95 (cap = 1× spread),
+                       3 = cap at E90 (no extrapolation).
     """
+    if methodology == 2:
+        # Legacy snap-to-nearest behaviour
+        if extrapolation == 3 or tau <= QUANTILE_LEVELS[-1]:
+            clamped = min(tau, QUANTILE_LEVELS[-1])
+            nearest_idx = int(np.argmin(np.abs(QUANTILE_LEVELS - clamped)))
+            return float(quantile_values[nearest_idx])
+        # Snap beyond P90 — still return Q90 (snap has no between-quantile
+        # extrapolation, so modes 1 and 2 both resolve to Q90)
+        return float(quantile_values[-1])
+
+    # methodology == 1: interpolate
     if tau <= QUANTILE_LEVELS[-1]:
         # Within range — standard interpolation
         return float(np.interp(tau, QUANTILE_LEVELS, quantile_values))
+
+    if extrapolation == 3:
+        # Cap at P90
+        return float(quantile_values[-1])
 
     # Extrapolate beyond P90 using the Q80→Q90 slope
     q80 = float(quantile_values[-2])
     q90 = float(quantile_values[-1])
     spread = q90 - q80
-    extra = (tau - 0.9) / 0.1 * spread  # linear extension of the last segment
-    cap = 2.0 * spread  # ≈ P99 for a normal distribution
+    t = (tau - 0.9) / 0.1  # normalized distance beyond P90
+    if extrapolation == 2:
+        # Conservative: half the slope, cap at 1× spread (≈ P95)
+        extra = t * spread * 0.5
+        cap = 1.0 * spread
+    else:
+        # Aggressive: full slope, cap at 2× spread (≈ P99)
+        extra = t * spread
+        cap = 2.0 * spread
     return float(q90 + min(extra, cap))
 
 

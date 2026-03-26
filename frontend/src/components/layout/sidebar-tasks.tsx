@@ -26,6 +26,7 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
   success: "success",
   failure: "destructive",
   revoked: "warning",
+  continued: "muted",
 }
 
 function TaskItem({ task }: { task: TaskRecordResponse }) {
@@ -35,7 +36,7 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   const { state } = useSidebar()
   const isExpanded = state === "expanded"
 
-  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
+  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked" || task.status === "continued"
   const completedRoute = task.type === "prediction"
     ? `/predictions/completed?task_id=${task.task_id}`
     : task.type === "simulation"
@@ -88,7 +89,8 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
               task.status === "pending" && "bg-yellow-500",
               task.status === "success" && "bg-green-500",
               task.status === "failure" && "bg-red-500",
-              task.status === "revoked" && "bg-orange-500"
+              task.status === "revoked" && "bg-orange-500",
+              task.status === "continued" && "bg-neutral-400"
             )}
           />
         </div>
@@ -239,7 +241,7 @@ export function SidebarTasks() {
     )
   const pending = tasks.filter((t) => t.status === "pending")
   const finished = tasks
-    .filter((t) => ["success", "failure", "revoked"].includes(t.status))
+    .filter((t) => ["success", "failure", "revoked", "continued"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )

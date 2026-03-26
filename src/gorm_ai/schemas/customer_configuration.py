@@ -37,6 +37,8 @@ class CustomerConfigurationBase(BaseModel):
     weekday_profile_correction_method: int | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    eo_methodology: int | None = None
+    eo_extrapolation: int | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None
@@ -84,6 +86,8 @@ class CustomerConfigurationUpdate(BaseModel):
     weekday_profile_correction_method: int | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    eo_methodology: int | None = None
+    eo_extrapolation: int | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None

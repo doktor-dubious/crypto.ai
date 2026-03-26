@@ -164,6 +164,7 @@ class PredictionService:
         weekday_correction = await self._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._resolve_weekday_profile_correction(request.customer_id)
         variation_params = await self._resolve_variation_adjustment(request.customer_id)
+        eo_params = await self._resolve_eo_params(request.customer_id)
 
         # Filter closed-day data from historical series so that engines don't
         # see artificial zeros on days the customer is closed.
@@ -231,6 +232,7 @@ class PredictionService:
                 "weekday_correction": weekday_correction,
                 "weekday_profile_correction": weekday_profile_params,
                 "variation_adjustment": variation_params,
+                "eo_params": eo_params,
                 **(request.engine_params or {}),
             })
             valid_outlet_ids.append(outlet_id)
@@ -269,6 +271,7 @@ class PredictionService:
                         "covariates": covariates_by_outlet.get(outlet_id) if request.use_financials else None,
                         "pad_dates": pad_covariates,
                         "weekday_correction": [False] * 7,
+                        "eo_params": eo_params,
                     })
                     wo_ids.append(outlet_id)
                 if not wo_items:
@@ -1290,6 +1293,39 @@ class PredictionService:
         return {
             "enabled": _resolve("variation_adjustment", False),
             "history_days": _resolve("variation_history_days", 365),
+        }
+
+    async def _resolve_eo_params(self, customer_id: str) -> dict:
+        """Resolve EO methodology and extrapolation settings.
+
+        Returns dict with keys: methodology (int), extrapolation (bool).
+        """
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+
+        def _resolve(attr: str, default):
+            cc_val = getattr(cc, attr, None) if cc else None
+            if cc_val is not None:
+                return cc_val
+            if gc is not None:
+                return getattr(gc, attr, default)
+            return default
+
+        return {
+            "methodology": _resolve("eo_methodology", 1),
+            "extrapolation": _resolve("eo_extrapolation", 1),
         }
 
     async def _resolve_rounding(self, customer_id: str) -> int:

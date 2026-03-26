@@ -75,12 +75,13 @@ const WEEKDAY_OPTIONS: { value: WeekdayFilter; label: string; days: number[] | n
   { value: "mon-sat", label: "Monday \u2013 Saturday", days: [1, 2, 3, 4, 5, 6] },
 ]
 
-type SimStatus = "success" | "failure" | "revoked"
+type SimStatus = "success" | "failure" | "revoked" | "continued"
 
-const STATUS_BADGE: Record<SimStatus, { variant: "success" | "destructive" | "warning"; label: string }> = {
+const STATUS_BADGE: Record<SimStatus, { variant: "success" | "destructive" | "warning" | "muted"; label: string }> = {
   success: { variant: "success", label: "statusSuccess" },
   failure: { variant: "destructive", label: "statusFailure" },
   revoked: { variant: "warning", label: "statusRevoked" },
+  continued: { variant: "muted", label: "statusContinued" },
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1305,6 +1306,7 @@ function DataDumpTab({
                   <TableHead className="text-right whitespace-nowrap">Q70</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Q80</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Q90</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">EO</TableHead>
                   <TableHead className="text-right"><GTooltipHead label="G1" info={t("overviewColG1")} /></TableHead>
                   <TableHead className="text-right"><GTooltipHead label="G2" info={t("overviewColG2")} /></TableHead>
                   <TableHead className="text-right"><GTooltipHead label="G3" info={t("overviewColG3")} /></TableHead>
@@ -1366,6 +1368,7 @@ function DataDumpTab({
                           ) : fmtQ(q)}
                         </TableCell>
                       )))([row.q10, row.q20, row.q30, row.q40, row.q50, row.q60, row.q70, row.q80, row.q90] as (number | null)[])}
+                      <TableCell className="text-right tabular-nums text-xs">{fmtQ(row.eo)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g1 != null && row.g1 > 0 && "text-green-500")}>{fmtC(row.g1)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g2 != null && row.g2 < 0 && "text-red-500")}>{fmtC(row.g2)}</TableCell>
                       <TableCell className={cn("text-right tabular-nums", row.g3 != null && row.g3 < 0 && "text-red-500")}>{fmtC(row.g3)}</TableCell>

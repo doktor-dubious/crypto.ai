@@ -23,6 +23,7 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/simulations/new": "simulationsNew",
   "/simulations/strategies": "simulationsStrategies",
   "/simulations/completed": "simulationsCompleted",
+  "/simulations/filter": "simulationsFilter",
   "/pads": "padsFilters",
   "/pads/predefined": "predefinedPads",
   "/financials/date-override": "financialsDateOverride",

@@ -22,6 +22,7 @@
     "simulationsNew": "New",
     "simulationsStrategies": "Strategies",
     "simulationsCompleted": "Completed",
+    "simulationsFilter": "Filter",
     "pads": "PADs",
     "padsFilters": "Pads & Filters",
     "predefinedPads": "Predefined Pads",
@@ -208,6 +209,7 @@
       "statusSuccess": "Completed",
       "statusFailure": "Failed",
       "statusRevoked": "Cancelled",
+      "statusContinued": "Continued",
       "statusDegraded": "Degraded",
       "selectCompleted": "Select Completed",
       "selectCancelled": "Select Cancelled",
@@ -395,6 +397,25 @@
       "toastUpdateError": "Failed to save strategy",
       "toastDeleted": "Simulation strategy deleted",
       "toastDeleteError": "Failed to delete strategy"
+    },
+    "filter": {
+      "filterNameLabel": "Filter Name",
+      "filterNamePlaceholder": "e.g. Holiday Season",
+      "applyButton": "Apply Filter",
+      "applying": "Applying...",
+      "warnNoDates": "Select dates on the calendar first",
+      "warnNoName": "Enter a filter name",
+      "toastCreated": "Filter \"{name}\" created",
+      "toastCreateError": "Failed to create filter",
+      "toastDeleted": "Filter deleted",
+      "toastDeleteError": "Failed to delete filter",
+      "existingFilters": "Existing Filters",
+      "noFilters": "No filters yet",
+      "deleteFilter": "Remove filter",
+      "filterDeleteTitle": "Remove filter?",
+      "filterDeleteDescription": "This will permanently delete the filter \"{name}\".",
+      "cancel": "Cancel",
+      "clearSelection": "Clear selection"
     }
   },
   "predictions": {
@@ -412,6 +433,7 @@
       "statusSuccess": "Completed",
       "statusFailure": "Failed",
       "statusRevoked": "Cancelled",
+      "statusContinued": "Continued",
       "statusDowngrade": "Engine Downgrade",
       "selectCompleted": "Select Completed",
       "selectCancelled": "Select Cancelled",
@@ -917,6 +939,15 @@
     "variationAdjustmentInfo": "Adjusts the economic optimal upward for outlets and weekdays with high sales variation, protecting against stockouts on volatile days.",
     "variationHistoryDays": "History Window (days)",
     "variationHistoryDaysInfo": "Number of days of historical sales data used to calculate per-weekday variation. Capped to avoid using outdated patterns.",
+    "eoMethodology": "EO Methodology",
+    "eoMethodologyInfo": "How the Economic Optimal value is selected from the quantile distribution. Interpolate smoothly estimates between quantile levels. Snap selects the nearest quantile level.",
+    "eoMethodologyInterpolate": "Interpolate",
+    "eoMethodologySnap": "Snap to nearest Quantile",
+    "eoExtrapolation": "EO Extrapolation",
+    "eoExtrapolationInfo": "Controls how the Economic Optimal handles high-margin products where the critical fractile exceeds P90. E99 extrapolates aggressively, E95 is more conservative, and Cap at E90 uses no extrapolation.",
+    "eoExtrapolationE99": "Extrapolate to ~E99",
+    "eoExtrapolationE95": "Conservative (~E95)",
+    "eoExtrapolationCap": "Cap at E90",
     "sectionCorrection": "Weekday Correction",
     "sectionCorrectionDesc": "Automatically adjust predictions using historical weekday patterns.",
     "sectionIsolation": "Weekday Isolation",
@@ -1178,7 +1209,8 @@
       "started": "Running",
       "success": "Completed",
       "failure": "Failed",
-      "revoked": "Cancelled"
+      "revoked": "Cancelled",
+      "continued": "Continued"
     }
   },
   "topbar": {

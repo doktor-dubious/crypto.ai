@@ -111,6 +111,7 @@ const SIMULATION_SUBNAV_ITEMS = [
   { href: "/simulations/new", icon: Plus, labelKey: "simulationsNew" },
   { href: "/simulations/strategies", icon: Sparkles, labelKey: "simulationsStrategies" },
   { href: "/simulations/completed", icon: CheckCircle, labelKey: "simulationsCompleted" },
+  { href: "/simulations/filter", icon: Filter, labelKey: "simulationsFilter" },
 ] as const
 
 const PADS_SUBNAV_ITEMS = [

@@ -1,8 +1,7 @@
 """Customer model."""
 
-from typing import TYPE_CHECKING
-
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,12 +11,13 @@ from gorm_ai.database.base import Base
 if TYPE_CHECKING:
     from gorm_ai.database.models.customer_configuration import CustomerConfiguration
     from gorm_ai.database.models.financial_date import FinancialDate
-    from gorm_ai.database.models.prediction_strategy import PredictionStrategy
-    from gorm_ai.database.models.sales_filter import SalesFilter
     from gorm_ai.database.models.outlet import Outlet
     from gorm_ai.database.models.outlet_group import OutletGroup
     from gorm_ai.database.models.pad import Pad
+    from gorm_ai.database.models.prediction_strategy import PredictionStrategy
     from gorm_ai.database.models.sales import Sales
+    from gorm_ai.database.models.sales_filter import SalesFilter
+    from gorm_ai.database.models.simulation_filter import SimulationFilter
 
 
 class Customer(Base):
@@ -68,6 +68,12 @@ class Customer(Base):
     )
     sales_filters: Mapped[list["SalesFilter"]] = relationship(
         "SalesFilter",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    simulation_filters: Mapped[list["SimulationFilter"]] = relationship(
+        "SimulationFilter",
         back_populates="customer",
         lazy="noload",
         cascade="all, delete-orphan",

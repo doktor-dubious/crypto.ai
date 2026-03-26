@@ -19,6 +19,7 @@ from gorm_ai.api.routes import (
     predictions,
     sales,
     sales_filters,
+    simulation_filters,
     simulation_strategies,
     simulations,
     tasks,
@@ -45,6 +46,9 @@ api_router.include_router(
     prediction_strategies.router, prefix="/prediction-strategies", tags=["prediction-strategies"]
 )
 api_router.include_router(predictions.router, prefix="/predictions", tags=["predictions"])
+api_router.include_router(
+    simulation_filters.router, prefix="/simulation-filters", tags=["simulation-filters"]
+)
 api_router.include_router(
     simulation_strategies.router, prefix="/simulation-strategies", tags=["simulation-strategies"]
 )

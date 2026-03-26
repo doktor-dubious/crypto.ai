@@ -29,6 +29,7 @@ from gorm_ai.database.models.prediction_strategy import PredictionStrategy
 from gorm_ai.database.models.sales_filter import SalesFilter
 from gorm_ai.database.models.simulation import Simulation
 from gorm_ai.database.models.simulation_date import SimulationDate
+from gorm_ai.database.models.simulation_filter import SimulationFilter
 from gorm_ai.database.models.simulation_strategy import SimulationStrategy
 from gorm_ai.database.models.task_record import TaskRecord
 
@@ -67,6 +68,7 @@ __all__ = [
     "SalesFilter",
     "Simulation",
     "SimulationDate",
+    "SimulationFilter",
     "SimulationStrategy",
     "TaskRecord",
 ]

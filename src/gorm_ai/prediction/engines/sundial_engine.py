@@ -345,12 +345,17 @@ class SundialEngine(PredictionEngine):
                     item["historical_data"], days,
                 )
 
+            eo_params = item.get("eo_params", {})
+            eo_meth = eo_params.get("methodology", 1) if isinstance(eo_params, dict) else 1
+            eo_extrap = eo_params.get("extrapolation", 1) if isinstance(eo_params, dict) else 1
+
             day_results = []
             for idx, pred_date in enumerate(future_dates):
                 economic_optimal = self._compute_economic_optimal(
                     pred_date, idx, quantiles,
                     item.get("covariates"), holding_rate, protection_days,
                     weekday_cvs=weekday_cvs,
+                    eo_methodology=eo_meth, eo_extrapolation=eo_extrap,
                 )
                 day_results.append(PredictionResult(
                     date=pred_date,
@@ -579,6 +584,8 @@ class SundialEngine(PredictionEngine):
         holding_rate: float,
         protection_days: int,
         weekday_cvs: dict[int, float] | None = None,
+        eo_methodology: int = 1,
+        eo_extrapolation: int = 1,
     ) -> float | None:
         """Newsvendor-optimal draw using critical fractile."""
         if all_quantiles is None or covariates is None:
@@ -593,7 +600,10 @@ class SundialEngine(PredictionEngine):
             cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
             tau = tau + cv * (1.0 - tau)
 
-        return interpolate_quantile(tau, all_quantiles[day_index])
+        return interpolate_quantile(
+            tau, all_quantiles[day_index],
+            methodology=eo_methodology, extrapolation=eo_extrapolation,
+        )
 
     @staticmethod
     def _compute_weekday_cvs(

@@ -21,6 +21,7 @@ from gorm_ai.database.models.prediction import Prediction as PredictionModel
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.sales import Sales
 from gorm_ai.database.models.sales_filter import SalesFilter
+from gorm_ai.database.models.simulation_filter import SimulationFilter
 from gorm_ai.database.models.simulation import Simulation as SimulationModel
 from gorm_ai.database.models.simulation_date import SimulationDate as SimulationDateModel
 from gorm_ai.prediction.registry import EngineRegistry
@@ -393,6 +394,17 @@ class SimulationService:
             (row.from_date, row.to_date) for row in _sf_result.all()
         ]
 
+        # Load simulation filter date ranges so we can skip filtered dates in simulations
+        _simf_result = await self.session.execute(
+            select(SimulationFilter.from_date, SimulationFilter.to_date).where(
+                SimulationFilter.customer_id == request.customer_id,
+                SimulationFilter.active.is_(True),
+            )
+        )
+        simulation_filter_ranges: list[tuple[date, date]] = [
+            (row.from_date, row.to_date) for row in _simf_result.all()
+        ]
+
         # Per-outlet scalar accumulators — avoids holding all SimulationDayResult objects in RAM
         outlet_profit_acc: dict[str, float] = {oid: 0.0 for oid in outlet_ids}
         outlet_potential_acc: dict[str, float] = {oid: 0.0 for oid in outlet_ids}
@@ -602,8 +614,13 @@ class SimulationService:
                     # Skip days the publication is closed
                     if not open_days_flags[pred_date.weekday()]:
                         continue
-                    # Skip dates covered by sales filters
+                    # Skip dates covered by sales filters or simulation filters
                     if any(sf_from <= pred_date <= sf_to for sf_from, sf_to in sales_filter_ranges):
+                        continue
+                    if any(
+                        sf_from <= pred_date <= sf_to
+                        for sf_from, sf_to in simulation_filter_ranges
+                    ):
                         continue
 
                     # Remove outlets that are closed on this weekday (per-outlet open days).
@@ -1327,7 +1344,7 @@ class SimulationService:
             .where(
                 TaskRecord.customer_id == customer_id,
                 TaskRecord.type == "simulation",
-                TaskRecord.status.in_(["success", "failure", "revoked"]),
+                TaskRecord.status.in_(["success", "failure", "revoked", "continued"]),
                 TaskRecord.active.is_(True),
             )
             .order_by(TaskRecord.completed_at.desc().nulls_last(), TaskRecord.created_at.desc())

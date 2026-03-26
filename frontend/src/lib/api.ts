@@ -30,7 +30,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ─── Types (mirrored from FastAPI schemas) ────────────────────────────────────
 
-export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked"
+export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued"
 export type TaskType = "prediction" | "simulation" | "finetune"
 
 export interface TaskRecordResponse {
@@ -601,6 +601,8 @@ export interface ConfigurationResponse {
   weekday_profile_correction_method: number
   variation_adjustment: boolean
   variation_history_days: number
+  eo_methodology: number
+  eo_extrapolation: number
   open_monday: boolean
   open_tuesday: boolean
   open_wednesday: boolean
@@ -646,6 +648,8 @@ export interface CustomerConfigurationResponse {
   weekday_profile_correction_method: number | null
   variation_adjustment: boolean | null
   variation_history_days: number | null
+  eo_methodology: number | null
+  eo_extrapolation: number | null
   open_monday: boolean | null
   open_tuesday: boolean | null
   open_wednesday: boolean | null
@@ -1622,6 +1626,55 @@ export const salesFiltersApi = {
 
   delete: (id: string) =>
     apiFetch<void>(`/sales-filters/${id}`, { method: "DELETE" }),
+}
+
+// ─── Simulation Filters ──────────────────────────────────────────────────────
+
+export interface SimulationFilterResponse {
+  id: string
+  customer_id: string
+  name: string
+  description: string | null
+  from_date: string
+  to_date: string
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SimulationFilterCreate {
+  customer_id: string
+  name: string
+  description?: string | null
+  from_date: string
+  to_date: string
+}
+
+export interface SimulationFilterUpdate {
+  name?: string | null
+  description?: string | null
+  from_date?: string | null
+  to_date?: string | null
+}
+
+export const simulationFiltersApi = {
+  list: (customerId: string) =>
+    apiFetch<SimulationFilterResponse[]>(`/simulation-filters?customer_id=${customerId}`),
+
+  create: (data: SimulationFilterCreate) =>
+    apiFetch<SimulationFilterResponse>("/simulation-filters", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, data: SimulationFilterUpdate) =>
+    apiFetch<SimulationFilterResponse>(`/simulation-filters/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    apiFetch<void>(`/simulation-filters/${id}`, { method: "DELETE" }),
 }
 
 // ─── System Logs ─────────────────────────────────────────────────────────────

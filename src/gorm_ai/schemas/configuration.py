@@ -34,6 +34,8 @@ class ConfigurationUpdate(BaseModel):
     weekday_profile_correction_method: int | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    eo_methodology: int | None = None
+    eo_extrapolation: int | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None
@@ -83,6 +85,8 @@ class ConfigurationResponse(BaseModel):
     weekday_profile_correction_method: int = 1
     variation_adjustment: bool = False
     variation_history_days: int = 365
+    eo_methodology: int = 1
+    eo_extrapolation: int = 1
     open_monday: bool = True
     open_tuesday: bool = True
     open_wednesday: bool = True

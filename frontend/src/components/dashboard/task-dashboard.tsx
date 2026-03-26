@@ -27,6 +27,7 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
   success: "success",
   failure: "destructive",
   revoked: "warning",
+  continued: "muted",
 }
 
 function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordResponse; customerName?: string; activeTaskIds: Set<string> }) {
@@ -41,7 +42,7 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
     return () => clearInterval(id)
   }, [])
 
-  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked"
+  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked" || task.status === "continued"
   const completedRoute = task.type === "prediction"
     ? `/predictions/completed?task_id=${task.task_id}`
     : task.type === "simulation"
@@ -462,7 +463,7 @@ export function TaskDashboard() {
     )
     .slice(0, COLUMN_LIMIT)
   const finished = tasks
-    .filter((t) => ["success", "failure", "revoked"].includes(t.status))
+    .filter((t) => ["success", "failure", "revoked", "continued"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )

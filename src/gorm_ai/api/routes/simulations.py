@@ -212,7 +212,7 @@ async def resume_simulation(
     await task_service.create(task.id, "simulation", sim.customer_id, name=name)
 
     # Update old TaskRecord status to indicate it was superseded
-    record.status = "revoked"
+    record.status = "continued"
     record.error = "Resumed"
     if not record.completed_at:
         record.completed_at = datetime.now(UTC)

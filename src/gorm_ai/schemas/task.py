@@ -21,6 +21,7 @@ class TaskStatus(StrEnum):
     SUCCESS = "success"
     FAILURE = "failure"
     REVOKED = "revoked"
+    CONTINUED = "continued"
 
 
 class TaskRecordResponse(BaseModel):
