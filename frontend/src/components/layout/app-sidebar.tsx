@@ -65,6 +65,7 @@ import {
 import { createPortal } from "react-dom"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { AnimatedSettings } from "@/components/icons/animated-icons"
 import { SidebarTasks } from "@/components/layout/sidebar-tasks"
 import { ThemeToggle } from "@/components/layout/theme-toggle"
 import { useCustomer } from "@/components/providers/customer-provider"
@@ -547,7 +548,7 @@ export function AppSidebar() {
             <DropdownMenuSeparator />
             {CONFIG_ITEMS.map((item) => (
               <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                <item.icon className="h-4 w-4" />
+                <AnimatedSettings className="h-4 w-4" />
                 {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
               </DropdownMenuItem>
             ))}

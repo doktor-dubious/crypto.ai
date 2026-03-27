@@ -9,6 +9,7 @@ from gorm_ai.api.routes import (
     financial_dates,
     import_templates,
     logs,
+    optimization,
     outlet_groups,
     outlets,
     pads,
@@ -33,6 +34,7 @@ api_router.include_router(currencies.router, prefix="/currencies", tags=["curren
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])
 api_router.include_router(import_templates.router, prefix="/import-templates", tags=["import-templates"])
+api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
 api_router.include_router(outlets.router, prefix="/outlets", tags=["outlets"])
 api_router.include_router(outlet_groups.router, prefix="/outlet-groups", tags=["outlet-groups"])
 api_router.include_router(

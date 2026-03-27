@@ -86,7 +86,7 @@ class ConfigurationResponse(BaseModel):
     variation_adjustment: bool = False
     variation_history_days: int = 365
     eo_methodology: int = 1
-    eo_extrapolation: int = 1
+    eo_extrapolation: int = 3
     open_monday: bool = True
     open_tuesday: bool = True
     open_wednesday: bool = True

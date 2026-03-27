@@ -258,6 +258,7 @@ class SimulationService:
         task_id: str | None = None,
         on_progress: Callable[[int, str], Coroutine[Any, Any, None]] | None = None,
         resume_simulation_id: str | None = None,
+        config_overrides: dict | None = None,
     ) -> SimulationResponse:
         """Run the simulation and return classified results per outlet per day."""
         started_at = time.monotonic()
@@ -370,6 +371,23 @@ class SimulationService:
         eo_params = await self._prediction_service._resolve_eo_params(request.customer_id)
         weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
         open_days_flags = await self._prediction_service._resolve_open_days(request.customer_id)
+
+        # --- Apply config overrides (used by optimization grid search) ---
+        if config_overrides:
+            if "eo_methodology" in config_overrides:
+                eo_params["methodology"] = config_overrides["eo_methodology"]
+            if "eo_extrapolation" in config_overrides:
+                eo_params["extrapolation"] = config_overrides["eo_extrapolation"]
+            if "variation_adjustment" in config_overrides:
+                variation_params["enabled"] = config_overrides["variation_adjustment"]
+            if "weekday_profile_correction" in config_overrides:
+                weekday_profile_params["enabled"] = config_overrides["weekday_profile_correction"]
+            if "variation_history_days" in config_overrides:
+                variation_params["history_days"] = config_overrides["variation_history_days"]
+            if "weekday_profile_correction_strength" in config_overrides:
+                weekday_profile_params["strength"] = config_overrides["weekday_profile_correction_strength"]
+            if "weekday_profile_correction_threshold" in config_overrides:
+                weekday_profile_params["threshold"] = config_overrides["weekday_profile_correction_threshold"]
 
         # --- Per-outlet closed days (same logic as in PredictionService) ---
         # Build a set of python weekdays (0-6) that are closed for each outlet,

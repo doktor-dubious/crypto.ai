@@ -32,6 +32,8 @@ import {
   type PredictionEngineResponse,
   type OutletGroupResponse,
 } from "@/lib/api"
+import { OptimalSettingsModal } from "@/components/configuration/optimal-settings-modal"
+import { AutomatizationTab } from "@/components/configuration/automatization-tab"
 
 // ─── Sub-components (matching prediction→strategies patterns) ────────────────
 
@@ -660,6 +662,8 @@ function FineTuningTab({
   )
 }
 
+// ActionTab removed — replaced by AutomatizationTab component
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
@@ -674,6 +678,7 @@ export default function ConfigurationPage() {
   const queryClient = useQueryClient()
   const cid = activeCustomer?.id ?? ""
 
+  const [optimizeModalOpen, setOptimizeModalOpen] = useState(false)
   const [mode, setMode] = useState<"gorm" | "customer">(() => loadCfgV<"gorm" | "customer">(cid, "mode", "customer"))
   const [tab, setTab] = useState(() => loadCfgV<string>(cid, "tab", "details"))
   const tabsListRef = useRef<HTMLDivElement>(null)
@@ -776,7 +781,7 @@ export default function ConfigurationPage() {
     return Object.keys(gormDraft).some((k) => gormDraft[k] !== source[k])
   }, [gormDraft, gormConfig])
 
-  const isDirty = mode === "gorm" ? isGormDirty : (tab === "details" ? isCustomerDirty : isConfigDirty)
+  const isDirty = mode === "gorm" ? isGormDirty : (tab === "details" ? isCustomerDirty : tab === "automatization" ? false : isConfigDirty)
 
   // ── Mutations ──
   const customerMutation = useMutation({
@@ -945,6 +950,7 @@ export default function ConfigurationPage() {
                 { value: "details", label: t("tabDetails") },
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
+                { value: "automatization", label: t("tabAutomatization") },
               ],
               <>
                 <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -964,6 +970,10 @@ export default function ConfigurationPage() {
                 <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
+                <TabsContent value="automatization" className="mt-6 pl-[2px] overflow-visible">
+                  <AutomatizationTab onOpenOptimize={() => setOptimizeModalOpen(true)} />
+                </TabsContent>
+                <OptimalSettingsModal open={optimizeModalOpen} onOpenChange={setOptimizeModalOpen} />
               </>
             )
           ) : (

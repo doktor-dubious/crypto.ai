@@ -13,6 +13,7 @@ from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
 from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
+from gorm_ai.database.models.optimization_run import OptimizationRun
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_delivery import OutletDelivery
 from gorm_ai.database.models.outlet_financials import OutletFinancials
@@ -47,6 +48,7 @@ __all__ = [
     "PredictionAdjustment",
     "FinancialDate",
     "OutletFinancialDate",
+    "OptimizationRun",
     "Outlet",
     "OutletDelivery",
     "OutletFinancials",

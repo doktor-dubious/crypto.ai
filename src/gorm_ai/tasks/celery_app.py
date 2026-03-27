@@ -14,7 +14,7 @@ celery_app = Celery(
     "gorm_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations", "gorm_ai.tasks.finetuning"],
+    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations", "gorm_ai.tasks.finetuning", "gorm_ai.tasks.optimization"],
 )
 
 # Celery configuration
@@ -133,8 +133,33 @@ def _get_worker_models() -> str:
 
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
-    """Register this worker in Redis so the API can list it even when busy."""
+    """Register this worker in Redis and clean up orphaned tasks from previous life."""
     hostname = sender.hostname  # e.g. "celery@RunPod"
+    worker_name = hostname.split("@", 1)[-1] if hostname else None
+
+    # Mark any 'started' tasks from our previous life as failed.
+    # These tasks were running when the worker died and will never complete.
+    if worker_name:
+        try:
+            from gorm_ai.database.connection import task_session
+            from gorm_ai.services.task import TaskService
+
+            async def _cleanup():
+                async with task_session() as session:
+                    count = await TaskService(session).mark_worker_tasks_failed(worker_name)
+                    await session.commit()
+                    return count
+
+            count = asyncio.run(_cleanup())
+            if count:
+                import structlog
+                structlog.get_logger().info(
+                    "Marked orphaned tasks as failed on startup",
+                    worker=worker_name, count=count,
+                )
+        except Exception:
+            pass
+
     try:
         r = _get_redis()
         r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")

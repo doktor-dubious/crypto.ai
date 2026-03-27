@@ -31,7 +31,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 // ─── Types (mirrored from FastAPI schemas) ────────────────────────────────────
 
 export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued"
-export type TaskType = "prediction" | "simulation" | "finetune"
+export type TaskType = "prediction" | "simulation" | "finetune" | "optimization"
 
 export interface TaskRecordResponse {
   id: string
@@ -1720,4 +1720,116 @@ export const simulationStrategiesApi = {
 
   delete: (id: string) =>
     apiFetch<void>(`/simulation-strategies/${id}`, { method: "DELETE" }),
+}
+
+// ─── Optimization ─────────────────────────────────────────────────────────────
+
+export interface OptimizeSettingsRequest {
+  customer_id: string
+  name?: string | null
+  optimize_variation_adjustment: boolean
+  optimize_eo_methodology: boolean
+  optimize_eo_extrapolation: boolean
+  optimize_weekday_profile_correction: boolean
+  optimize_history_window?: boolean
+  history_window_from?: number
+  history_window_to?: number
+  history_window_iterations?: number
+  optimize_correction_strength?: boolean
+  correction_strength_from?: number
+  correction_strength_to?: number
+  correction_strength_iterations?: number
+  optimize_correction_threshold?: boolean
+  correction_threshold_from?: number
+  correction_threshold_to?: number
+  correction_threshold_iterations?: number
+  simulation_days?: number
+  delay?: number
+}
+
+export interface OptimizationCombinationResult {
+  combination: Record<string, unknown>
+  score: number
+  metrics: {
+    eo_total_sold: number
+    eo_total_delivered: number
+    eo_total_returned: number
+    sold_out_pct: number | null
+  }
+  simulation_id: string
+}
+
+export interface OptimizationRunResponse {
+  id: string
+  customer_id: string
+  name: string
+  status: string
+  optimize_variation_adjustment: boolean
+  optimize_eo_methodology: boolean
+  optimize_eo_extrapolation: boolean
+  optimize_weekday_profile_correction: boolean
+  simulation_days: number
+  delay: number
+  simulation_from: string | null
+  simulation_to: string | null
+  total_combinations: number
+  completed_combinations: number
+  best_combination: Record<string, unknown> | null
+  best_score: number | null
+  results: OptimizationCombinationResult[] | null
+  diagnostics: OptimizationDiagnostics | null
+  created_at: string
+  completed_at: string | null
+}
+
+export interface OptimizationDiagnostics {
+  g3_g4_by_tau: {
+    interpolation: { g1: number; g2: number; g3: number; g4: number }
+    extrapolation: { g1: number; g2: number; g3: number; g4: number }
+  } | null
+  quantile_calibration: {
+    total_days: number
+    below_q90: number
+    pct_below_q90: number
+    expected: number
+    assessment: string
+  } | null
+  g3_by_weekday: {
+    weekdays: Record<string, { g3_count: number; total: number; g3_rate: number }>
+  } | null
+  va_comparison: {
+    with_va: { g1: number; g2: number; g3: number; g4: number; score: number }
+    without_va: { g1: number; g2: number; g3: number; g4: number; score: number }
+    assessment: string
+  } | null
+}
+
+export interface ApplySettingsRequest {
+  variation_adjustment?: boolean | null
+  eo_methodology?: number | null
+  eo_extrapolation?: number | null
+  weekday_profile_correction?: boolean | null
+  variation_history_days?: number | null
+  weekday_profile_correction_strength?: number | null
+  weekday_profile_correction_threshold?: number | null
+}
+
+export const optimizationApi = {
+  runAsync: (data: OptimizeSettingsRequest) =>
+    apiFetch<{ task_id: string }>("/optimization/async", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  list: (customerId: string) =>
+    apiFetch<OptimizationRunResponse[]>(`/optimization?customer_id=${customerId}`),
+
+  get: (runId: string) =>
+    apiFetch<OptimizationRunResponse>(`/optimization/${runId}`),
+
+  apply: (runId: string, data: ApplySettingsRequest) =>
+    apiFetch<void>(`/optimization/${runId}/apply`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 }

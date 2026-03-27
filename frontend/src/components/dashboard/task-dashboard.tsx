@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X, Loader2, Info, CheckCircle2, XCircle, AlertTriangle, RefreshCw } from "lucide-react"
-import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot } from "@/components/icons/animated-icons"
+import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, customersApi, configurationApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
@@ -64,7 +64,7 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
   })
 
   const iconControls = useAnimation()
-  const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : AnimatedFlask
+  const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : task.type === "optimization" ? AnimatedSettings : AnimatedFlask
 
   const timeRef = task.completed_at ?? task.started_at ?? task.created_at
   const timeStr = timeRef

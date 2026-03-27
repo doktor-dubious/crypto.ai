@@ -10,6 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gorm_ai.database.models.task_record import TaskRecord
 from gorm_ai.schemas.task import CeleryWorkerTask
 
+# Lazy import to avoid circular dependencies
+_Simulation = None
+
+
+def _get_simulation_model():
+    global _Simulation
+    if _Simulation is None:
+        from gorm_ai.database.models.simulation import Simulation
+        _Simulation = Simulation
+    return _Simulation
+
 
 def _restart_worker_container() -> None:
     """Restart the celery-worker Docker container (blocking call)."""
@@ -211,6 +222,26 @@ class TaskService:
         )
         return len(result.all())
 
+    async def _close_simulations_for_tasks(self, task_ids: list[str]) -> None:
+        """Set ended_at on simulations whose task_id is in the given list."""
+        if not task_ids:
+            return
+        Simulation = _get_simulation_model()
+        # Find task_id values for these task records
+        rows = await self.session.execute(
+            select(TaskRecord.task_id).where(TaskRecord.id.in_(task_ids))
+        )
+        celery_task_ids = [r[0] for r in rows.all() if r[0]]
+        if celery_task_ids:
+            await self.session.execute(
+                update(Simulation)
+                .where(
+                    Simulation.task_id.in_(celery_task_ids),
+                    Simulation.ended_at.is_(None),
+                )
+                .values(ended_at=datetime.now(UTC))
+            )
+
     async def mark_stale_tasks_failed(self, stale_seconds: int = 0) -> int:
         """Mark all 'started' tasks as failed.
 
@@ -233,6 +264,7 @@ class TaskService:
             .returning(TaskRecord.id)
         )
         rows = result.all()
+        await self._close_simulations_for_tasks([r[0] for r in rows])
         return len(rows)
 
     async def mark_orphaned_worker_tasks_failed(
@@ -277,7 +309,34 @@ class TaskService:
             )
             .returning(TaskRecord.id)
         )
-        return len(result.all())
+        rows = result.all()
+        await self._close_simulations_for_tasks([r[0] for r in rows])
+        return len(rows)
+
+    async def mark_worker_tasks_failed(self, worker_name: str) -> int:
+        """Mark all 'started' tasks for a specific worker as failed.
+
+        Called on worker startup to clean up tasks that survived a restart.
+        When a worker restarts with the same name, its old tasks will never
+        complete but the orphan detection won't catch them (since the worker
+        name is still alive).
+        """
+        result = await self.session.execute(
+            update(TaskRecord)
+            .where(
+                TaskRecord.status == "started",
+                TaskRecord.worker_name == worker_name,
+            )
+            .values(
+                status="failure",
+                error="Worker restarted",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(TaskRecord.id)
+        )
+        rows = result.all()
+        await self._close_simulations_for_tasks([r[0] for r in rows])
+        return len(rows)
 
     async def get_active_from_db(self) -> list[CeleryWorkerTask]:
         """Return 'started' tasks from DB.

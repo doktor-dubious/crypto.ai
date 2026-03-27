@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot } from "@/components/icons/animated-icons"
+import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
@@ -65,7 +65,7 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   })
 
   const iconControls = useAnimation()
-  const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : AnimatedFlask
+  const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : task.type === "optimization" ? AnimatedSettings : AnimatedFlask
   const timeStr = (task.started_at ?? task.created_at)
     ? formatDistanceToNow(new Date(task.started_at ?? task.created_at), {
         addSuffix: true,

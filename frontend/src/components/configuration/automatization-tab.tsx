@@ -1,0 +1,695 @@
+"use client"
+
+import { useState } from "react"
+import { useTranslations } from "next-intl"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
+import { useCustomer } from "@/components/providers/customer-provider"
+import { Info } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table"
+import {
+  optimizationApi,
+  type OptimizationRunResponse,
+  type OptimizationCombinationResult,
+  type OptimizationDiagnostics,
+  type ApplySettingsRequest,
+} from "@/lib/api"
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function statusBadgeVariant(status: string) {
+  switch (status) {
+    case "completed":
+      return "success" as const
+    case "running":
+    case "started":
+      return "info" as const
+    case "failed":
+    case "failure":
+      return "destructive" as const
+    case "cancelled":
+      return "warning" as const
+    default:
+      return "muted" as const
+  }
+}
+
+function statusLabel(status: string) {
+  switch (status) {
+    case "completed":
+      return "Completed"
+    case "running":
+    case "started":
+      return "Running"
+    case "failed":
+    case "failure":
+      return "Failed"
+    case "cancelled":
+      return "Cancelled"
+    case "pending":
+      return "Pending"
+    default:
+      return status
+  }
+}
+
+function formatSettingValue(
+  key: string,
+  value: unknown,
+): string {
+  switch (key) {
+    case "variation_adjustment":
+      return `VA: ${value ? "On" : "Off"}`
+    case "eo_methodology":
+      return `EO Method: ${Number(value) === 1 ? "Interpolate" : "Snap"}`
+    case "eo_extrapolation": {
+      const map: Record<number, string> = { 1: "E99", 2: "E95", 3: "E90", 4: "Dampened" }
+      return `EO Extrap: ${map[Number(value)] ?? String(value)}`
+    }
+    case "weekday_profile_correction":
+      return `WPC: ${value ? "On" : "Off"}`
+    case "variation_history_days":
+      return `History: ${value} days`
+    case "weekday_profile_correction_strength":
+      return `Strength: ${Number(value).toFixed(2)}`
+    case "weekday_profile_correction_threshold":
+      return `Threshold: ${Number(value).toFixed(2)}`
+    default:
+      return `${key}: ${String(value)}`
+  }
+}
+
+function describeCombination(
+  combo: Record<string, unknown>,
+  run: OptimizationRunResponse,
+): string {
+  const parts: string[] = []
+  if (run.optimize_variation_adjustment && "variation_adjustment" in combo) {
+    parts.push(formatSettingValue("variation_adjustment", combo.variation_adjustment))
+  }
+  if (run.optimize_eo_methodology && "eo_methodology" in combo) {
+    parts.push(formatSettingValue("eo_methodology", combo.eo_methodology))
+  }
+  if (run.optimize_eo_extrapolation && "eo_extrapolation" in combo) {
+    parts.push(formatSettingValue("eo_extrapolation", combo.eo_extrapolation))
+  }
+  if (run.optimize_weekday_profile_correction && "weekday_profile_correction" in combo) {
+    parts.push(formatSettingValue("weekday_profile_correction", combo.weekday_profile_correction))
+  }
+  // Range settings — always show if present in combo
+  for (const key of ["variation_history_days", "weekday_profile_correction_strength", "weekday_profile_correction_threshold"] as const) {
+    if (key in combo) parts.push(formatSettingValue(key, combo[key]))
+  }
+  return parts.join(", ")
+}
+
+function comboToApplyRequest(combo: Record<string, unknown>): ApplySettingsRequest {
+  const req: ApplySettingsRequest = {}
+  if ("variation_adjustment" in combo) req.variation_adjustment = combo.variation_adjustment as boolean
+  if ("eo_methodology" in combo) req.eo_methodology = combo.eo_methodology as number
+  if ("eo_extrapolation" in combo) req.eo_extrapolation = combo.eo_extrapolation as number
+  if ("weekday_profile_correction" in combo) req.weekday_profile_correction = combo.weekday_profile_correction as boolean
+  if ("variation_history_days" in combo) req.variation_history_days = combo.variation_history_days as number
+  if ("weekday_profile_correction_strength" in combo) req.weekday_profile_correction_strength = combo.weekday_profile_correction_strength as number
+  if ("weekday_profile_correction_threshold" in combo) req.weekday_profile_correction_threshold = combo.weekday_profile_correction_threshold as number
+  return req
+}
+
+function generateConclusion(run: OptimizationRunResponse, results: OptimizationCombinationResult[]): string {
+  if (results.length === 0 || !run.best_combination) return ""
+
+  const bestDesc = describeCombination(run.best_combination, run)
+  const bestScore = run.best_score?.toFixed(2) ?? "N/A"
+  const worst = results[results.length - 1]
+  const diff = run.best_score != null ? (run.best_score - worst.score) : 0
+  const pct = worst.score !== 0 ? Math.abs(diff / worst.score * 100).toFixed(1) : "N/A"
+
+  const parts: string[] = [
+    `The optimal configuration is ${bestDesc} with a profit score of ${bestScore}.`,
+    `This outperforms the worst combination by ${diff.toFixed(2)} points (${pct}%).`,
+  ]
+
+  if (run.optimize_variation_adjustment && results.length >= 2) {
+    const vaOn = results.find((r) => r.combination.variation_adjustment === true)
+    const vaOff = results.find((r) => r.combination.variation_adjustment === false)
+    if (vaOn && vaOff) {
+      parts.push(
+        vaOn.score >= vaOff.score
+          ? "Variation Adjustment improves results."
+          : "Variation Adjustment does not improve results."
+      )
+    }
+  }
+
+  if (run.optimize_eo_methodology && results.length >= 2) {
+    const interp = results.find((r) => Number(r.combination.eo_methodology) === 1)
+    const snap = results.find((r) => Number(r.combination.eo_methodology) === 2)
+    if (interp && snap) {
+      parts.push(
+        interp.score >= snap.score
+          ? "Interpolate methodology performs better."
+          : "Snap methodology performs better."
+      )
+    }
+  }
+
+  return parts.join(" ")
+}
+
+// ─── Diagnostics Panel ──────────────────────────────────────────────────────
+
+const WEEKDAY_LABELS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const
+// Backend uses numeric keys "0"-"6" (0=Mon..6=Sun)
+const WEEKDAY_NUMERIC = ["0", "1", "2", "3", "4", "5", "6"] as const
+
+function DiagnosticsPanel({
+  diagnostics,
+  t,
+}: {
+  diagnostics: OptimizationDiagnostics
+  t: ReturnType<typeof useTranslations<"configuration">>
+}) {
+  // Handle both old key (g_by_tau_range) and new key (g3_g4_by_tau)
+  // Handle both old key (g_by_tau_range) and new key (g3_g4_by_tau)
+  const g3_g4_by_tau = diagnostics.g3_g4_by_tau ?? (diagnostics as unknown as Record<string, unknown>)["g_by_tau_range"] as OptimizationDiagnostics["g3_g4_by_tau"] ?? null
+  const { quantile_calibration, g3_by_weekday, va_comparison } = diagnostics
+
+  const g3Rate = (g3: number, g4: number) => {
+    const total = g3 + g4
+    return total === 0 ? 0 : (g3 / total) * 100
+  }
+
+  return (
+    <div className="space-y-4">
+      <h5 className="text-sm font-semibold">{t("diagnosticsTitle")}</h5>
+
+      {/* Diagnostic 1: Interpolation vs Extrapolation */}
+      {g3_g4_by_tau && (
+        <div className="rounded-md border p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <h6 className="text-xs font-semibold">Diagnostic 1 — Interpolation vs Extrapolation</h6>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                If a significant proportion of G3 (waste) vs G4 (potential extra sales) comes from the extrapolation range, the extrapolation formula may be too aggressive — ordering more than the distribution supports.
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left py-1 pr-2 font-medium">Range</th>
+                <th className="text-right py-1 px-1 font-medium">G1</th>
+                <th className="text-right py-1 px-1 font-medium">G2</th>
+                <th className="text-right py-1 px-1 font-medium">G3</th>
+                <th className="text-right py-1 px-1 font-medium">G4</th>
+                <th className="text-right py-1 pl-1 font-medium">{t("diagnosticG3Rate")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(["interpolation", "extrapolation"] as const).map((range) => {
+                const d = g3_g4_by_tau[range]
+                const rate = g3Rate(d.g3, d.g4)
+                return (
+                  <tr key={range} className="border-b last:border-b-0">
+                    <td className="py-1 pr-2">
+                      {range === "interpolation"
+                        ? t("diagnosticInterpolation")
+                        : t("diagnosticExtrapolation")}
+                    </td>
+                    <td className="text-right py-1 px-1 font-mono">{d.g1}</td>
+                    <td className="text-right py-1 px-1 font-mono">{d.g2}</td>
+                    <td className="text-right py-1 px-1 font-mono">{d.g3}</td>
+                    <td className="text-right py-1 px-1 font-mono">{d.g4}</td>
+                    <td className="text-right py-1 pl-1 font-mono">{rate.toFixed(1)}%</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {(() => {
+            const interpRate = g3Rate(g3_g4_by_tau.interpolation.g3, g3_g4_by_tau.interpolation.g4)
+            const extrapRate = g3Rate(g3_g4_by_tau.extrapolation.g3, g3_g4_by_tau.extrapolation.g4)
+            if (extrapRate > interpRate + 10) {
+              return (
+                <p className="text-xs text-red-600 dark:text-red-400 mt-2">
+                  Extrapolation contributes disproportionately to G3 — consider a more conservative extrapolation mode.
+                </p>
+              )
+            }
+            return null
+          })()}
+        </div>
+      )}
+
+      {/* Diagnostic 2: Quantile Calibration */}
+      {quantile_calibration && (
+        <div className="rounded-md border p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <h6 className="text-xs font-semibold">Diagnostic 2 — Quantile Calibration</h6>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                Checks what fraction of actual sales fell below Q90. If significantly more than 90%, quantiles are too wide (over-ordering). If significantly less than 90%, quantiles are too narrow (under-ordering).
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          {(() => {
+            const pctRaw = quantile_calibration.pct_below_q90
+            const pct = pctRaw <= 1 ? pctRaw * 100 : pctRaw
+            const deviation = Math.abs(pct - 90)
+            const color =
+              deviation <= 3
+                ? "text-green-600 dark:text-green-400"
+                : deviation <= 7
+                  ? "text-yellow-600 dark:text-yellow-400"
+                  : "text-red-600 dark:text-red-400"
+            const bgColor =
+              deviation <= 3
+                ? "bg-green-100 dark:bg-green-900/30"
+                : deviation <= 7
+                  ? "bg-yellow-100 dark:bg-yellow-900/30"
+                  : "bg-red-100 dark:bg-red-900/30"
+            return (
+              <div className="space-y-2">
+                <div className={`rounded px-2 py-1.5 ${bgColor}`}>
+                  <p className={`text-xs font-medium ${color}`}>
+                    {t("diagnosticQuantileDesc", { pct: pct.toFixed(1) })}
+                  </p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {quantile_calibration.assessment}
+                </p>
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* Diagnostic 3: G3 by Weekday */}
+      {g3_by_weekday && (
+        <div className="rounded-md border p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <h6 className="text-xs font-semibold">Diagnostic 3 — G3 by Weekday</h6>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                If G3 (waste) clusters on specific weekdays, either the weekday correction or the CV estimation for those days is the culprit.
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          {(() => {
+            const entries = WEEKDAY_NUMERIC
+              .map((numKey, i) => ({
+                key: WEEKDAY_LABELS[i],
+                data: g3_by_weekday.weekdays[numKey] ?? g3_by_weekday.weekdays[WEEKDAY_LABELS[i]] ?? null,
+              }))
+              .filter((e) => e.data !== null && e.data.total > 0)
+
+            const avgRate =
+              entries.length > 0
+                ? entries.reduce((sum, e) => sum + e.data!.g3_rate, 0) / entries.length
+                : 0
+
+            const hasCluster = entries.some((e) => e.data!.g3_rate > avgRate + 10)
+
+            return (
+              <>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1 pr-2 font-medium">Day</th>
+                      <th className="text-right py-1 px-1 font-medium">G3 Count</th>
+                      <th className="text-right py-1 px-1 font-medium">Total</th>
+                      <th className="text-right py-1 pl-1 font-medium">{t("diagnosticG3Rate")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entries.map(({ key, data }) => {
+                      const isHigh = data!.g3_rate > avgRate + 10
+                      return (
+                        <tr
+                          key={key}
+                          className={`border-b last:border-b-0 ${isHigh ? "bg-red-50 dark:bg-red-900/20" : ""}`}
+                        >
+                          <td className="py-1 pr-2">
+                            {t(`diagnostic${key.charAt(0).toUpperCase() + key.slice(1)}` as Parameters<typeof t>[0])}
+                          </td>
+                          <td className="text-right py-1 px-1 font-mono">{data!.g3_count}</td>
+                          <td className="text-right py-1 px-1 font-mono">{data!.total}</td>
+                          <td className={`text-right py-1 pl-1 font-mono ${isHigh ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>
+                            {(data!.g3_rate <= 1 ? data!.g3_rate * 100 : data!.g3_rate).toFixed(1)}%
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                {hasCluster && (
+                  <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
+                    G3 rates are clustered on specific weekdays — consider weekday-specific tuning.
+                  </p>
+                )}
+              </>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* Diagnostic 4: VA Comparison */}
+      {va_comparison && (
+        <div className="rounded-md border p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <h6 className="text-xs font-semibold">Diagnostic 4 — Variation Adjustment Impact</h6>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                If disabling Variation Adjustment reduces G3 (waste) without proportionally increasing G2 (lost sales), the CV-based adjustment is too aggressive.
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left py-1 pr-2 font-medium">Metric</th>
+                <th className="text-right py-1 px-1 font-medium">{t("diagnosticWithVa")}</th>
+                <th className="text-right py-1 px-1 font-medium">{t("diagnosticWithoutVa")}</th>
+                <th className="text-right py-1 pl-1 font-medium">{t("diagnosticDelta")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(["g1", "g2", "g3", "g4", "score"] as const).map((metric) => {
+                const withVal = va_comparison.with_va[metric]
+                const withoutVal = va_comparison.without_va[metric]
+                const delta = withVal - withoutVal
+                return (
+                  <tr key={metric} className="border-b last:border-b-0">
+                    <td className="py-1 pr-2 font-medium">{metric.toUpperCase()}</td>
+                    <td className="text-right py-1 px-1 font-mono">
+                      {withVal.toFixed(2)}
+                    </td>
+                    <td className="text-right py-1 px-1 font-mono">
+                      {withoutVal.toFixed(2)}
+                    </td>
+                    <td
+                      className={`text-right py-1 pl-1 font-mono ${
+                        delta > 0
+                          ? "text-green-600 dark:text-green-400"
+                          : delta < 0
+                            ? "text-red-600 dark:text-red-400"
+                            : ""
+                      }`}
+                    >
+                      {delta > 0 ? "+" : ""}
+                      {delta.toFixed(2)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <p className="text-xs text-muted-foreground mt-2">
+            {va_comparison.assessment}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
+
+interface AutomatizationTabProps {
+  onOpenOptimize: () => void
+}
+
+export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
+  const t = useTranslations("configuration")
+  const { activeCustomer } = useCustomer()
+  const queryClient = useQueryClient()
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+
+  const customerId = activeCustomer?.id ?? ""
+
+  // Fetch list of optimization runs
+  const { data: runs = [] } = useQuery({
+    queryKey: ["optimizationRuns", customerId],
+    queryFn: () => optimizationApi.list(customerId),
+    enabled: !!customerId,
+    refetchInterval: (query) => {
+      const data = query.state.data as OptimizationRunResponse[] | undefined
+      if (data?.some((r) => r.status === "running" || r.status === "started" || r.status === "pending")) {
+        return 10_000
+      }
+      return false
+    },
+  })
+
+  // Fetch selected run details
+  const { data: selectedRun } = useQuery({
+    queryKey: ["optimizationRun", selectedRunId],
+    queryFn: () => optimizationApi.get(selectedRunId!),
+    enabled: !!selectedRunId,
+    refetchInterval: (query) => {
+      const data = query.state.data as OptimizationRunResponse | undefined
+      if (data && (data.status === "running" || data.status === "started" || data.status === "pending")) {
+        return 5_000
+      }
+      return false
+    },
+  })
+
+  // Apply mutation
+  const applyMutation = useMutation({
+    mutationFn: ({ runId, data }: { runId: string; data: ApplySettingsRequest }) =>
+      optimizationApi.apply(runId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customerConfiguration", customerId] })
+      toast.success(t("automatizationApplied"))
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Failed to apply settings")
+    },
+  })
+
+  const sortedResults = selectedRun?.results
+    ? [...selectedRun.results].sort((a, b) => b.score - a.score)
+    : []
+
+  const bestScore = sortedResults.length > 0 ? sortedResults[0].score : null
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h3 className="text-sm font-semibold">{t("automatizationTitle")}</h3>
+        <p className="text-xs text-muted-foreground mt-1">{t("automatizationDescription")}</p>
+        <Button onClick={onOpenOptimize} className="cursor-pointer mt-3">
+          {t("automatizationRunButton")}
+        </Button>
+      </div>
+
+      {/* History table */}
+      <div>
+        <h4 className="text-sm font-semibold mb-2">{t("automatizationHistoryTitle")}</h4>
+        {runs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("automatizationNoRuns")}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("automatizationColumnName")}</TableHead>
+                <TableHead>{t("automatizationColumnCombinations")}</TableHead>
+                <TableHead>{t("automatizationColumnPeriod")}</TableHead>
+                <TableHead>{t("automatizationColumnDate")}</TableHead>
+                <TableHead>{t("automatizationColumnStatus")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => (
+                <TableRow
+                  key={run.id}
+                  className={`cursor-pointer ${selectedRunId === run.id ? "bg-muted/70" : ""}`}
+                  onClick={() => setSelectedRunId(selectedRunId === run.id ? null : run.id)}
+                >
+                  <TableCell className="font-medium">{run.name}</TableCell>
+                  <TableCell>
+                    {t("automatizationCombinations", { count: run.total_combinations })}
+                  </TableCell>
+                  <TableCell>
+                    {t("automatizationDays", { count: run.simulation_days })}
+                  </TableCell>
+                  <TableCell>
+                    {new Date(run.created_at).toLocaleDateString(undefined, {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={statusBadgeVariant(run.status)}>
+                      {statusLabel(run.status)}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      {/* Detail pane */}
+      {selectedRun && (
+        <div className="space-y-4 border-t pt-4">
+          <h4 className="text-sm font-semibold">{t("automatizationDetailTitle")}</h4>
+
+          {/* Best configuration summary */}
+          {selectedRun.best_combination && (
+            <div className="rounded-md border p-3 bg-muted/30">
+              <p className="text-sm font-medium">
+                {t("automatizationBestConfig")}:{" "}
+                <span className="text-foreground">
+                  {describeCombination(selectedRun.best_combination, selectedRun)}
+                </span>
+              </p>
+              {selectedRun.best_score != null && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {t("automatizationProfitScore")}: {selectedRun.best_score.toFixed(2)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Results table */}
+          {sortedResults.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">{t("automatizationRank")}</TableHead>
+                  <TableHead>{t("automatizationSettings")}</TableHead>
+                  <TableHead className="text-right">{t("automatizationProfitScore")}</TableHead>
+                  <TableHead className="text-right">{t("automatizationSold")}</TableHead>
+                  <TableHead className="text-right">{t("automatizationReturned")}</TableHead>
+                  <TableHead className="text-right">{t("automatizationSoldOutPct")}</TableHead>
+                  <TableHead className="w-20"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedResults.map((result, idx) => {
+                  const rank = idx + 1
+                  const best = sortedResults[0]
+                  const dProfit = result.score - best.score
+                  const dSold = result.metrics.eo_total_sold - best.metrics.eo_total_sold
+                  const dReturned = result.metrics.eo_total_returned - best.metrics.eo_total_returned
+                  const dSoldOut = result.metrics.sold_out_pct != null && best.metrics.sold_out_pct != null
+                    ? result.metrics.sold_out_pct - best.metrics.sold_out_pct
+                    : null
+                  const fmtDelta = (v: number, decimals = 0) => {
+                    const s = decimals > 0
+                      ? v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+                      : v.toLocaleString()
+                    return v > 0 ? `+${s}` : s
+                  }
+                  return (
+                    <TableRow key={result.simulation_id} className="group">
+                      <TableCell className="font-medium align-top">
+                        {rank === 1 ? (
+                          <Badge variant="success" className="text-xs">
+                            {t("automatizationBest")}
+                          </Badge>
+                        ) : rank}
+                      </TableCell>
+                      <TableCell className="text-xs align-top">
+                        {describeCombination(result.combination, selectedRun)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono align-top">
+                        {result.score.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {rank > 1 && (
+                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dProfit, 2)}</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono align-top">
+                        {result.metrics.eo_total_sold.toLocaleString()}
+                        {rank > 1 && (
+                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dSold)}</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono align-top">
+                        {result.metrics.eo_total_returned.toLocaleString()}
+                        {rank > 1 && (
+                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dReturned)}</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono align-top">
+                        {result.metrics.sold_out_pct != null
+                          ? `${result.metrics.sold_out_pct.toFixed(1)}%`
+                          : "\u2014"}
+                        {rank > 1 && dSoldOut != null && (
+                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dSoldOut, 1)}%</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer h-7 text-xs"
+                          disabled={applyMutation.isPending}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            applyMutation.mutate({
+                              runId: selectedRun.id,
+                              data: comboToApplyRequest(result.combination),
+                            })
+                          }}
+                        >
+                          {t("automatizationApply")}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+
+          {/* Conclusion */}
+          {sortedResults.length > 0 && selectedRun.best_combination && (
+            <div className="rounded-md border p-3 bg-muted/20">
+              <h5 className="text-xs font-semibold text-muted-foreground mb-1">
+                {t("automatizationConclusion")}
+              </h5>
+              <p className="text-sm">
+                {generateConclusion(selectedRun, sortedResults)}
+              </p>
+            </div>
+          )}
+
+          {/* Diagnostics */}
+          {selectedRun.diagnostics && (
+            <DiagnosticsPanel diagnostics={selectedRun.diagnostics} t={t} />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
