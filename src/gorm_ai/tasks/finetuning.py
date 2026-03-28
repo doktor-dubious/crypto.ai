@@ -53,11 +53,29 @@ async def _run_finetune_async(
 
     try:
         from gorm_ai.services.finetune import FinetuneService
+        from gorm_ai.tasks.celery_app import clear_stop_flag, is_stop_requested
+
+        def _should_stop() -> bool:
+            return is_stop_requested(task_id)
 
         async with task_session() as session:
             service = FinetuneService(session)
-            result = await service.run_finetune(request_data, on_progress=_on_progress)
+            result = await service.run_finetune(
+                request_data, on_progress=_on_progress, should_stop=_should_stop,
+            )
             await session.commit()
+
+        clear_stop_flag(task_id)
+
+        if result.get("stopped"):
+            async with task_session() as session:
+                await TaskService(session).update_status(
+                    task_id, "stopped",
+                    completed_at=datetime.now(UTC),
+                    error="Gracefully stopped",
+                )
+                await session.commit()
+            return result
 
         async with task_session() as session:
             await TaskService(session).update_status(

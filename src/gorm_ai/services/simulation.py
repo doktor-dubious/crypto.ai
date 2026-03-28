@@ -259,6 +259,7 @@ class SimulationService:
         on_progress: Callable[[int, str], Coroutine[Any, Any, None]] | None = None,
         resume_simulation_id: str | None = None,
         config_overrides: dict | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> SimulationResponse:
         """Run the simulation and return classified results per outlet per day."""
         started_at = time.monotonic()
@@ -473,6 +474,11 @@ class SimulationService:
         chunk_start = request.simulation_from
         chunk_num = 0
         while chunk_start <= request.simulation_to:
+            # Check for graceful stop request between date chunks
+            if should_stop and should_stop():
+                log.info("simulation.graceful_stop", simulation_id=sim_record_id, chunk=chunk_num)
+                break
+
             chunk_num += 1
             chunk_end = min(chunk_start + timedelta(days=6), request.simulation_to)
             horizon = (chunk_end - chunk_start).days + 1
@@ -1244,6 +1250,7 @@ class SimulationService:
         simulation_id: str,
         task_id: str | None = None,
         on_progress: Callable[[int, str], Coroutine[Any, Any, None]] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> SimulationResponse:
         """Resume a failed or cancelled simulation from where it left off."""
         sim = await self.session.get(SimulationModel, simulation_id)
@@ -1282,6 +1289,7 @@ class SimulationService:
             task_id=task_id,
             on_progress=on_progress,
             resume_simulation_id=simulation_id,
+            should_stop=should_stop,
         )
 
         # Recalculate aggregates from the full dataset (old + new chunks)

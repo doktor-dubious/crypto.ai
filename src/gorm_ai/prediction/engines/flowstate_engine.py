@@ -268,8 +268,12 @@ class FlowStateEngine(PredictionEngine):
             )
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
-            hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
-            fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            if feature_names:
+                hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+                fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            else:
+                hist_X = np.empty((n_hist, 0))
+                fut_X = np.empty((horizon, 0))
             prepared.append({
                 "values": values,
                 "hist_X": hist_X,
@@ -426,14 +430,17 @@ class FlowStateEngine(PredictionEngine):
             hist_X_aligned = hist_X[-align_len:]
 
             feature_names = sorted(item.get("feature_names", []))
-            ridge = Ridge(alpha=1.0, fit_intercept=True)
-            ridge.fit(hist_X_aligned, residuals)
-            adj = ridge.predict(fut_X)
+            if feature_names:
+                ridge = Ridge(alpha=1.0, fit_intercept=True)
+                ridge.fit(hist_X_aligned, residuals)
+                adj = ridge.predict(fut_X)
+            else:
+                adj = np.zeros(horizon)
 
             ridge_infos.append({
                 "feature_names": feature_names,
-                "coefficients": list(ridge.coef_),
-                "intercept": float(ridge.intercept_),
+                "coefficients": list(ridge.coef_) if feature_names else [],
+                "intercept": float(ridge.intercept_) if feature_names else 0.0,
             })
 
             results.append((

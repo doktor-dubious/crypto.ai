@@ -9,6 +9,8 @@ import {
 } from "lucide-react"
 import { Maximize } from "@/components/animate-ui/icons/maximize"
 import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -858,7 +860,21 @@ export default function PredictionsCompletedPage() {
 
               {/* ─ Details ─ */}
               <TabsContent value="tab1" className="space-y-3 max-w-2xl mt-6 px-4">
-                <StatRow label="ID" value={<span className="font-mono text-xs opacity-70">{selected.id}</span>} />
+                <StatRow label="ID" value={
+                  <span className="inline-flex items-center gap-1.5 font-mono text-xs opacity-70">
+                    {selected.id}
+                    <AnimateIcon animateOnHover className="cursor-pointer">
+                      <CopyIcon
+                        size={14}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selected.id)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </span>
+                } />
                 <StatRow label={t("fieldOutletGroup")} value={selected.outlet_group_name ?? "—"} />
                 <StatRow label={t("fieldStrategyName")} value={selected.strategy_name ?? <span className="italic text-[var(--muted-foreground)]">{t("noStrategy")}</span>} />
                 <StatRow label={t("fieldPredictionDate")} value={selected.date ? formatDate(selected.date) : "—"} />

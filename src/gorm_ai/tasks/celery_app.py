@@ -118,6 +118,30 @@ def on_task_postrun(task_id: str, **kwargs) -> None:
 WORKER_REGISTRY_PREFIX = "gorm:worker:"
 WORKER_MODELS_PREFIX = "gorm:worker-models:"
 WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
+TASK_STOP_PREFIX = "gorm:task-stop:"
+
+
+def request_graceful_stop(task_id: str) -> None:
+    """Set a Redis flag requesting this task to stop gracefully.
+
+    The running task checks this flag at natural breakpoints (between
+    outlets for finetune, between dates for simulation/optimization)
+    and exits cleanly after completing the current unit of work.
+    """
+    r = _get_redis()
+    r.setex(f"{TASK_STOP_PREFIX}{task_id}", 86400, "1")
+
+
+def is_stop_requested(task_id: str) -> bool:
+    """Check whether a graceful stop has been requested for this task."""
+    r = _get_redis()
+    return r.exists(f"{TASK_STOP_PREFIX}{task_id}") > 0
+
+
+def clear_stop_flag(task_id: str) -> None:
+    """Remove the graceful stop flag (e.g. after the task completes)."""
+    r = _get_redis()
+    r.delete(f"{TASK_STOP_PREFIX}{task_id}")
 
 
 def _get_redis():

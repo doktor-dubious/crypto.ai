@@ -500,7 +500,7 @@ export default function AIModelsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
 
       {/* ── Top: Master table ── */}
       <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
@@ -853,7 +853,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Finetune ─ */}
-              <TabsContent value="tab4" className="mt-6 pl-[2px] overflow-y-auto">
+              <TabsContent value="tab4" className="mt-6 pl-[2px] pb-4 overflow-y-auto">
                 <TooltipProvider>
                   <div className="flex gap-6">
                     {/* Left side: count + start */}

@@ -256,6 +256,28 @@ async def get_task(task_id: str, service: TaskServiceDep) -> TaskRecordResponse:
     return TaskRecordResponse.model_validate(record)
 
 
+@router.post("/{task_id}/stop", status_code=202)
+async def stop_task(task_id: str, service: TaskServiceDep) -> dict:
+    """Request a graceful stop for a running task.
+
+    Sets a Redis flag that the task checks at natural breakpoints
+    (between outlets for finetune, between dates for simulation/optimization).
+    The task will finish its current unit of work, save progress, and exit
+    with status 'stopped'.
+    """
+    record = await service.get(task_id)
+    if record.status != "started":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only running tasks can be stopped (current status: {record.status})",
+        )
+
+    from gorm_ai.tasks.celery_app import request_graceful_stop
+
+    request_graceful_stop(task_id)
+    return {"status": "stop_requested", "task_id": task_id}
+
+
 @router.delete("/{task_id}", status_code=204)
 async def cancel_task(task_id: str, service: TaskServiceDep) -> None:
     """Revoke a Celery task and mark its record as revoked."""

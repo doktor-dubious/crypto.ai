@@ -209,8 +209,12 @@ class TimesFMEngine(PredictionEngine):
             )
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
-            hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
-            fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            if feature_names:
+                hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+                fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            else:
+                hist_X = np.empty((n_hist, 0))
+                fut_X = np.empty((horizon, 0))
             prepared.append({
                 "values": values,
                 "hist_X": hist_X,
@@ -354,18 +358,21 @@ class TimesFMEngine(PredictionEngine):
             feature_names = sorted(item.get("feature_names", []))
             ridge = Ridge(alpha=1.0, fit_intercept=True)
 
-            # Drop rows where residuals or features contain NaN
-            valid = ~np.isnan(residuals)
-            if hist_X_aligned.ndim == 2:
-                valid &= ~np.isnan(hist_X_aligned).any(axis=1)
-            else:
-                valid &= ~np.isnan(hist_X_aligned)
-
-            if valid.sum() >= 2:
-                ridge.fit(hist_X_aligned[valid], residuals[valid])
-                adj = ridge.predict(fut_X)
-            else:
+            if not feature_names:
                 adj = np.zeros(horizon)
+            else:
+                # Drop rows where residuals or features contain NaN
+                valid = ~np.isnan(residuals)
+                if hist_X_aligned.ndim == 2:
+                    valid &= ~np.isnan(hist_X_aligned).any(axis=1)
+                else:
+                    valid &= ~np.isnan(hist_X_aligned)
+
+                if valid.sum() >= 2:
+                    ridge.fit(hist_X_aligned[valid], residuals[valid])
+                    adj = ridge.predict(fut_X)
+                else:
+                    adj = np.zeros(horizon)
 
             ridge_infos.append({
                 "feature_names": feature_names,
@@ -774,8 +781,12 @@ class TimesFMEngine(PredictionEngine):
 
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
-            hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
-            fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            if feature_names:
+                hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+                fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+            else:
+                hist_X = np.empty((n_hist, 0))
+                fut_X = np.empty((horizon, 0))
 
             # Recompile with context matching the data length to avoid
             # zero-padding which causes NaN in TimesFM's attention.
@@ -800,10 +811,12 @@ class TimesFMEngine(PredictionEngine):
 
             # Fit Ridge on residuals — learns only what TimesFM couldn't explain.
             # The intercept captures systematic bias (consistent over/underestimation).
-            ridge = Ridge(alpha=1.0, fit_intercept=True)
-            ridge.fit(hist_X_aligned, residuals)
-
-            xreg_adjustment = ridge.predict(fut_X)
+            if feature_names:
+                ridge = Ridge(alpha=1.0, fit_intercept=True)
+                ridge.fit(hist_X_aligned, residuals)
+                xreg_adjustment = ridge.predict(fut_X)
+            else:
+                xreg_adjustment = np.zeros(horizon)
 
             return (
                 _sanitize_nan(base_pred + xreg_adjustment),

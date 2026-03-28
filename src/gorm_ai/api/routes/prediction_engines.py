@@ -1,6 +1,6 @@
 """Prediction engine API routes."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from gorm_ai.api.deps import (
@@ -219,7 +219,10 @@ async def start_finetune(
 
     task = run_finetune_task.apply_async(**dispatch_kwargs)
     task_name = f"Finetune {data.customer_id[:8]}"
-    await task_service.create(task.id, "finetune", data.customer_id, name=task_name)
+    await task_service.create(
+        task.id, "finetune", data.customer_id,
+        name=task_name, request_data=data.model_dump(mode="json"),
+    )
 
     now = datetime.now(UTC)
     return FinetuneTaskResponse(
@@ -227,5 +230,61 @@ async def start_finetune(
         status="pending",
         progress=0,
         message="Fine-tuning task queued",
+        created_at=now.isoformat(),
+    )
+
+
+@router.post("/finetune/resume/{record_id}", response_model=FinetuneTaskResponse, status_code=202)
+async def resume_finetune(
+    record_id: str,
+    task_service: TaskServiceDep,
+    worker: str | None = Query(None),
+) -> FinetuneTaskResponse:
+    """Resume a stopped or failed finetune task.
+
+    Re-dispatches the finetune with the same parameters. The model loads
+    from its latest checkpoint so training continues from where it stopped.
+    """
+    from datetime import UTC, datetime
+
+    from gorm_ai.tasks.finetuning import run_finetune_task
+
+    record = await task_service.get_by_record_id(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Task record not found")
+    if record.status not in ("failure", "revoked", "stopped"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed, cancelled, or stopped finetune tasks can be resumed",
+        )
+    if not record.request_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot resume — original task parameters not stored",
+        )
+
+    # Determine target worker queue
+    target_queue = worker if worker is not None else record.worker_name
+
+    dispatch_kwargs: dict = {"args": [record.request_data]}
+    if target_queue:
+        dispatch_kwargs["queue"] = target_queue
+
+    task = run_finetune_task.apply_async(**dispatch_kwargs)
+    name = f"Resume: {record.name}" if record.name else "Resume finetune"
+    await task_service.create(task.id, "finetune", record.customer_id, name=name)
+
+    # Mark old record as continued
+    record.status = "continued"
+    record.error = "Resumed"
+    if not record.completed_at:
+        record.completed_at = datetime.now(UTC)
+
+    now = datetime.now(UTC)
+    return FinetuneTaskResponse(
+        task_id=task.id,
+        status="pending",
+        progress=0,
+        message="Resume task queued",
         created_at=now.isoformat(),
     )

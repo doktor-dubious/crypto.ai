@@ -17,6 +17,7 @@ import {
   DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { TaskDetailModal } from "@/components/dashboard/task-detail-modal"
 import { cn } from "@/lib/utils"
 
 type BadgeVariant = "muted" | "info" | "success" | "destructive" | "warning"
@@ -28,9 +29,10 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
   failure: "destructive",
   revoked: "warning",
   continued: "muted",
+  stopped: "warning",
 }
 
-function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordResponse; customerName?: string; activeTaskIds: Set<string> }) {
+function TaskCard({ task, customerName, activeTaskIds, onTaskClick }: { task: TaskRecordResponse; customerName?: string; activeTaskIds: Set<string>; onTaskClick: (task: TaskRecordResponse) => void }) {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
   const router = useRouter()
@@ -42,15 +44,8 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
     return () => clearInterval(id)
   }, [])
 
-  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked" || task.status === "continued"
-  const completedRoute = task.type === "prediction"
-    ? `/predictions/completed?task_id=${task.task_id}`
-    : task.type === "simulation"
-    ? `/simulations/completed?task_id=${task.task_id}`
-    : null
-
   function handleClick() {
-    if (isFinished && completedRoute) router.push(completedRoute)
+    onTaskClick(task)
   }
 
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -87,10 +82,7 @@ function TaskCard({ task, customerName, activeTaskIds }: { task: TaskRecordRespo
 
   return (
     <div
-      className={cn(
-        "flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors",
-        isFinished && "cursor-pointer"
-      )}
+      className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors cursor-pointer"
       onClick={handleClick}
       onMouseEnter={() => iconControls.start("animate")}
       onMouseLeave={() => iconControls.start("normal")}
@@ -265,6 +257,7 @@ function TaskSection({
   activeTaskIds,
   workerAlert,
   onRestartWorkers,
+  onTaskClick,
 }: {
   title: string
   tasks: TaskRecordResponse[]
@@ -273,6 +266,7 @@ function TaskSection({
   activeTaskIds: Set<string>
   workerAlert?: "restarting" | "gone" | null
   onRestartWorkers?: () => void
+  onTaskClick: (task: TaskRecordResponse) => void
 }) {
   const t = useTranslations("tasks")
   return (
@@ -315,6 +309,7 @@ function TaskSection({
                 task={task}
                 customerName={task.customer_id ? customerMap[task.customer_id] : undefined}
                 activeTaskIds={activeTaskIds}
+                onTaskClick={onTaskClick}
               />
             ))}
           </div>
@@ -327,6 +322,13 @@ function TaskSection({
 export function TaskDashboard() {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
+  const [selectedTask, setSelectedTask] = useState<TaskRecordResponse | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+
+  function handleTaskClick(task: TaskRecordResponse) {
+    setSelectedTask(task)
+    setModalOpen(true)
+  }
 
   // ── Config ───────────────────────────────────────────────────────────────
   const { data: config } = useQuery({
@@ -463,7 +465,7 @@ export function TaskDashboard() {
     )
     .slice(0, COLUMN_LIMIT)
   const finished = tasks
-    .filter((t) => ["success", "failure", "revoked", "continued"].includes(t.status))
+    .filter((t) => ["success", "failure", "revoked", "continued", "stopped"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )
@@ -486,6 +488,7 @@ export function TaskDashboard() {
           emptyLabel={t("noRunningTasks")}
           customerMap={customerMap}
           activeTaskIds={activeTaskIds}
+          onTaskClick={handleTaskClick}
         />
         <TaskSection
           title={t("pending")}
@@ -495,6 +498,7 @@ export function TaskDashboard() {
           activeTaskIds={activeTaskIds}
           workerAlert={workerAlert}
           onRestartWorkers={handleManualRestart}
+          onTaskClick={handleTaskClick}
         />
         <TaskSection
           title={t("finished")}
@@ -502,8 +506,16 @@ export function TaskDashboard() {
           emptyLabel={t("noFinishedTasks")}
           customerMap={customerMap}
           activeTaskIds={activeTaskIds}
+          onTaskClick={handleTaskClick}
         />
       </div>
+
+      <TaskDetailModal
+        task={selectedTask}
+        customerName={selectedTask?.customer_id ? customerMap[selectedTask.customer_id] : undefined}
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+      />
     </div>
   )
 }

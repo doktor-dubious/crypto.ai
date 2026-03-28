@@ -1,14 +1,26 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { Info } from "lucide-react"
+import {
+  Info, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, RotateCcw, Globe,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ButtonGroup } from "@/components/ui/button-group"
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Table,
   TableHeader,
@@ -164,6 +176,10 @@ function generateConclusion(run: OptimizationRunResponse, results: OptimizationC
   }
 
   return parts.join(" ")
+}
+
+function isStoppedStatus(status: string): boolean {
+  return status === "failed" || status === "failure" || status === "cancelled"
 }
 
 // ─── Diagnostics Panel ──────────────────────────────────────────────────────
@@ -435,6 +451,44 @@ function DiagnosticsPanel({
   )
 }
 
+// ─── Sort helpers ───────────────────────────────────────────────────────────
+
+type MasterSortField = "name" | "total_combinations" | "simulation_days" | "created_at" | "status" | "starred"
+type SortDir = "asc" | "desc"
+
+function SortableHead({
+  field,
+  current,
+  dir,
+  onSort,
+  children,
+  className,
+}: {
+  field: MasterSortField
+  current: MasterSortField
+  dir: SortDir
+  onSort: (f: MasterSortField) => void
+  children: React.ReactNode
+  className?: string
+}) {
+  const active = field === current
+  return (
+    <TableHead
+      className={`cursor-pointer select-none ${className ?? ""}`}
+      onClick={() => onSort(field)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {children}
+        {active ? (
+          dir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-muted-foreground/50" />
+        )}
+      </span>
+    </TableHead>
+  )
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 interface AutomatizationTabProps {
@@ -446,6 +500,15 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+
+  // Master table state
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set())
+  const [showOnlyChecked, setShowOnlyChecked] = useState(false)
+  const [sortField, setSortField] = useState<MasterSortField>("created_at")
+  const [sortDir, setSortDir] = useState<SortDir>("desc")
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("")
 
   const customerId = activeCustomer?.id ?? ""
 
@@ -490,6 +553,106 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
     },
   })
 
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: (runId: string) => optimizationApi.delete(runId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["optimizationRuns", customerId] })
+    },
+  })
+
+  // Resume mutation
+  const resumeMutation = useMutation({
+    mutationFn: ({ runId, worker }: { runId: string; worker?: string }) =>
+      optimizationApi.resume(runId, worker),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["optimizationRuns", customerId] })
+      queryClient.invalidateQueries({ queryKey: ["optimizationRun", selectedRunId] })
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("automatizationResumeSuccess"))
+    },
+    onError: () => toast.error(t("automatizationResumeError")),
+  })
+
+  // ── Sorting & filtering ─────────────────────────────────────────────────
+
+  function handleSort(field: MasterSortField) {
+    if (sortField === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortField(field)
+      setSortDir(field === "created_at" ? "desc" : "asc")
+    }
+  }
+
+  function handleStar(id: string) {
+    setStarredIds((prev) => {
+      const n = new Set(prev)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+
+  const displayRuns = useMemo(() => {
+    let items = showOnlyChecked
+      ? runs.filter((r) => checkedIds.has(r.id))
+      : runs
+
+    return [...items].sort((a, b) => {
+      let va: string | number, vb: string | number
+      switch (sortField) {
+        case "name":
+          va = a.name ?? ""; vb = b.name ?? ""; break
+        case "total_combinations":
+          va = a.total_combinations; vb = b.total_combinations; break
+        case "simulation_days":
+          va = a.simulation_days; vb = b.simulation_days; break
+        case "created_at":
+          va = a.created_at; vb = b.created_at; break
+        case "status":
+          va = a.status; vb = b.status; break
+        case "starred":
+          va = starredIds.has(a.id) ? 1 : 0; vb = starredIds.has(b.id) ? 1 : 0; break
+      }
+      if (va < vb) return sortDir === "asc" ? -1 : 1
+      if (va > vb) return sortDir === "asc" ? 1 : -1
+      return 0
+    })
+  }, [runs, sortField, sortDir, showOnlyChecked, checkedIds, starredIds])
+
+  // ── Checkbox header state ───────────────────────────────────────────────
+
+  const allChecked = displayRuns.length > 0 && displayRuns.every((r) => checkedIds.has(r.id))
+  const someChecked = displayRuns.some((r) => checkedIds.has(r.id))
+  const headerChecked: boolean | "indeterminate" = allChecked ? true : someChecked ? "indeterminate" : false
+
+  function handleHeaderCheck(checked: boolean) {
+    if (checked) {
+      setCheckedIds(new Set(displayRuns.map((r) => r.id)))
+    } else {
+      setCheckedIds(new Set())
+    }
+  }
+
+  // ── Delete logic ────────────────────────────────────────────────────────
+
+  async function handleDeleteSelected() {
+    const ids = [...checkedIds]
+    try {
+      await Promise.all(ids.map((id) => deleteMutation.mutateAsync(id)))
+      setCheckedIds(new Set())
+      setShowOnlyChecked(false)
+      if (selectedRunId && ids.includes(selectedRunId)) {
+        setSelectedRunId(null)
+      }
+      toast.success(t("automatizationDeleted"))
+    } catch {
+      toast.error(t("automatizationDeleteError"))
+    }
+    setDeleteDialogOpen(false)
+    setDeleteConfirmInput("")
+  }
+
   const sortedResults = selectedRun?.results
     ? [...selectedRun.results].sort((a, b) => b.score - a.score)
     : []
@@ -510,26 +673,105 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
       {/* History table */}
       <div>
         <h4 className="text-sm font-semibold mb-2">{t("automatizationHistoryTitle")}</h4>
+
+        {/* Action bar */}
+        {runs.length > 0 && (
+          <div className="flex items-center gap-2 mb-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="cursor-pointer h-7 text-xs"
+              onClick={() => setShowOnlyChecked((v) => !v)}
+              disabled={checkedIds.size === 0 && !showOnlyChecked}
+            >
+              {showOnlyChecked ? t("automatizationShowAll") : t("automatizationShowSelected")}
+            </Button>
+            {checkedIds.size > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="cursor-pointer h-7 text-xs text-destructive hover:text-destructive"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                {t("automatizationDeleteSelected")}
+              </Button>
+            )}
+          </div>
+        )}
+
         {runs.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("automatizationNoRuns")}</p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("automatizationColumnName")}</TableHead>
-                <TableHead>{t("automatizationColumnCombinations")}</TableHead>
-                <TableHead>{t("automatizationColumnPeriod")}</TableHead>
-                <TableHead>{t("automatizationColumnDate")}</TableHead>
-                <TableHead>{t("automatizationColumnStatus")}</TableHead>
+                <TableHead className="w-10">
+                  <div className="flex items-center gap-1">
+                    <Checkbox
+                      checked={headerChecked}
+                      onCheckedChange={handleHeaderCheck}
+                    />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="p-0.5 rounded hover:bg-muted cursor-pointer">
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRuns.map((r) => r.id)))}>
+                          {t("automatizationSelectAll")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRuns.filter((r) => starredIds.has(r.id)).map((r) => r.id)))}>
+                          {t("automatizationSelectStarred")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </TableHead>
+                <SortableHead field="name" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnName")}
+                </SortableHead>
+                <SortableHead field="total_combinations" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnCombinations")}
+                </SortableHead>
+                <SortableHead field="simulation_days" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnPeriod")}
+                </SortableHead>
+                <SortableHead field="created_at" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnDate")}
+                </SortableHead>
+                <SortableHead field="status" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnStatus")}
+                </SortableHead>
+                <SortableHead field="starred" current={sortField} dir={sortDir} onSort={handleSort} className="w-10">
+                  <Star className="h-3.5 w-3.5" />
+                </SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {runs.map((run) => (
+              {displayRuns.map((run) => (
                 <TableRow
                   key={run.id}
                   className={`cursor-pointer ${selectedRunId === run.id ? "bg-muted/70" : ""}`}
                   onClick={() => setSelectedRunId(selectedRunId === run.id ? null : run.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    handleStar(run.id)
+                  }}
                 >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={checkedIds.has(run.id)}
+                      onCheckedChange={(checked) => {
+                        setCheckedIds((prev) => {
+                          const n = new Set(prev)
+                          checked ? n.add(run.id) : n.delete(run.id)
+                          return n
+                        })
+                      }}
+                    />
+                  </TableCell>
                   <TableCell className="font-medium">{run.name}</TableCell>
                   <TableCell>
                     {t("automatizationCombinations", { count: run.total_combinations })}
@@ -551,6 +793,20 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
                       {statusLabel(run.status)}
                     </Badge>
                   </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="cursor-pointer p-0.5 rounded hover:bg-muted"
+                      onClick={() => handleStar(run.id)}
+                    >
+                      <Star
+                        className={`h-4 w-4 ${
+                          starredIds.has(run.id)
+                            ? "fill-amber-400 text-amber-400"
+                            : "text-muted-foreground"
+                        }`}
+                      />
+                    </button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -562,6 +818,71 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
       {selectedRun && (
         <div className="space-y-4 border-t pt-4">
           <h4 className="text-sm font-semibold">{t("automatizationDetailTitle")}</h4>
+
+          {/* Progress for running/stopped runs */}
+          {(selectedRun.status === "running" || selectedRun.status === "started" || isStoppedStatus(selectedRun.status)) &&
+            selectedRun.total_combinations > 0 && (
+            <div className="rounded-md border p-3 bg-muted/30">
+              <p className="text-sm text-muted-foreground">
+                {t("automatizationProgress", {
+                  completed: selectedRun.completed_combinations,
+                  total: selectedRun.total_combinations,
+                })}
+              </p>
+              <div className="mt-2 h-2 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.round((selectedRun.completed_combinations / selectedRun.total_combinations) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Resume button for stopped runs */}
+          {isStoppedStatus(selectedRun.status) && (
+            <div className="rounded-md border border-[var(--border)] p-4 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold">{t("automatizationResumeButton")}</p>
+                <p className="text-xs text-[var(--muted-foreground)]">{t("automatizationResumeDescription")}</p>
+              </div>
+              <ButtonGroup className="shrink-0">
+                <Button
+                  size="sm"
+                  className="cursor-pointer"
+                  disabled={resumeMutation.isPending}
+                  onClick={() => resumeMutation.mutate({ runId: selectedRun.id })}
+                >
+                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                  {t("automatizationResumeButton")}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      className="cursor-pointer px-1.5"
+                      disabled={resumeMutation.isPending}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onClick={() => resumeMutation.mutate({ runId: selectedRun.id })}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      {t("automatizationResumeSameWorker")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => resumeMutation.mutate({ runId: selectedRun.id, worker: "" })}
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                      {t("automatizationResumeAnyWorker")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </ButtonGroup>
+            </div>
+          )}
 
           {/* Best configuration summary */}
           {selectedRun.best_combination && (
@@ -690,6 +1011,46 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
           )}
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { setDeleteDialogOpen(open); if (!open) setDeleteConfirmInput("") }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("automatizationDeleteConfirmTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("automatizationDeleteConfirmDescription", { count: checkedIds.size })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="text-sm text-muted-foreground">
+              {t("automatizationDeleteConfirmLabel")}
+            </label>
+            <Input
+              value={deleteConfirmInput}
+              onChange={(e) => setDeleteConfirmInput(e.target.value)}
+              placeholder="delete"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="cursor-pointer"
+              onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmInput("") }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              className="cursor-pointer"
+              disabled={deleteConfirmInput.toLowerCase() !== "delete" || deleteMutation.isPending}
+              onClick={handleDeleteSelected}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+              {t("automatizationDeleteSelected")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -63,7 +63,12 @@ async def _run_optimization_async(
         await _update_optimization_run(optimization_run_id, status="running")
 
     try:
+        from gorm_ai.tasks.celery_app import clear_stop_flag, is_stop_requested
+
         request = OptimizeSettingsRequest(**request_data)
+
+        def _should_stop() -> bool:
+            return is_stop_requested(task_id)
 
         async def _on_progress(progress: int, message: str) -> None:
             from gorm_ai.tasks.celery_app import get_current_metrics, refresh_worker_registry
@@ -78,7 +83,29 @@ async def _run_optimization_async(
 
         result = await _run_optimization(
             request, task_id, optimization_run_id, _on_progress, logger,
+            should_stop=_should_stop,
         )
+
+        was_stopped = is_stop_requested(task_id)
+        clear_stop_flag(task_id)
+
+        if was_stopped or result.get("stopped"):
+            async with task_session() as session:
+                await TaskService(session).update_status(
+                    task_id, "stopped",
+                    completed_at=datetime.now(UTC),
+                    error="Gracefully stopped",
+                )
+                await session.commit()
+
+            if optimization_run_id:
+                await _update_optimization_run(
+                    optimization_run_id,
+                    status="stopped",
+                    completed_at=datetime.now(UTC),
+                )
+
+            return result
 
         async with task_session() as session:
             await TaskService(session).update_status(
@@ -132,6 +159,7 @@ async def _run_optimization(
     optimization_run_id: str | None,
     on_progress,
     logger,
+    should_stop=None,
 ) -> dict:
     from sqlalchemy import func, select
 
@@ -242,6 +270,11 @@ async def _run_optimization(
     sim_times: list[float] = []
 
     for i, combo in enumerate(combinations):
+        # Check for graceful stop request between simulations
+        if should_stop and should_stop():
+            logger.info("optimization.graceful_stop", completed=completed, total=total_simulations)
+            break
+
         sim_start = time.monotonic()
 
         # Progress reporting with ETA
@@ -329,7 +362,7 @@ async def _run_optimization(
             )
             all_results.append({
                 "combination": combo,
-                "score": float("-inf"),
+                "score": None,
                 "simulation_id": None,
                 "metrics": {},
                 "error": str(e),
@@ -347,11 +380,11 @@ async def _run_optimization(
             )
 
     # --- Sort results best -> worst ---
-    all_results.sort(key=lambda r: r["score"], reverse=True)
+    all_results.sort(key=lambda r: r["score"] if r["score"] is not None else float("-inf"), reverse=True)
 
     best = all_results[0] if all_results else {}
     best_combo = best.get("combination", {})
-    best_score = best.get("score", 0.0)
+    best_score = best.get("score")
 
     await on_progress(100, f"Done — {completed}/{total_simulations} simulations completed")
 
@@ -390,12 +423,15 @@ async def _run_optimization(
             update_kwargs["diagnostics"] = diagnostics
         await _update_optimization_run(optimization_run_id, **update_kwargs)
 
+    stopped = should_stop() if should_stop else False
+
     return {
         "best_combination": best_combo,
         "best_score": best_score,
         "all_results": all_results,
         "total_simulations": total_simulations,
         "completed_simulations": completed,
+        "stopped": stopped,
     }
 
 
@@ -591,8 +627,8 @@ async def _compute_diagnostics(
 
             if va_on_results and va_off_results:
                 # Pick the best of each group
-                best_va_on = max(va_on_results, key=lambda r: r.get("score", float("-inf")))
-                best_va_off = max(va_off_results, key=lambda r: r.get("score", float("-inf")))
+                best_va_on = max(va_on_results, key=lambda r: r.get("score") if r.get("score") is not None else float("-inf"))
+                best_va_off = max(va_off_results, key=lambda r: r.get("score") if r.get("score") is not None else float("-inf"))
 
                 async with task_session() as session:
                     sim_on = await session.get(SimulationModel, best_va_on["simulation_id"])

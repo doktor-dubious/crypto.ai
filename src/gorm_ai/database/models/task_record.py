@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gorm_ai.database.base import Base
@@ -36,6 +36,7 @@ class TaskRecord(Base):
     worker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     peak_memory_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
     cpu_time_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    request_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Relationships
     customer: Mapped["Customer | None"] = relationship("Customer", lazy="noload")

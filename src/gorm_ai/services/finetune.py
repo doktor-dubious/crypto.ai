@@ -94,6 +94,7 @@ class FinetuneService:
         self,
         request_data: dict,
         on_progress: Callable[[int, str | None], Awaitable[None]] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> dict:
         """Run fine-tuning for the given parameters.
 
@@ -131,7 +132,7 @@ class FinetuneService:
         logger.info("Fine-tuning engine '%s' (slug=%s), output=%s", engine.name, slug, output_dir)
 
         if on_progress:
-            await on_progress(5, f"Loading sales data for {engine.name}")
+            await on_progress(1, f"Loading sales data for {engine.name}")
 
         # ── Fetch outlets ────────────────────────────────────────────────
         query = select(Outlet.id).where(
@@ -151,7 +152,7 @@ class FinetuneService:
             raise ValueError("No active outlets found for this customer/group")
 
         if on_progress:
-            await on_progress(10, f"Found {len(outlet_ids)} outlets")
+            await on_progress(2, f"Found {len(outlet_ids)} outlets")
 
         # ── Fetch sales data ─────────────────────────────────────────────
         sales_query = select(Sale).where(
@@ -172,7 +173,7 @@ class FinetuneService:
             raise ValueError("No sales data found for the given parameters")
 
         if on_progress:
-            await on_progress(20, f"Loaded {len(sales)} sales records")
+            await on_progress(3, f"Loaded {len(sales)} sales records")
 
         # Group by outlet
         outlet_series: dict[str, list[float]] = defaultdict(list)
@@ -180,7 +181,7 @@ class FinetuneService:
             outlet_series[s.outlet_id].append(float(s.sold))
 
         if on_progress:
-            await on_progress(30, f"Starting fine-tuning ({slug})")
+            await on_progress(5, f"Starting fine-tuning ({slug})")
 
         # ── Resolve sync parameters ───────────────────────────────────────
         # Sync only happens on remote workers (RunPod) where SYNC_TARGET is
@@ -192,7 +193,7 @@ class FinetuneService:
         sync_every = engine.finetune_sync_every or int(os.environ.get("SYNC_EVERY", "5"))
 
         # ── Dispatch to engine-specific training ─────────────────────────
-        await runner(
+        stopped = await runner(
             outlet_series=outlet_series,
             context_length=context_length,
             horizon=horizon,
@@ -204,6 +205,7 @@ class FinetuneService:
             sync_target=sync_target,
             sync_every=sync_every,
             early_stopping_patience=early_stopping_patience,
+            should_stop=should_stop,
         )
 
         # ── Record progress for each outlet ──────────────────────────────
@@ -234,6 +236,21 @@ class FinetuneService:
                     data_start_date=start_date,
                     data_end_date=end_date,
                 ))
+
+        if stopped:
+            if on_progress:
+                await on_progress(
+                    5 + int(94 * (len(outlet_ids) / max(len(outlet_ids), 1))),
+                    "Stopped — final sync done",
+                )
+            return {
+                "engine_id": engine_id,
+                "engine_slug": slug,
+                "customer_id": customer_id,
+                "outlets_processed": len(outlet_ids),
+                "sales_records": len(sales),
+                "stopped": True,
+            }
 
         if on_progress:
             await on_progress(100, "Fine-tuning complete")

@@ -180,7 +180,8 @@ async def run_finetune(
     sync_target: str | None = None,
     sync_every: int = 5,
     early_stopping_patience: int = 0,
-) -> None:
+    should_stop: Callable[[], bool] | None = None,
+) -> bool:
     """Fine-tune MOIRAI-2 on the provided outlet series."""
     from uni2ts.model.moirai2 import Moirai2Module
 
@@ -200,6 +201,13 @@ async def run_finetune(
     processed = 0
 
     for outlet_id, values in outlet_series.items():
+        # Check for graceful stop request between outlets
+        if should_stop and should_stop():
+            logger.info("Graceful stop requested after %d/%d outlets", processed, total)
+            if sync_target and processed > 0:
+                _sync_checkpoint(output_dir, sync_target)
+            return True
+
         series = np.array(values, dtype=np.float32)
         if len(series) < context_length + horizon:
             logger.info("  Outlet %s: too short (%d) — skipping", outlet_id, len(series))
@@ -215,10 +223,11 @@ async def run_finetune(
             if sync_target and processed % sync_every == 0:
                 _sync_checkpoint(output_dir, sync_target)
 
-        pct = 30 + int(60 * (processed / max(total, 1)))
+        pct = 5 + int(94 * (processed / max(total, 1)))
         if on_progress:
             await on_progress(pct, f"Trained {processed}/{total} outlets")
 
     if sync_target and processed > 0:
         _sync_checkpoint(output_dir, sync_target)
     logger.info("MOIRAI-2 fine-tuning done: %d/%d outlets trained", processed, total)
+    return False

@@ -176,10 +176,10 @@ async def resume_simulation(
     record = await service.session.get(TaskRecord, record_id)
     if not record or not record.active:
         raise HTTPException(status_code=404, detail="Task record not found")
-    if record.status not in ("failure", "revoked"):
+    if record.status not in ("failure", "revoked", "stopped"):
         raise HTTPException(
             status_code=400,
-            detail="Only failed or cancelled simulations can be resumed",
+            detail="Only failed, cancelled, or stopped simulations can be resumed",
         )
 
     # Find the associated Simulation

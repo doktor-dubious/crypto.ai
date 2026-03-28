@@ -45,7 +45,12 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
         await session.commit()
 
     try:
+        from gorm_ai.tasks.celery_app import clear_stop_flag, is_stop_requested
+
         resume_simulation_id = request_data.pop("resume_simulation_id", None)
+
+        def _should_stop() -> bool:
+            return is_stop_requested(task_id)
 
         async def _on_progress(progress: int, message: str) -> None:
             from gorm_ai.tasks.celery_app import get_current_metrics, refresh_worker_registry
@@ -63,6 +68,7 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
             if resume_simulation_id:
                 result = await service.resume_simulation(
                     resume_simulation_id, task_id=task_id, on_progress=_on_progress,
+                    should_stop=_should_stop,
                 )
             else:
                 if isinstance(request_data.get("simulation_from"), str):
@@ -70,8 +76,24 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
                 if isinstance(request_data.get("simulation_to"), str):
                     request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
                 request = SimulationRequest(**request_data)
-                result = await service.run_simulation(request, task_id=task_id, on_progress=_on_progress)
+                result = await service.run_simulation(
+                    request, task_id=task_id, on_progress=_on_progress,
+                    should_stop=_should_stop,
+                )
             await session.commit()
+
+        was_stopped = is_stop_requested(task_id)
+        clear_stop_flag(task_id)
+
+        if was_stopped:
+            async with task_session() as session:
+                await TaskService(session).update_status(
+                    task_id, "stopped",
+                    completed_at=datetime.now(UTC),
+                    error="Gracefully stopped",
+                )
+                await session.commit()
+            return result.model_dump(mode="json")
 
         async with task_session() as session:
             await TaskService(session).update_status(

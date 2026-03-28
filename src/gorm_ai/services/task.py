@@ -47,6 +47,7 @@ class TaskService:
         task_type: str,
         customer_id: str | None = None,
         name: str | None = None,
+        request_data: dict | None = None,
     ) -> TaskRecord:
         """Create a new task record with status 'pending'."""
         record = TaskRecord(
@@ -55,6 +56,7 @@ class TaskService:
             status="pending",
             customer_id=customer_id,
             name=name,
+            request_data=request_data,
         )
         self.session.add(record)
         await self.session.flush()
@@ -113,6 +115,13 @@ class TaskService:
         if record is None:
             raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
         return record
+
+    async def get_by_record_id(self, record_id: str) -> TaskRecord | None:
+        """Get a task record by its UUID primary key."""
+        result = await self.session.execute(
+            select(TaskRecord).where(TaskRecord.id == record_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_tasks(
         self,

@@ -1,14 +1,13 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
-import { tasksApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
+import { tasksApi, customersApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,6 +15,7 @@ import {
   DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
 import { useSidebar } from "@/components/ui/sidebar"
+import { TaskDetailModal } from "@/components/dashboard/task-detail-modal"
 import { cn } from "@/lib/utils"
 
 type BadgeVariant = "muted" | "info" | "success" | "destructive" | "warning"
@@ -27,32 +27,14 @@ const STATUS_BADGE: Record<TaskStatus, BadgeVariant> = {
   failure: "destructive",
   revoked: "warning",
   continued: "muted",
+  stopped: "warning",
 }
 
-function TaskItem({ task }: { task: TaskRecordResponse }) {
+function TaskItem({ task, onTaskClick }: { task: TaskRecordResponse; onTaskClick: (task: TaskRecordResponse) => void }) {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
-  const router = useRouter()
   const { state } = useSidebar()
   const isExpanded = state === "expanded"
-
-  const isFinished = task.status === "success" || task.status === "failure" || task.status === "revoked" || task.status === "continued"
-  const completedRoute = task.type === "prediction"
-    ? `/predictions/completed?task_id=${task.task_id}`
-    : task.type === "simulation"
-      ? `/simulations/completed?task_id=${task.task_id}`
-      : null
-
-  function handleClick() {
-    if (isFinished && completedRoute) router.push(completedRoute)
-  }
-
-  // Tick every 30s so relative time strings recalculate even when task data is unchanged
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 30_000)
-    return () => clearInterval(id)
-  }, [])
 
   const [confirmOpen, setConfirmOpen] = useState(false)
 
@@ -63,6 +45,13 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
       setConfirmOpen(false)
     },
   })
+
+  // Tick every 30s so relative time strings recalculate even when task data is unchanged
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => clearInterval(id)
+  }, [])
 
   const iconControls = useAnimation()
   const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : task.type === "optimization" ? AnimatedSettings : AnimatedFlask
@@ -75,8 +64,8 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
   if (!isExpanded) {
     return (
       <li
-        className={cn("flex items-center justify-center py-1", isFinished && completedRoute && "cursor-pointer")}
-        onClick={handleClick}
+        className="flex items-center justify-center py-1 cursor-pointer"
+        onClick={() => onTaskClick(task)}
         onMouseEnter={() => iconControls.start("animate")}
         onMouseLeave={() => iconControls.start("normal")}
       >
@@ -90,7 +79,8 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
               task.status === "success" && "bg-green-500",
               task.status === "failure" && "bg-red-500",
               task.status === "revoked" && "bg-orange-500",
-              task.status === "continued" && "bg-neutral-400"
+              task.status === "continued" && "bg-neutral-400",
+              task.status === "stopped" && "bg-orange-500"
             )}
           />
         </div>
@@ -100,11 +90,8 @@ function TaskItem({ task }: { task: TaskRecordResponse }) {
 
   return (
     <li
-      className={cn(
-        "group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors",
-        isFinished && completedRoute && "cursor-pointer"
-      )}
-      onClick={handleClick}
+      className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors cursor-pointer"
+      onClick={() => onTaskClick(task)}
       onMouseEnter={() => iconControls.start("animate")}
       onMouseLeave={() => iconControls.start("normal")}
     >
@@ -184,10 +171,12 @@ function TaskGroup({
   label,
   tasks,
   emptyLabel,
+  onTaskClick,
 }: {
   label: string
   tasks: TaskRecordResponse[]
   emptyLabel: string
+  onTaskClick: (task: TaskRecordResponse) => void
 }) {
   const { state } = useSidebar()
   const isExpanded = state === "expanded"
@@ -208,7 +197,7 @@ function TaskGroup({
       ) : (
         <ul className="space-y-0.5">
           {tasks.map((task) => (
-            <TaskItem key={task.id} task={task} />
+            <TaskItem key={task.id} task={task} onTaskClick={onTaskClick} />
           ))}
         </ul>
       )}
@@ -218,6 +207,8 @@ function TaskGroup({
 
 export function SidebarTasks() {
   const t = useTranslations("tasks")
+  const [selectedTask, setSelectedTask] = useState<TaskRecordResponse | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
 
   const { data } = useQuery({
     queryKey: ["tasks"],
@@ -230,6 +221,15 @@ export function SidebarTasks() {
     },
   })
 
+  // Fetch customers for the modal to show customer names
+  const { data: customers } = useQuery({
+    queryKey: ["customers"],
+    queryFn: () => customersApi.list(),
+    staleTime: 5 * 60_000,
+  })
+  const customerMap: Record<string, string> = {}
+  customers?.forEach((c) => { customerMap[c.id] = c.name })
+
   const SIDEBAR_LIMIT = 10
 
   const tasks = data?.items ?? []
@@ -241,7 +241,7 @@ export function SidebarTasks() {
     )
   const pending = tasks.filter((t) => t.status === "pending")
   const finished = tasks
-    .filter((t) => ["success", "failure", "revoked", "continued"].includes(t.status))
+    .filter((t) => ["success", "failure", "revoked", "continued", "stopped"].includes(t.status))
     .sort((a, b) =>
       (b.completed_at ?? b.updated_at) < (a.completed_at ?? a.updated_at) ? -1 : 1
     )
@@ -253,23 +253,40 @@ export function SidebarTasks() {
   const remaining2 = remaining1 - pendingSlice.length
   const finishedSlice = finished.slice(0, remaining2)
 
+  function handleTaskClick(task: TaskRecordResponse) {
+    setSelectedTask(task)
+    setModalOpen(true)
+  }
+
   return (
-    <div className="space-y-3">
-      <TaskGroup
-        label={t("running")}
-        tasks={runningSlice}
-        emptyLabel={t("noRunningTasks")}
+    <>
+      <div className="space-y-3">
+        <TaskGroup
+          label={t("running")}
+          tasks={runningSlice}
+          emptyLabel={t("noRunningTasks")}
+          onTaskClick={handleTaskClick}
+        />
+        <TaskGroup
+          label={t("pending")}
+          tasks={pendingSlice}
+          emptyLabel={t("noPendingTasks")}
+          onTaskClick={handleTaskClick}
+        />
+        <TaskGroup
+          label={t("finished")}
+          tasks={finishedSlice}
+          emptyLabel={t("noFinishedTasks")}
+          onTaskClick={handleTaskClick}
+        />
+      </div>
+
+      <TaskDetailModal
+        task={selectedTask}
+        customerName={selectedTask?.customer_id ? customerMap[selectedTask.customer_id] : undefined}
+        open={modalOpen}
+        onOpenChange={setModalOpen}
       />
-      <TaskGroup
-        label={t("pending")}
-        tasks={pendingSlice}
-        emptyLabel={t("noPendingTasks")}
-      />
-      <TaskGroup
-        label={t("finished")}
-        tasks={finishedSlice}
-        emptyLabel={t("noFinishedTasks")}
-      />
-    </div>
+    </>
   )
 }

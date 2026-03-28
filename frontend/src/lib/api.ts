@@ -30,7 +30,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ─── Types (mirrored from FastAPI schemas) ────────────────────────────────────
 
-export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued"
+export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued" | "stopped"
 export type TaskType = "prediction" | "simulation" | "finetune" | "optimization"
 
 export interface TaskRecordResponse {
@@ -131,6 +131,9 @@ export const tasksApi = {
 
   listWorkers: () =>
     apiFetch<WorkerInfo[]>("/tasks/workers/list"),
+
+  stop: (taskId: string) =>
+    apiFetch<{ status: string; task_id: string }>(`/tasks/${taskId}/stop`, { method: "POST" }),
 }
 
 export interface WorkerInfo {
@@ -418,6 +421,13 @@ export const finetuneApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  resume: (recordId: string, worker?: string) => {
+    const qs = worker !== undefined ? `?worker=${encodeURIComponent(worker)}` : ""
+    return apiFetch<FinetuneTaskResponse>(`/prediction-engines/finetune/resume/${recordId}${qs}`, {
+      method: "POST",
+    })
+  },
 
   count: (engineId: string) =>
     apiFetch<FinetuneCountResponse>(`/prediction-engines/${engineId}/finetune/count`),
@@ -1832,4 +1842,14 @@ export const optimizationApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  resume: (runId: string, worker?: string) => {
+    const qs = worker !== undefined ? `?worker=${encodeURIComponent(worker)}` : ""
+    return apiFetch<{ task_id: string }>(`/optimization/${runId}/resume${qs}`, {
+      method: "POST",
+    })
+  },
+
+  delete: (runId: string) =>
+    apiFetch<void>(`/optimization/${runId}`, { method: "DELETE" }),
 }

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
 from gorm_ai.api.deps import CustomerConfigurationServiceDep, DbSession, TaskServiceDep
@@ -220,3 +220,116 @@ async def apply_optimization_settings(
         await config_service.create(run.customer_id, config_create)
 
     return {"status": "ok", "applied": update_data, "customer_id": run.customer_id}
+
+
+@router.post("/{run_id}/resume", response_model=OptimizeSettingsStatus, status_code=202)
+async def resume_optimization(
+    run_id: str,
+    session: DbSession,
+    task_service: TaskServiceDep,
+    worker: str | None = Query(None),
+) -> OptimizeSettingsStatus:
+    """Resume a failed or cancelled optimization run.
+
+    Resets the run and dispatches a new Celery task with the same parameters.
+    """
+    from gorm_ai.tasks.optimization import run_optimization_task
+
+    # Load the OptimizationRun
+    result = await session.execute(
+        select(OptimizationRun).where(
+            OptimizationRun.id == run_id,
+            OptimizationRun.active.is_(True),
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Optimization run not found")
+
+    # Sync status from task record first
+    await _sync_run_status(run, session)
+
+    if run.status not in ("failed", "cancelled", "stopped"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed, cancelled, or stopped optimization runs can be resumed",
+        )
+
+    # Mark old TaskRecord as "continued" if it exists
+    if run.task_id:
+        old_task_result = await session.execute(
+            select(TaskRecord).where(TaskRecord.task_id == run.task_id)
+        )
+        old_record = old_task_result.scalar_one_or_none()
+        if old_record:
+            old_record.status = "continued"
+            old_record.error = "Resumed"
+            if not old_record.completed_at:
+                old_record.completed_at = datetime.now(UTC)
+
+    # Reset the OptimizationRun for a fresh start
+    run.status = "pending"
+    run.results = None
+    run.best_combination = None
+    run.best_score = None
+    run.completed_combinations = 0
+    run.diagnostics = None
+    run.completed_at = None
+    await session.flush()
+
+    # Rebuild the request data from the stored run parameters
+    request_data = {
+        "customer_id": run.customer_id,
+        "name": run.name,
+        "optimize_variation_adjustment": run.optimize_variation_adjustment,
+        "optimize_eo_methodology": run.optimize_eo_methodology,
+        "optimize_eo_extrapolation": run.optimize_eo_extrapolation,
+        "optimize_weekday_profile_correction": run.optimize_weekday_profile_correction,
+        "simulation_days": run.simulation_days,
+        "delay": run.delay,
+        "optimization_run_id": run.id,
+    }
+
+    # Determine target worker queue
+    target_queue = worker if worker is not None else (
+        (await session.execute(
+            select(TaskRecord.worker_name).where(TaskRecord.task_id == run.task_id)
+        )).scalar_one_or_none() if run.task_id else None
+    )
+
+    dispatch_kwargs: dict = {"args": [request_data]}
+    if target_queue:
+        dispatch_kwargs["queue"] = target_queue
+    task = run_optimization_task.apply_async(**dispatch_kwargs)
+
+    # Update the run with the new task ID
+    run.task_id = task.id
+
+    # Create task record for the task dashboard
+    name = f"Resume: {run.name}" if run.name else "Resume optimization"
+    await task_service.create(task.id, "optimization", run.customer_id, name=name)
+
+    return OptimizeSettingsStatus(
+        task_id=task.id,
+        status="pending",
+        progress=0,
+        progress_message="Optimization resume task queued",
+    )
+
+
+@router.delete("/{run_id}", status_code=204)
+async def delete_optimization_run(
+    run_id: str,
+    session: DbSession,
+) -> None:
+    """Soft-delete an optimization run."""
+    result = await session.execute(
+        select(OptimizationRun).where(
+            OptimizationRun.id == run_id,
+            OptimizationRun.active.is_(True),
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Optimization run not found")
+    run.active = False
