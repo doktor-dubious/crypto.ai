@@ -6,8 +6,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { useCustomer } from "@/components/providers/customer-provider"
 import {
-  Info, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, RotateCcw, Globe,
+  Info, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, RotateCcw, Globe, Focus,
 } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import { Badge } from "@/components/ui/badge"
@@ -508,6 +509,7 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
   const [sortField, setSortField] = useState<MasterSortField>("created_at")
   const [sortDir, setSortDir] = useState<SortDir>("desc")
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteUnderstood, setDeleteUnderstood] = useState(false)
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("")
 
   const customerId = activeCustomer?.id ?? ""
@@ -650,6 +652,7 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
       toast.error(t("automatizationDeleteError"))
     }
     setDeleteDialogOpen(false)
+    setDeleteUnderstood(false)
     setDeleteConfirmInput("")
   }
 
@@ -674,35 +677,10 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
       <div>
         <h4 className="text-sm font-semibold mb-2">{t("automatizationHistoryTitle")}</h4>
 
-        {/* Action bar */}
-        {runs.length > 0 && (
-          <div className="flex items-center gap-2 mb-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="cursor-pointer h-7 text-xs"
-              onClick={() => setShowOnlyChecked((v) => !v)}
-              disabled={checkedIds.size === 0 && !showOnlyChecked}
-            >
-              {showOnlyChecked ? t("automatizationShowAll") : t("automatizationShowSelected")}
-            </Button>
-            {checkedIds.size > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="cursor-pointer h-7 text-xs text-destructive hover:text-destructive"
-                onClick={() => setDeleteDialogOpen(true)}
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1" />
-                {t("automatizationDeleteSelected")}
-              </Button>
-            )}
-          </div>
-        )}
-
         {runs.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("automatizationNoRuns")}</p>
         ) : (
+          <>
           <Table>
             <TableHeader>
               <TableRow>
@@ -811,6 +789,32 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
               ))}
             </TableBody>
           </Table>
+          {checkedIds.size > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 border-t bg-[var(--muted)]/30">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {t("automatizationSelectedCount", { selected: checkedIds.size, total: displayRuns.length })}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost" size="sm" className="h-7 gap-1.5 px-2 cursor-pointer"
+                  onClick={() => setShowOnlyChecked((v) => !v)}
+                  title={showOnlyChecked ? "Show all" : "Show only selected"}
+                >
+                  <Focus className={cn("h-3.5 w-3.5", showOnlyChecked && "text-primary")} />
+                  {showOnlyChecked && <span className="text-xs">{t("automatizationShowAll")}</span>}
+                </Button>
+                <Button
+                  variant="ghost" size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive cursor-pointer"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  title={t("automatizationDeleteSelected")}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 
@@ -1013,39 +1017,46 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
       )}
 
       {/* Delete confirmation dialog */}
-      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { setDeleteDialogOpen(open); if (!open) setDeleteConfirmInput("") }}>
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => { setDeleteDialogOpen(open); if (!open) { setDeleteUnderstood(false); setDeleteConfirmInput("") } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("automatizationDeleteConfirmTitle")}</DialogTitle>
+            <DialogTitle className="text-destructive">{t("automatizationDeleteConfirmTitle")}</DialogTitle>
             <DialogDescription>
               {t("automatizationDeleteConfirmDescription", { count: checkedIds.size })}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            <label className="text-sm text-muted-foreground">
-              {t("automatizationDeleteConfirmLabel")}
+          <div className="space-y-4 py-2">
+            <label className="flex items-start gap-3 rounded-md border border-destructive/30 p-3 cursor-pointer">
+              <Checkbox checked={deleteUnderstood} onCheckedChange={(v) => setDeleteUnderstood(!!v)} className="mt-0.5 shrink-0" />
+              <span className="text-sm">{t("automatizationDeleteUnderstand")}</span>
             </label>
-            <Input
-              value={deleteConfirmInput}
-              onChange={(e) => setDeleteConfirmInput(e.target.value)}
-              placeholder="delete"
-            />
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-[var(--muted-foreground)]">
+                {t("automatizationDeleteConfirmLabel")}
+              </label>
+              <Input
+                value={deleteConfirmInput}
+                onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                placeholder="delete"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button
-              variant="outline"
+              variant="secondary"
+              size="sm"
               className="cursor-pointer"
-              onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmInput("") }}
+              onClick={() => { setDeleteDialogOpen(false); setDeleteUnderstood(false); setDeleteConfirmInput("") }}
             >
-              Cancel
+              {t("automatizationCancel")}
             </Button>
             <Button
               variant="destructive"
+              size="sm"
               className="cursor-pointer"
-              disabled={deleteConfirmInput.toLowerCase() !== "delete" || deleteMutation.isPending}
+              disabled={!deleteUnderstood || deleteConfirmInput.toLowerCase() !== "delete" || deleteMutation.isPending}
               onClick={handleDeleteSelected}
             >
-              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
               {t("automatizationDeleteSelected")}
             </Button>
           </DialogFooter>

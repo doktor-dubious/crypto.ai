@@ -277,17 +277,19 @@ async def _run_optimization(
 
         sim_start = time.monotonic()
 
-        # Progress reporting with ETA
-        if sim_times:
-            avg_time = sum(sim_times) / len(sim_times)
-            remaining = (total_simulations - completed) * avg_time
-            eta_min = remaining / 60
-            msg = f"Simulation {completed + 1}/{total_simulations} — ~{eta_min:.0f}min remaining"
-        else:
-            msg = f"Simulation {completed + 1}/{total_simulations}"
+        # Wrapper progress callback: convert chunk-level progress to global optimization progress
+        # Each simulation gets (100 / total_simulations) percentage points
+        pct_per_simulation = 100.0 / total_simulations
+        sim_pct_start = completed * pct_per_simulation
 
-        pct = max(1, min(99, round(completed / total_simulations * 100)))
-        await on_progress(pct, msg)
+        async def _on_simulation_progress(chunk_pct: int, chunk_msg: str) -> None:
+            # Blend chunk progress (0-100 within simulation) into global progress
+            global_pct = sim_pct_start + (chunk_pct / 100.0) * pct_per_simulation
+            global_pct = max(1, min(99, round(global_pct)))
+
+            # Prepend simulation number to the chunk message
+            full_msg = f"Simulation {completed + 1}/{total_simulations} — {chunk_msg}"
+            await on_progress(global_pct, full_msg)
 
         # Build a simulation request with the combo overrides
         sim_request = SimulationRequest(
@@ -305,6 +307,7 @@ async def _run_optimization(
                 sim_result = await service.run_simulation(
                     sim_request,
                     config_overrides=combo,
+                    on_progress=_on_simulation_progress,
                 )
                 await session.commit()
 

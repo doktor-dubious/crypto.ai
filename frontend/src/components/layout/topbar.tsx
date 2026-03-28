@@ -24,6 +24,8 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/simulations/strategies": "simulationsStrategies",
   "/simulations/completed": "simulationsCompleted",
   "/simulations/filter": "simulationsFilter",
+  "/simulations/finetune-new": "simulationsFinetuneNew",
+  "/simulations/finetune-completed": "simulationsFinetuneCompleted",
   "/pads": "padsFilters",
   "/pads/predefined": "predefinedPads",
   "/financials/date-override": "financialsDateOverride",

@@ -2,10 +2,12 @@
 
 import { useState, useMemo } from "react"
 import { useTranslations } from "next-intl"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { optimizationApi, type OptimizeSettingsRequest } from "@/lib/api"
+import { optimizationApi, tasksApi, type OptimizeSettingsRequest } from "@/lib/api"
 import { useCustomer } from "@/components/providers/customer-provider"
+import { ChevronDown, Check } from "lucide-react"
+import { cn } from "@/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -13,6 +15,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -72,6 +77,14 @@ export function OptimalSettingsModal({ open, onOpenChange }: OptimalSettingsModa
   const [enabled, setEnabled] = useState<Record<string, boolean>>({})
   const [rangeParams, setRangeParams] = useState<Record<string, number>>({})
   const [simulationDays, setSimulationDays] = useState(180)
+  const [worker, setWorker] = useState<string | null>(null)
+
+  const { data: workers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => tasksApi.listWorkers(),
+    enabled: open,
+    staleTime: 30_000,
+  })
 
   const getRangeVal = (key: string, fallback: number) => rangeParams[key] ?? fallback
 
@@ -98,6 +111,7 @@ export function OptimalSettingsModal({ open, onOpenChange }: OptimalSettingsModa
       setName("")
       setEnabled({})
       setRangeParams({})
+      setWorker(null)
     },
     onError: (e) => {
       toast.error(e instanceof Error ? e.message : "Failed to start optimization")
@@ -114,6 +128,7 @@ export function OptimalSettingsModal({ open, onOpenChange }: OptimalSettingsModa
       optimize_eo_extrapolation: !!enabled.optimize_eo_extrapolation,
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_days: simulationDays,
+      worker: worker || undefined,
     }
     // Range settings
     for (const s of SETTINGS) {
@@ -195,6 +210,41 @@ export function OptimalSettingsModal({ open, onOpenChange }: OptimalSettingsModa
             </div>
           ))}
         </div>
+
+        {workers.length > 0 && (
+          <div className="flex flex-col gap-1.5 py-2">
+            <label className="text-xs font-medium text-muted-foreground">{t("optimizeWorker" as Parameters<typeof t>[0])}</label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex items-center justify-between h-8 w-full px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
+                  <span className={cn(!worker && "text-muted-foreground")}>
+                    {worker ?? t("optimizeWorkerAny" as Parameters<typeof t>[0])}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72">
+                <DropdownMenuItem
+                  onClick={() => setWorker(null)}
+                  className="flex items-center justify-between"
+                >
+                  <span className="text-muted-foreground">{t("optimizeWorkerAny" as Parameters<typeof t>[0])}</span>
+                  {worker === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                </DropdownMenuItem>
+                {workers.map((w) => (
+                  <DropdownMenuItem
+                    key={w.name}
+                    onClick={() => setWorker(w.name)}
+                    className="flex items-center justify-between"
+                  >
+                    <span>{w.name}</span>
+                    {worker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
 
         <div className="flex items-center justify-between py-1.5 pt-2 border-t">
           <span className="text-sm">{t("optimizeSimulationDays")}</span>

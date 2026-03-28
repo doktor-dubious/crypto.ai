@@ -14,7 +14,7 @@ celery_app = Celery(
     "gorm_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations", "gorm_ai.tasks.finetuning", "gorm_ai.tasks.optimization"],
+    include=["gorm_ai.tasks.predictions", "gorm_ai.tasks.simulations", "gorm_ai.tasks.finetuning", "gorm_ai.tasks.optimization", "gorm_ai.tasks.finetune_examination"],
 )
 
 # Celery configuration

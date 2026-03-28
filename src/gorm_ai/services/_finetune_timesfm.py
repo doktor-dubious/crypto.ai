@@ -48,7 +48,25 @@ def _get_trainable_module(model):
     raise AttributeError("Could not find nn.Module on TimesFM wrapper")
 
 
-def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr, batch_size, patience: int = 0):
+# If the best MSE across the first 5 epochs hasn't dropped below this,
+# the outlet is pathological.  Well-behaved outlets reach <1.0 within
+# a few epochs even when epoch 1 starts high (e.g. 200+).  Outlets
+# that can't get below this threshold have data issues that would
+# corrupt the shared model weights.
+_SANE_CHECK_EPOCHS = 5
+_MAX_SANE_LOSS = 10.0
+
+
+def _train_outlet(
+    model,
+    series: np.ndarray,
+    context_length,
+    horizon,
+    epochs,
+    lr,
+    batch_size,
+    patience: int = 0,
+):
     nn_module = _get_trainable_module(model)
     device = next(nn_module.parameters()).device
     p = nn_module.p
@@ -62,7 +80,14 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
     if len(dataset) == 0:
         return False
 
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, num_workers=0,
+    )
+
+    # Snapshot weights so we can roll back if the outlet is pathological
+    import copy
+    snapshot = copy.deepcopy(nn_module.state_dict())
+
     nn_module.train()
     optimizer = AdamW(nn_module.parameters(), lr=lr)
 
@@ -80,16 +105,37 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
             patched = ctx_batch.reshape(bsz, -1, p)
             masks = torch.zeros_like(patched, dtype=torch.bool)
             (_, _, output_ts, _), _ = nn_module(patched, masks)
-            forecast = output_ts.reshape(bsz, -1, o, q)[:, -1, :horizon, :].mean(dim=-1)
+            forecast = output_ts.reshape(
+                bsz, -1, o, q,
+            )[:, -1, :horizon, :].mean(dim=-1)
             loss = fn.mse_loss(forecast, tgt_batch)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(nn_module.parameters(), 1.0)
             optimizer.step()
             epoch_loss += loss.item()
             n += 1
         avg_loss = epoch_loss / max(n, 1)
-        logger.info("  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, avg_loss)
+        logger.info(
+            "  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, avg_loss,
+        )
 
-        # Early stopping: stop when loss hasn't improved for `patience` epochs
+        # Bail out on pathological outlets: if the best loss across
+        # the first N epochs hasn't dropped below the threshold, the
+        # data is unsuitable.  Restore the weight snapshot so the
+        # shared model isn't corrupted.
+        if epoch == _SANE_CHECK_EPOCHS and best_loss > _MAX_SANE_LOSS:
+            logger.warning(
+                "  Best MSE after %d epochs is %.2f (threshold "
+                "%.1f) — skipping outlet (restoring weights)",
+                _SANE_CHECK_EPOCHS,
+                best_loss,
+                _MAX_SANE_LOSS,
+            )
+            nn_module.load_state_dict(snapshot)
+            nn_module.eval()
+            return False
+
+        # Early stopping
         if patience > 0:
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -97,7 +143,12 @@ def _train_outlet(model, series: np.ndarray, context_length, horizon, epochs, lr
             else:
                 stale += 1
                 if stale >= patience:
-                    logger.info("  Early stopping at epoch %d (no improvement for %d epochs)", epoch, patience)
+                    logger.info(
+                        "  Early stopping at epoch %d "
+                        "(no improvement for %d epochs)",
+                        epoch,
+                        patience,
+                    )
                     break
 
     nn_module.eval()
@@ -191,6 +242,7 @@ async def run_finetune(
         if should_stop and should_stop():
             logger.info("Graceful stop requested after %d/%d outlets", processed, total)
             if sync_target and processed > 0:
+                logger.info("  Final sync before stop...")
                 _sync_checkpoint(output_dir, sync_target)
             return True
 
@@ -204,14 +256,31 @@ async def run_finetune(
             pct = 5 + int(94 * ((idx - 1) / max(total, 1)))
             await on_progress(pct, f"Training outlet {idx}/{total}")
 
-        logger.info("  Training on outlet %s (%d points)", outlet_id, len(series))
-        trained = await asyncio.get_event_loop().run_in_executor(
-            None, _train_outlet, model, series, context_length, horizon, epochs, learning_rate, batch_size, early_stopping_patience,
+        until_sync = sync_every - (processed % sync_every) if sync_target else 0
+        logger.info(
+            "  Training on outlet %s (%d points)%s",
+            outlet_id,
+            len(series),
+            f" — {until_sync} outlet(s) until next sync" if sync_target else "",
+        )
+        loop = asyncio.get_event_loop()
+        trained = await loop.run_in_executor(
+            None,
+            _train_outlet,
+            model, series, context_length, horizon,
+            epochs, learning_rate, batch_size,
+            early_stopping_patience,
         )
         if trained:
-            await asyncio.get_event_loop().run_in_executor(None, _save_checkpoint, model, output_dir)
+            await loop.run_in_executor(
+                None, _save_checkpoint, model, output_dir,
+            )
             processed += 1
             if sync_target and processed % sync_every == 0:
+                logger.info(
+                    "  Syncing checkpoint (%d outlets trained)...",
+                    processed,
+                )
                 _sync_checkpoint(output_dir, sync_target)
 
         pct = 5 + int(94 * (idx / max(total, 1)))
@@ -219,6 +288,7 @@ async def run_finetune(
             await on_progress(pct, f"Trained {processed}/{total} outlets")
 
     if sync_target and processed > 0:
+        logger.info("  Final sync after completion...")
         _sync_checkpoint(output_dir, sync_target)
     logger.info("TimesFM fine-tuning done: %d/%d outlets trained", processed, total)
     return False

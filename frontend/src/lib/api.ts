@@ -1755,6 +1755,7 @@ export interface OptimizeSettingsRequest {
   correction_threshold_iterations?: number
   simulation_days?: number
   delay?: number
+  worker?: string | null
 }
 
 export interface OptimizationCombinationResult {
@@ -1852,4 +1853,79 @@ export const optimizationApi = {
 
   delete: (runId: string) =>
     apiFetch<void>(`/optimization/${runId}`, { method: "DELETE" }),
+}
+
+// ─── Finetune Examinations ──────────────────────────────────────────────────
+
+export interface FinetuneExaminationResponse {
+  id: string
+  customer_id: string
+  name: string
+  description: string | null
+  simulation_from: string | null
+  simulation_to: string | null
+  delay: number | null
+  outlet_group_id: string | null
+  prediction_strategy_id: string | null
+  base_engine: string | null
+  finetuned_engine: string | null
+  finetuned_model: string | null
+  base_simulation_id: string | null
+  finetuned_simulation_id: string | null
+  status: string
+  error: string | null
+  started_at: string | null
+  completed_at: string | null
+  task_id: string | null
+  base_stats: AccuracyStatsResponse | null
+  finetuned_stats: AccuracyStatsResponse | null
+  base_zero_shot: ZeroShotResponse | null
+  finetuned_zero_shot: ZeroShotResponse | null
+  base_overview: FilteredOverviewResponse | null
+  finetuned_overview: FilteredOverviewResponse | null
+  conclusion: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface FinetuneExaminationListResponse {
+  items: FinetuneExaminationResponse[]
+  total: number
+}
+
+export interface FinetuneExaminationCreate {
+  customer_id: string
+  name: string
+  description?: string | null
+  simulation_from: string
+  simulation_to: string
+  delay?: number
+  outlet_group_id?: string | null
+  prediction_strategy_id?: string | null
+  base_engine?: string
+  finetuned_engine?: string
+  finetuned_model?: string | null
+  worker?: string | null
+}
+
+export const finetuneExaminationsApi = {
+  list: (customerId: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams({ customer_id: customerId })
+    qs.set("limit", String(params?.limit ?? 500))
+    if (params?.offset) qs.set("offset", String(params.offset))
+    return apiFetch<FinetuneExaminationListResponse>(`/finetune-examinations?${qs}`)
+  },
+
+  get: (id: string) =>
+    apiFetch<FinetuneExaminationResponse>(`/finetune-examinations/${id}`),
+
+  create: (data: FinetuneExaminationCreate) =>
+    apiFetch<FinetuneExaminationResponse>("/finetune-examinations", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    apiFetch<void>(`/finetune-examinations/${id}`, { method: "DELETE" }),
 }

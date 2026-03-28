@@ -65,7 +65,7 @@ import {
 import { createPortal } from "react-dom"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { AnimatedSettings } from "@/components/icons/animated-icons"
+import { AnimatedSettings, AnimatedScissors } from "@/components/icons/animated-icons"
 import { SidebarTasks } from "@/components/layout/sidebar-tasks"
 import { ThemeToggle } from "@/components/layout/theme-toggle"
 import { useCustomer } from "@/components/providers/customer-provider"
@@ -426,6 +426,15 @@ export function AppSidebar() {
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
                   </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => router.push("/simulations/finetune-new")}>
+                  <Plus className="h-4 w-4" />
+                  {t("nav.simulationsFinetuneNew" as Parameters<typeof t>[0])}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push("/simulations/finetune-completed")}>
+                  <AnimatedScissors className="h-4 w-4" />
+                  {t("nav.simulationsFinetuneCompleted" as Parameters<typeof t>[0])}
+                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 

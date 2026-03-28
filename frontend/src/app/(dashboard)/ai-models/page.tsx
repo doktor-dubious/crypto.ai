@@ -739,7 +739,7 @@ export default function AIModelsPage() {
               </div>
 
               {/* ─ Details ─ */}
-              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
                 <FieldRow label="ID">
                   <div className="relative">
                     <Input value={selectedModel.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
@@ -784,7 +784,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Parameters ─ */}
-              <TabsContent value="tab2" className="mt-6 pl-[2px] overflow-y-auto">
+              <TabsContent value="tab2" className="mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
               <TooltipProvider>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-medium">{t("tabParameters")}</h3>
@@ -853,7 +853,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Finetune ─ */}
-              <TabsContent value="tab4" className="mt-6 pl-[2px] pb-4 overflow-y-auto">
+              <TabsContent value="tab4" className="mt-6 pl-[2px] pb-4 overflow-auto flex-1 min-h-0">
                 <TooltipProvider>
                   <div className="flex gap-6">
                     {/* Left side: count + start */}
@@ -1127,7 +1127,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Action ─ */}
-              <TabsContent value="tab3" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto">
+              <TabsContent value="tab3" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
                 {/* Danger zone */}
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
                   <div className="space-y-1">
