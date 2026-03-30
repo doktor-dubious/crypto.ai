@@ -29,6 +29,8 @@ class OptimizeSettingsRequest(BaseModel):
     # Optional: simulation parameters
     simulation_days: int = 180  # how many days of history to simulate over
     delay: int = 1
+    # Optional: override the prediction engine used in simulations
+    prediction_engine_id: str | None = None
     # Optional: route to a specific worker queue
     worker: str | None = None
 
@@ -66,6 +68,7 @@ class OptimizationRunResponse(BaseModel):
     optimize_weekday_profile_correction: bool
     simulation_days: int
     delay: int
+    prediction_engine_id: str | None = None
     simulation_from: str | None = None
     simulation_to: str | None = None
     total_combinations: int

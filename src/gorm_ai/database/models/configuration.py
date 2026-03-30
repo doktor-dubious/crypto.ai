@@ -55,6 +55,7 @@ class Configuration(Base):
     eo_extrapolation: Mapped[int] = mapped_column(
         Integer, default=1, nullable=False,
     )  # 1=extrapolate to ~E99, 2=conservative ~E95, 3=cap at E90
+    fallback_engine: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     open_monday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     open_tuesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     open_wednesday: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

@@ -19,9 +19,10 @@ class TimesFMFinetunedEngine(TimesFMEngine):
     fine-tuned checkpoint directory is missing or fails to load.
     """
 
-    def __init__(self, checkpoint_path: str | None = None):
+    def __init__(self, checkpoint_path: str | None = None, allow_fallback: bool = True):
         super().__init__()
         self._checkpoint_path = checkpoint_path
+        self.allow_fallback = allow_fallback
 
     def get_capabilities(self) -> EngineCapabilities:
         caps = super().get_capabilities()
@@ -36,6 +37,10 @@ class TimesFMFinetunedEngine(TimesFMEngine):
         path = self._checkpoint_path or get_settings().finetuned_model_path
 
         if not os.path.isdir(path):
+            if not self.allow_fallback:
+                raise RuntimeError(
+                    f"Fine-tuned checkpoint not found at '{path}' and engine fallback is disabled"
+                )
             logger.warning(
                 "Fine-tuned checkpoint not found at '%s' — falling back to base TimesFM", path
             )
@@ -49,6 +54,10 @@ class TimesFMFinetunedEngine(TimesFMEngine):
             self._compile_for_context(1024)
             logger.info("Fine-tuned TimesFM loaded from '%s'", path)
         except Exception as e:
+            if not self.allow_fallback:
+                raise RuntimeError(
+                    f"Failed to load fine-tuned model from '{path}' and engine fallback is disabled"
+                ) from e
             logger.warning(
                 "Failed to load fine-tuned model from '%s' (%s) — falling back to base TimesFM",
                 path, e,

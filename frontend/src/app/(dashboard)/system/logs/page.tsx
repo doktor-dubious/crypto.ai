@@ -15,6 +15,7 @@ import {
   Globe,
   Container,
   Bot,
+  Scissors,
 } from "lucide-react"
 import { ViewSwitcher } from "@/components/ui/view-switcher"
 import { Input } from "@/components/ui/input"
@@ -24,6 +25,7 @@ import { logsApi, type LogEntry } from "@/lib/api"
 const LOG_SOURCES = [
   { id: "gorm", icon: <FileText className="h-4 w-4" />, labelKey: "gorm" as const },
   { id: "fastapi", icon: <Server className="h-4 w-4" />, labelKey: "fastapi" as const },
+  { id: "finetuning", icon: <Scissors className="h-4 w-4" />, labelKey: "finetuning" as const },
   { id: "celery-worker", icon: <Cpu className="h-4 w-4" />, labelKey: "celeryWorker" as const },
   { id: "redis", icon: <Database className="h-4 w-4" />, labelKey: "redis" as const },
   { id: "database", icon: <Container className="h-4 w-4" />, labelKey: "database" as const },

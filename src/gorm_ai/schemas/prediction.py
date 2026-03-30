@@ -281,6 +281,8 @@ class PredictionEngineResponse(BaseModel):
     finetuned_model_path: str | None = None
     finetune_sync_every: int | None = None
     finetune_sync_target: str | None = None
+    finetune_sane_epochs: int | None = None
+    finetune_max_mae: float | None = None
 
 
 class PredictionEngineCreate(BaseModel):
@@ -301,6 +303,8 @@ class PredictionEngineUpdate(BaseModel):
     finetuned_model_path: str | None = None
     finetune_sync_every: int | None = None
     finetune_sync_target: str | None = None
+    finetune_sane_epochs: int | None = None
+    finetune_max_mae: float | None = None
 
 
 class PredictionStrategyResponse(BaseModel):

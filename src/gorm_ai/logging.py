@@ -21,6 +21,7 @@ def configure_logging(
     log_level: str = "INFO",
     json_filename: str = "gorm_ai.json",
     text_filename: str = "gorm_ai.log",
+    finetune_filename: str = "finetune.log",
 ) -> None:
     """Set up structlog with console (pretty) + file (JSON) + file (text) output."""
     os.makedirs(log_dir, exist_ok=True)
@@ -80,6 +81,63 @@ def configure_logging(
         encoding="utf-8",
     )
     text_handler.setFormatter(text_formatter)
+
+    # --- Finetuning-only file handler ---
+    # Inject worker name so remote workers are identifiable in the log.
+    worker_name = os.environ.get("WORKER_NAME", "local")
+
+    def _inject_worker_tag(
+        logger: logging.Logger,
+        method_name: str,
+        event_dict: dict,
+    ) -> dict:
+        # Prefix the logger name with the worker tag so the
+        # ConsoleRenderer produces:
+        #   [info     ][RunPod] Training on outlet ...
+        level = event_dict.get("level", "info")
+        event = event_dict.get("event", "")
+        ts = event_dict.get("timestamp", "")
+        line = f"{ts} [{level:<9s}][{worker_name}] {event}"
+        return {"_final": line}
+
+    class _RawRenderer:
+        """Pass the pre-formatted line through unchanged."""
+
+        def __call__(
+            self,
+            logger: logging.Logger,
+            method_name: str,
+            event_dict: dict,
+        ) -> str:
+            return event_dict.get("_final", "")
+
+    finetune_formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _inject_worker_tag,
+            _RawRenderer(),
+        ],
+        foreign_pre_chain=shared_processors,
+    )
+    finetune_path = os.path.join(log_dir, finetune_filename)
+    finetune_handler = logging.handlers.RotatingFileHandler(
+        finetune_path,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    finetune_handler.setFormatter(finetune_formatter)
+
+    # Only capture finetuning-related loggers
+    for ft_logger_name in (
+        "gorm_ai.services._finetune_timesfm",
+        "gorm_ai.services._finetune_moirai2",
+        "gorm_ai.services.finetune",
+        "gorm_ai.tasks.finetuning",
+        "gorm_ai.tasks.finetune_examination",
+    ):
+        ft_logger = logging.getLogger(ft_logger_name)
+        ft_logger.addHandler(finetune_handler)
 
     # Attach all handlers to the root logger
     root = logging.getLogger()

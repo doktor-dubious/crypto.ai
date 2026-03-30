@@ -244,6 +244,8 @@ class YingLongEngine(PredictionEngine):
             self._load_model()
 
         if self._model is None:
+            if not self.allow_fallback:
+                raise RuntimeError("YingLong model failed to load and engine fallback is disabled")
             from gorm_ai.prediction.engines.statistical import StatisticalEngine
 
             fallback = StatisticalEngine()

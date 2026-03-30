@@ -46,6 +46,8 @@ class TotoEngine(AutoGluonEngine):
     async def predict_batch(self, items, horizon, prediction_from, batch_size=64,
                             holding_rate=0.25, protection_days=7):
         if not self._check_autogluon() or not _check_cuda():
+            if not self.allow_fallback:
+                raise RuntimeError("Toto dependencies unavailable and engine fallback is disabled")
             from gorm_ai.prediction.engines.statistical import StatisticalEngine
             return await StatisticalEngine().predict_batch(
                 items, horizon, prediction_from, batch_size

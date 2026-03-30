@@ -51,6 +51,8 @@ async def _run_finetune_async(
                 await ts.update_resource_metrics(task_id, peak_mem, cpu_time)
             await session.commit()
 
+    fine_tune_id = request_data.get("fine_tune_id")
+
     try:
         from gorm_ai.services.finetune import FinetuneService
         from gorm_ai.tasks.celery_app import clear_stop_flag, is_stop_requested
@@ -74,6 +76,15 @@ async def _run_finetune_async(
                     completed_at=datetime.now(UTC),
                     error="Gracefully stopped",
                 )
+                if fine_tune_id:
+                    from gorm_ai.services.fine_tune import FineTuneTrackingService
+                    ft_svc = FineTuneTrackingService(session)
+                    await ft_svc.update_counts(
+                        fine_tune_id,
+                        finetuned_outlets=result.get("finetuned_count", 0),
+                        pathological_outlets=result.get("pathological_count", 0),
+                    )
+                    await ft_svc.complete(fine_tune_id, "stopped")
                 await session.commit()
             return result
 
@@ -81,6 +92,15 @@ async def _run_finetune_async(
             await TaskService(session).update_status(
                 task_id, "success", completed_at=datetime.now(UTC)
             )
+            if fine_tune_id:
+                from gorm_ai.services.fine_tune import FineTuneTrackingService
+                ft_svc = FineTuneTrackingService(session)
+                await ft_svc.update_counts(
+                    fine_tune_id,
+                    finetuned_outlets=result.get("finetuned_count", 0),
+                    pathological_outlets=result.get("pathological_count", 0),
+                )
+                await ft_svc.complete(fine_tune_id, "completed")
             await session.commit()
 
         return result
@@ -90,5 +110,9 @@ async def _run_finetune_async(
             await TaskService(session).update_status(
                 task_id, "failure", completed_at=datetime.now(UTC), error=str(e)
             )
+            if fine_tune_id:
+                from gorm_ai.services.fine_tune import FineTuneTrackingService
+                ft_svc = FineTuneTrackingService(session)
+                await ft_svc.complete(fine_tune_id, "error")
             await session.commit()
         raise

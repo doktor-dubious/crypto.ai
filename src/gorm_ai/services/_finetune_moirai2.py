@@ -177,6 +177,7 @@ async def run_finetune(
     batch_size: int,
     output_dir: str,
     on_progress: Callable[[int, str | None], Awaitable[None]] | None = None,
+    on_outlet_done: Callable[[str, bool], Awaitable[None]] | None = None,
     sync_target: str | None = None,
     sync_every: int = 5,
     early_stopping_patience: int = 0,
@@ -222,6 +223,9 @@ async def run_finetune(
             processed += 1
             if sync_target and processed % sync_every == 0:
                 _sync_checkpoint(output_dir, sync_target)
+
+        if on_outlet_done:
+            await on_outlet_done(outlet_id, trained)
 
         pct = 5 + int(94 * (processed / max(total, 1)))
         if on_progress:

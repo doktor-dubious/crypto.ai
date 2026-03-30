@@ -67,6 +67,7 @@ class CustomerConfiguration(Base):
     eo_extrapolation: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )  # 1=extrapolate to ~E99, 2=conservative ~E95, 3=cap at E90; None = inherit
+    fallback_engine: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     open_monday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     open_tuesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     open_wednesday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

@@ -53,8 +53,8 @@ def _get_trainable_module(model):
 # a few epochs even when epoch 1 starts high (e.g. 200+).  Outlets
 # that can't get below this threshold have data issues that would
 # corrupt the shared model weights.
-_SANE_CHECK_EPOCHS = 5
-_MAX_SANE_LOSS = 10.0
+_DEFAULT_SANE_CHECK_EPOCHS = 5
+_DEFAULT_MAX_SANE_LOSS = 10.0
 
 
 def _train_outlet(
@@ -66,7 +66,12 @@ def _train_outlet(
     lr,
     batch_size,
     patience: int = 0,
+    sane_check_epochs: int | None = None,
+    max_sane_loss: float | None = None,
 ):
+    sane_epochs = sane_check_epochs if sane_check_epochs is not None else _DEFAULT_SANE_CHECK_EPOCHS
+    max_loss = max_sane_loss if max_sane_loss is not None else _DEFAULT_MAX_SANE_LOSS
+
     nn_module = _get_trainable_module(model)
     device = next(nn_module.parameters()).device
     p = nn_module.p
@@ -123,13 +128,13 @@ def _train_outlet(
         # the first N epochs hasn't dropped below the threshold, the
         # data is unsuitable.  Restore the weight snapshot so the
         # shared model isn't corrupted.
-        if epoch == _SANE_CHECK_EPOCHS and best_loss > _MAX_SANE_LOSS:
+        if epoch == sane_epochs and best_loss > max_loss:
             logger.warning(
                 "  Best MSE after %d epochs is %.2f (threshold "
                 "%.1f) — skipping outlet (restoring weights)",
-                _SANE_CHECK_EPOCHS,
+                sane_epochs,
                 best_loss,
-                _MAX_SANE_LOSS,
+                max_loss,
             )
             nn_module.load_state_dict(snapshot)
             nn_module.eval()
@@ -209,12 +214,18 @@ async def run_finetune(
     batch_size: int,
     output_dir: str,
     on_progress: Callable[[int, str | None], Awaitable[None]] | None = None,
+    on_outlet_done: Callable[[str, bool], Awaitable[None]] | None = None,
     sync_target: str | None = None,
     sync_every: int = 5,
     early_stopping_patience: int = 0,
     should_stop: Callable[[], bool] | None = None,
-) -> bool:
-    """Fine-tune TimesFM on the provided outlet series."""
+    sane_check_epochs: int | None = None,
+    max_sane_loss: float | None = None,
+) -> dict:
+    """Fine-tune TimesFM on the provided outlet series.
+
+    Returns a dict with keys: stopped (bool), finetuned (int), pathological (int).
+    """
     import timesfm
 
     # Use local checkpoint only if it contains actual model files
@@ -233,6 +244,7 @@ async def run_finetune(
 
     total = len(outlet_series)
     processed = 0
+    pathological = 0
     idx = 0
 
     for outlet_id, values in outlet_series.items():
@@ -244,7 +256,7 @@ async def run_finetune(
             if sync_target and processed > 0:
                 logger.info("  Final sync before stop...")
                 _sync_checkpoint(output_dir, sync_target)
-            return True
+            return {"stopped": True, "finetuned": processed, "pathological": pathological}
 
         series = np.array(values, dtype=np.float32)
         if len(series) < context_length + horizon:
@@ -266,10 +278,12 @@ async def run_finetune(
         loop = asyncio.get_event_loop()
         trained = await loop.run_in_executor(
             None,
-            _train_outlet,
-            model, series, context_length, horizon,
-            epochs, learning_rate, batch_size,
-            early_stopping_patience,
+            lambda: _train_outlet(
+                model, series, context_length, horizon,
+                epochs, learning_rate, batch_size,
+                early_stopping_patience,
+                sane_check_epochs, max_sane_loss,
+            ),
         )
         if trained:
             await loop.run_in_executor(
@@ -282,6 +296,11 @@ async def run_finetune(
                     processed,
                 )
                 _sync_checkpoint(output_dir, sync_target)
+        else:
+            pathological += 1
+
+        if on_outlet_done:
+            await on_outlet_done(outlet_id, trained)
 
         pct = 5 + int(94 * (idx / max(total, 1)))
         if on_progress:
@@ -291,4 +310,4 @@ async def run_finetune(
         logger.info("  Final sync after completion...")
         _sync_checkpoint(output_dir, sync_target)
     logger.info("TimesFM fine-tuning done: %d/%d outlets trained", processed, total)
-    return False
+    return {"stopped": False, "finetuned": processed, "pathological": pathological}

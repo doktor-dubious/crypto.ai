@@ -269,6 +269,22 @@ export default function FinetuneNewPage() {
     return engines.find((e) => e.id === selectedFtStrategy.prediction_engine_id)?.slug ?? null
   }, [selectedFtStrategy, engines])
 
+  // Filter base strategies: only those without a finetuned_model
+  const baseStrategies = useMemo(() => {
+    return strategies.filter((s) => !s.finetuned_model)
+  }, [strategies])
+
+  // Filter finetuned strategies: must have finetuned_model and same engine as base strategy
+  const ftStrategies = useMemo(() => {
+    return strategies.filter((s) => {
+      if (!s.finetuned_model) return false
+      if (selectedBaseStrategy?.prediction_engine_id) {
+        return s.prediction_engine_id === selectedBaseStrategy.prediction_engine_id
+      }
+      return true
+    })
+  }, [strategies, selectedBaseStrategy])
+
   // Filter workers by finetuned engine slug
   const workers = useMemo(() => {
     return allWorkers.filter((w) => {
@@ -277,6 +293,16 @@ export default function FinetuneNewPage() {
       return w.models.includes(ftEngineSlug)
     })
   }, [allWorkers, ftEngineSlug])
+
+  // Clear base strategy if it was filtered out
+  useEffect(() => {
+    if (baseStrategyId && !baseStrategies.some((s) => s.id === baseStrategyId)) setBaseStrategyId(null)
+  }, [baseStrategyId, baseStrategies])
+
+  // Clear finetuned strategy if it was filtered out
+  useEffect(() => {
+    if (ftStrategyId && !ftStrategies.some((s) => s.id === ftStrategyId)) setFtStrategyId(null)
+  }, [ftStrategyId, ftStrategies])
 
   // Clear worker selection if it was filtered out
   useEffect(() => {
@@ -371,7 +397,7 @@ export default function FinetuneNewPage() {
                 <span className="text-[var(--muted-foreground)]">{t("createFieldStrategyNone")}</span>
                 {baseStrategyId === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
               </DropdownMenuItem>
-              {strategies.map((s) => (
+              {baseStrategies.map((s) => (
                 <DropdownMenuItem
                   key={s.id}
                   onClick={() => setBaseStrategyId(s.id)}
@@ -405,7 +431,7 @@ export default function FinetuneNewPage() {
                 <span className="text-[var(--muted-foreground)]">{t("createFieldStrategyNone")}</span>
                 {ftStrategyId === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
               </DropdownMenuItem>
-              {strategies.map((s) => (
+              {ftStrategies.map((s) => (
                 <DropdownMenuItem
                   key={s.id}
                   onClick={() => setFtStrategyId(s.id)}

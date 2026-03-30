@@ -7,6 +7,7 @@ from gorm_ai.api.routes import (
     currencies,
     customers,
     financial_dates,
+    fine_tunes,
     finetune_examinations,
     import_templates,
     logs,
@@ -30,6 +31,7 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
+api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-tunes"])
 api_router.include_router(
     finetune_examinations.router, prefix="/finetune-examinations", tags=["finetune-examinations"]
 )

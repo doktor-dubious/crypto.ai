@@ -352,15 +352,17 @@ class TimesFMEngine(PredictionEngine):
 
             backcast = point_forecast[i, :n_backcast]
             align_len = min(len(values), n_backcast)
-            residuals = values[-align_len:] - backcast[-align_len:]
-            hist_X_aligned = hist_X[-align_len:]
 
             feature_names = sorted(item.get("feature_names", []))
             ridge = Ridge(alpha=1.0, fit_intercept=True)
 
-            if not feature_names:
+            if align_len == 0 or not feature_names:
+                # No backcast available (context ≤ 1 patch) or no covariates
+                # — skip Ridge adjustment entirely.
                 adj = np.zeros(horizon)
             else:
+                residuals = values[-align_len:] - backcast[-align_len:]
+                hist_X_aligned = hist_X[-align_len:]
                 # Drop rows where residuals or features contain NaN
                 valid = ~np.isnan(residuals)
                 if hist_X_aligned.ndim == 2:
@@ -636,6 +638,8 @@ class TimesFMEngine(PredictionEngine):
             self._compile_for_context(1024)
             logger.info("TimesFM 2.5 model loaded successfully")
         except Exception as e:
+            if not self.allow_fallback:
+                raise RuntimeError(f"TimesFM model failed to load and engine fallback is disabled") from e
             logger.warning(f"Failed to load TimesFM model, falling back to stub: {e}")
             self._model = None
         finally:

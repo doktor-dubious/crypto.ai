@@ -4,10 +4,9 @@ import { useState, useMemo, useEffect, useRef, type ReactNode } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import { format } from "date-fns"
-import type { DateRange } from "react-day-picker"
 import {
   Plus, Search, Star, Trash2, Focus, ArrowUpDown,
-  ChevronDown, ChevronUp, Info, CalendarIcon, Check,
+  ChevronDown, ChevronUp, Info, Check,
 } from "lucide-react"
 import { Maximize } from "@/components/animate-ui/icons/maximize"
 import { Minimize } from "@/components/animate-ui/icons/minimize"
@@ -35,17 +34,10 @@ import {
   Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
-import { Separator } from "@/components/ui/separator"
 import {
-  Command, CommandInput, CommandList, CommandGroup, CommandItem, CommandEmpty,
-} from "@/components/ui/command"
-import {
-  predictionEnginesApi, customersApi, outletGroupsApi, finetuneApi, tasksApi,
+  predictionEnginesApi, finetuneApi,
   type PredictionEngineResponse, type PredictionEngineUpdate,
   type PredictionEngineParameterResponse,
-  type CustomerResponse, type OutletGroupResponse,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -137,24 +129,18 @@ export default function AIModelsPage() {
   const [deleteParamDialogOpen, setDeleteParamDialogOpen] = useState(false)
   const [pendingDeleteParam, setPendingDeleteParam] = useState<PredictionEngineParameterResponse | null>(null)
 
-  // ── Finetune state (persisted)
-  const [ftCustomerId, setFtCustomerId] = useState<string | null>(() => loadJson<string | null>("ftCustomerId", null))
-  const [ftGroupId, setFtGroupId] = useState<string | null>(() => loadJson<string | null>("ftGroupId", null))
-  const [ftDateRange, setFtDateRange] = useState<DateRange | undefined>(() => {
-    const raw = loadJson<{ from?: string; to?: string } | null>("ftDateRange", null)
-    if (!raw) return undefined
-    return { from: raw.from ? new Date(raw.from) : undefined, to: raw.to ? new Date(raw.to) : undefined }
-  })
-  const [ftDatePickerOpen, setFtDatePickerOpen] = useState(false)
-  const [ftCustomerOpen, setFtCustomerOpen] = useState(false)
-  const [ftGroupOpen, setFtGroupOpen] = useState(false)
+  // ── Reset finetune dialog
+  const [resetDialogOpen, setResetDialogOpen] = useState(false)
+  const [resetUnderstood, setResetUnderstood] = useState(false)
+  const [resetConfirmText, setResetConfirmText] = useState("")
+
+  // ── Finetune hyperparameter state (persisted)
   const [ftContextLength, setFtContextLength] = useState(() => loadJson<number>("ftContextLength", 512))
   const [ftHorizon, setFtHorizon] = useState(() => loadJson<number>("ftHorizon", 64))
   const [ftEpochs, setFtEpochs] = useState(() => loadJson<number>("ftEpochs", 50))
   const [ftEarlyStoppingPatience, setFtEarlyStoppingPatience] = useState(() => loadJson<number>("ftEarlyStoppingPatience", 0))
   const [ftLearningRate, setFtLearningRate] = useState(() => loadJson<number>("ftLearningRate", 0.001))
   const [ftBatchSize, setFtBatchSize] = useState(() => loadJson<number>("ftBatchSize", 32))
-  const [ftWorker, setFtWorker] = useState<string | null>(() => loadJson<string | null>("ftWorker", null))
 
   // ── New parameter dialog
   const [newParamDialogOpen, setNewParamDialogOpen] = useState(false)
@@ -179,58 +165,11 @@ export default function AIModelsPage() {
 
   // ── Finetune data ───────────────────────────────────────────────────────────
 
-  const { data: ftCustomers = [] } = useQuery({
-    queryKey: ["customers"],
-    queryFn: () => customersApi.list({ limit: 100 }),
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const { data: ftGroups = [] } = useQuery({
-    queryKey: ["outlet-groups", ftCustomerId],
-    queryFn: () => outletGroupsApi.list(ftCustomerId!),
-    enabled: !!ftCustomerId,
-  })
-
-  const { data: ftWorkers = [] } = useQuery({
-    queryKey: ["workers"],
-    queryFn: () => tasksApi.listWorkers(),
-    staleTime: 30_000,
-  })
-
   const { data: ftCount } = useQuery({
     queryKey: ["finetune-count", selectedModel?.id],
     queryFn: () => finetuneApi.count(selectedModel!.id),
     enabled: !!selectedModel,
   })
-
-  const finetuneMutation = useMutation({
-    mutationFn: (data: Parameters<typeof finetuneApi.start>[0]) => finetuneApi.start(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] })
-      queryClient.invalidateQueries({ queryKey: ["finetune-count", selectedModel?.id] })
-      toast.success(t("toastFinetuneQueued"))
-    },
-    onError: () => { toast.error(t("toastFinetuneError")) },
-  })
-
-  function handleStartFinetune() {
-    if (!selectedModel) return
-    if (!ftCustomerId) { toast.error(t("finetuneErrorNoCustomer")); return }
-    finetuneMutation.mutate({
-      prediction_engine_id: selectedModel.id,
-      customer_id: ftCustomerId,
-      outlet_group_id: ftGroupId,
-      start_date: ftDateRange?.from ? format(ftDateRange.from, "yyyy-MM-dd") : undefined,
-      end_date: ftDateRange?.to ? format(ftDateRange.to, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
-      context_length: ftContextLength,
-      horizon: ftHorizon,
-      epochs: ftEpochs,
-      early_stopping_patience: ftEarlyStoppingPatience,
-      learning_rate: ftLearningRate,
-      batch_size: ftBatchSize,
-      worker: ftWorker,
-    })
-  }
 
   // ── Persist state to localStorage ──────────────────────────────────────────
 
@@ -239,18 +178,12 @@ export default function AIModelsPage() {
   useEffect(() => { saveJson("activeTab", activeTab) }, [activeTab])
   useEffect(() => { saveJson("maximized", detailMaximized) }, [detailMaximized])
   useEffect(() => { saveJson("selectedModel", selectedModel?.id ?? null) }, [selectedModel?.id])
-  useEffect(() => { saveJson("ftCustomerId", ftCustomerId) }, [ftCustomerId])
-  useEffect(() => { saveJson("ftGroupId", ftGroupId) }, [ftGroupId])
-  useEffect(() => {
-    saveJson("ftDateRange", ftDateRange ? { from: ftDateRange.from?.toISOString(), to: ftDateRange.to?.toISOString() } : null)
-  }, [ftDateRange])
   useEffect(() => { saveJson("ftContextLength", ftContextLength) }, [ftContextLength])
   useEffect(() => { saveJson("ftHorizon", ftHorizon) }, [ftHorizon])
   useEffect(() => { saveJson("ftEpochs", ftEpochs) }, [ftEpochs])
   useEffect(() => { saveJson("ftEarlyStoppingPatience", ftEarlyStoppingPatience) }, [ftEarlyStoppingPatience])
   useEffect(() => { saveJson("ftLearningRate", ftLearningRate) }, [ftLearningRate])
   useEffect(() => { saveJson("ftBatchSize", ftBatchSize) }, [ftBatchSize])
-  useEffect(() => { saveJson("ftWorker", ftWorker) }, [ftWorker])
 
   // ── Restore selected model from persisted ID when list loads ──────────────
 
@@ -335,6 +268,19 @@ export default function AIModelsPage() {
       toast.success(t("toastParameterDeleted"))
     },
     onError: () => { toast.error(t("toastParameterDeleteError")) },
+  })
+
+  const resetFinetuneMutation = useMutation({
+    mutationFn: (engineId: string) => predictionEnginesApi.resetFinetune(engineId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["finetune-count", selectedModel?.id] })
+      queryClient.invalidateQueries({ queryKey: ["fine-tunes"] })
+      setResetDialogOpen(false)
+      setResetUnderstood(false)
+      setResetConfirmText("")
+      toast.success(t("toastFinetuneReset"))
+    },
+    onError: () => { toast.error(t("toastFinetuneResetError")) },
   })
 
   // ── Sync draft when selected model changes ────────────────────────────────
@@ -715,9 +661,9 @@ export default function AIModelsPage() {
               defaultValue="details"
               value={activeTab}
               onValueChange={setActiveTab}
-              className="flex-1 flex flex-col gap-0"
+              className="flex-1 flex flex-col gap-0 min-h-0 overflow-y-auto"
             >
-              <div className="relative w-full">
+              <div className="relative w-full shrink-0">
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabParameters")}</TabsTrigger>
@@ -739,7 +685,7 @@ export default function AIModelsPage() {
               </div>
 
               {/* ─ Details ─ */}
-              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
+              <TabsContent value="tab1" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
                 <FieldRow label="ID">
                   <div className="relative">
                     <Input value={selectedModel.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
@@ -784,7 +730,7 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Parameters ─ */}
-              <TabsContent value="tab2" className="mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
+              <TabsContent value="tab2" className="mt-6 pl-[2px]">
               <TooltipProvider>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-medium">{t("tabParameters")}</h3>
@@ -853,173 +799,32 @@ export default function AIModelsPage() {
               </TabsContent>
 
               {/* ─ Finetune ─ */}
-              <TabsContent value="tab4" className="mt-6 pl-[2px] pb-4 overflow-auto flex-1 min-h-0">
+              <TabsContent value="tab4" className="mt-6 pl-[2px] pb-4">
                 <TooltipProvider>
-                  <div className="flex gap-6">
-                    {/* Left side: count + start */}
-                    <div className="flex flex-col items-center gap-4 min-w-[180px] pt-2">
-                      <div className="text-center">
-                        <p className="text-3xl font-bold tabular-nums">{ftCount?.outlet_count ?? 0}</p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {(ftCount?.outlet_count ?? 0) === 0
-                            ? t("finetuneCountZero")
-                            : t("finetuneCount", { accounts: ftCount?.customer_count ?? 0, outlets: ftCount?.outlet_count ?? 0 })}
-                        </p>
-                      </div>
-                      <Separator className="w-full" />
-                      {ftWorkers.length > 0 && (
-                        <div className="flex flex-col gap-1.5 w-full">
-                          <label className="text-xs font-medium text-muted-foreground">{t("finetuneWorker")}</label>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button className="flex items-center justify-between h-8 w-full px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-xs hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                                <span className={cn(!ftWorker && "text-muted-foreground")}>
-                                  {ftWorker ?? t("finetuneWorkerAny")}
-                                </span>
-                                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start" className="w-[180px]">
-                              <DropdownMenuItem
-                                onClick={() => setFtWorker(null)}
-                                className="flex items-center justify-between"
-                              >
-                                <span className="text-muted-foreground">{t("finetuneWorkerAny")}</span>
-                                {ftWorker === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                              </DropdownMenuItem>
-                              {ftWorkers.map((w) => (
-                                <DropdownMenuItem
-                                  key={w.name}
-                                  onClick={() => setFtWorker(w.name)}
-                                  className="flex items-center justify-between"
-                                >
-                                  <span>{w.name}</span>
-                                  {ftWorker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                                </DropdownMenuItem>
-                              ))}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      )}
-                      <Button
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={handleStartFinetune}
-                        disabled={finetuneMutation.isPending}
-                      >
-                        {finetuneMutation.isPending ? t("finetuneStarting") : t("finetuneStart")}
-                      </Button>
-                    </div>
-
-                    {/* Vertical divider */}
-                    <Separator orientation="vertical" className="h-auto min-h-[200px]" />
-
-                    {/* Right side */}
-                    <div className="grid grid-cols-3 gap-8 flex-1 min-w-0">
-                      {/* Column 1: Filters */}
+                    <div className="grid grid-cols-4 gap-8 max-w-5xl">
+                      {/* Column 0: Progress */}
                       <div className="flex flex-col gap-4">
-                        <h3 className="text-sm font-medium">{t("finetuneSelectOutlets")}</h3>
-                        {/* Customer combobox */}
-                        <FieldRow label={t("finetuneCustomer")}>
-                          <Popover open={ftCustomerOpen} onOpenChange={setFtCustomerOpen}>
-                            <PopoverTrigger asChild>
-                              <Button variant="outline" size="sm" className="w-full justify-start text-xs font-normal h-9">
-                                {ftCustomerId ? ftCustomers.find((c) => c.id === ftCustomerId)?.name ?? "—" : <span className="text-muted-foreground">{t("finetuneCustomerPlaceholder")}</span>}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-0" align="start">
-                              <Command>
-                                <CommandInput placeholder={t("finetuneCustomerPlaceholder")} className="text-xs" />
-                                <CommandList>
-                                  <CommandEmpty>No customers found.</CommandEmpty>
-                                  <CommandGroup>
-                                    {ftCustomers.map((c) => (
-                                      <CommandItem
-                                        key={c.id}
-                                        value={c.name}
-                                        onSelect={() => { setFtCustomerId(c.id); setFtGroupId(null); setFtCustomerOpen(false) }}
-                                        className="text-xs"
-                                      >
-                                        {c.name}
-                                      </CommandItem>
-                                    ))}
-                                  </CommandGroup>
-                                </CommandList>
-                              </Command>
-                            </PopoverContent>
-                          </Popover>
-                        </FieldRow>
-
-                        {/* Outlet Group combobox */}
-                        <FieldRow label={t("finetuneOutletGroup")}>
-                          <Popover open={ftGroupOpen} onOpenChange={setFtGroupOpen}>
-                            <PopoverTrigger asChild>
-                              <Button variant="outline" size="sm" className="w-full justify-start text-xs font-normal h-9" disabled={!ftCustomerId}>
-                                {ftGroupId ? ftGroups.find((g) => g.id === ftGroupId)?.name ?? "—" : <span className="text-muted-foreground">{t("finetuneOutletGroupPlaceholder")}</span>}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-0" align="start">
-                              <Command>
-                                <CommandInput placeholder={t("finetuneOutletGroupPlaceholder")} className="text-xs" />
-                                <CommandList>
-                                  <CommandEmpty>No groups found.</CommandEmpty>
-                                  <CommandGroup>
-                                    <CommandItem
-                                      value="__all__"
-                                      onSelect={() => { setFtGroupId(null); setFtGroupOpen(false) }}
-                                      className="text-xs"
-                                    >
-                                      {t("finetuneOutletGroupPlaceholder")}
-                                    </CommandItem>
-                                    {ftGroups.map((g) => (
-                                      <CommandItem
-                                        key={g.id}
-                                        value={g.name}
-                                        onSelect={() => { setFtGroupId(g.id); setFtGroupOpen(false) }}
-                                        className="text-xs"
-                                      >
-                                        {g.name} ({g.outlet_count})
-                                      </CommandItem>
-                                    ))}
-                                  </CommandGroup>
-                                </CommandList>
-                              </Command>
-                            </PopoverContent>
-                          </Popover>
-                        </FieldRow>
-
-                        {/* Date range picker */}
-                        <FieldRow label={t("finetuneDateRange")}>
-                          <Popover open={ftDatePickerOpen} onOpenChange={setFtDatePickerOpen}>
-                            <PopoverTrigger asChild>
-                              <Button variant="outline" size="sm" className="w-full justify-start text-xs font-normal h-9 gap-2">
-                                <CalendarIcon className="h-3.5 w-3.5" />
-                                {ftDateRange?.from ? (
-                                  ftDateRange.to
-                                    ? `${format(ftDateRange.from, "MMM d, yyyy")} – ${format(ftDateRange.to, "MMM d, yyyy")}`
-                                    : format(ftDateRange.from, "MMM d, yyyy")
-                                ) : (
-                                  <span className="text-muted-foreground">{t("finetuneDateRangePlaceholder")}</span>
-                                )}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start">
-                              <Calendar
-                                mode="range"
-                                selected={ftDateRange}
-                                onSelect={setFtDateRange}
-                                numberOfMonths={2}
-                                captionLayout="dropdown"
-                                defaultMonth={ftDateRange?.from}
-                                startMonth={new Date(2020, 0)}
-                                endMonth={new Date(new Date().getFullYear() + 1, 11)}
-                              />
-                            </PopoverContent>
-                          </Popover>
-                        </FieldRow>
+                        <h3 className="text-sm font-medium">{t("finetuneProgress")}</h3>
+                        <div className="flex flex-col items-center gap-2">
+                          <p className="text-3xl font-bold tabular-nums">{ftCount?.outlet_count ?? 0}</p>
+                          <p className="text-xs text-muted-foreground text-center">
+                            {(ftCount?.outlet_count ?? 0) === 0
+                              ? t("finetuneCountZero")
+                              : t("finetuneCount", { accounts: ftCount?.customer_count ?? 0, outlets: ftCount?.outlet_count ?? 0 })}
+                          </p>
+                        </div>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="w-full cursor-pointer"
+                          disabled={(ftCount?.outlet_count ?? 0) === 0}
+                          onClick={() => setResetDialogOpen(true)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                          {t("finetuneResetButton")}
+                        </Button>
                       </div>
-
-                      {/* Column 2: Hyperparameters */}
+                      {/* Column 1: Hyperparameters */}
                       <div className="flex flex-col gap-4">
                         <h3 className="text-sm font-medium">{t("finetuneParameters")}</h3>
                         {([
@@ -1121,13 +926,68 @@ export default function AIModelsPage() {
                           />
                         </div>
                       </div>
+
+                      {/* Column 3: Rules */}
+                      <div className="flex flex-col gap-4">
+                        <h3 className="text-sm font-medium">{t("finetuneRules")}</h3>
+                        <p className="text-xs text-muted-foreground">{t("finetunePathologicalDetection")}</p>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneSaneEpochs")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneSaneEpochsInfo")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={draft.finetune_sane_epochs ?? ""}
+                            placeholder="5"
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setDraft((d) => ({ ...d, finetune_sane_epochs: v === "" ? null : Math.max(1, parseInt(v, 10) || 5) }))
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneMaxMae")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneMaxMaeInfo")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.1"
+                            value={draft.finetune_max_mae ?? ""}
+                            placeholder="10"
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setDraft((d) => ({ ...d, finetune_max_mae: v === "" ? null : Math.max(0, parseFloat(v) || 10) }))
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
                 </TooltipProvider>
               </TabsContent>
 
               {/* ─ Action ─ */}
-              <TabsContent value="tab3" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-y-auto flex-1 min-h-0">
+              <TabsContent value="tab3" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
                 {/* Danger zone */}
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
                   <div className="space-y-1">
@@ -1338,6 +1198,48 @@ export default function AIModelsPage() {
               disabled={deleteParamMutation.isPending}
             >
               {t("deleteParamConfirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Reset Finetune Dialog ── */}
+      <Dialog open={resetDialogOpen} onOpenChange={(open) => { setResetDialogOpen(open); if (!open) { setResetUnderstood(false); setResetConfirmText("") } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive">{t("finetuneResetTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("finetuneResetDescription", { name: selectedModel?.name ?? "" })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <label className="flex items-start gap-3 rounded-md border border-destructive/30 p-3 cursor-pointer">
+              <Checkbox
+                checked={resetUnderstood}
+                onCheckedChange={(v) => setResetUnderstood(!!v)}
+                className="mt-0.5 shrink-0"
+              />
+              <span className="text-sm">{t("finetuneResetUnderstand")}</span>
+            </label>
+            <FieldRow label={t("finetuneResetTypeToConfirm")}>
+              <Input
+                value={resetConfirmText}
+                onChange={(e) => setResetConfirmText(e.target.value)}
+                placeholder={t("deleteTypePlaceholder")}
+              />
+            </FieldRow>
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setResetDialogOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => { if (selectedModel) resetFinetuneMutation.mutate(selectedModel.id) }}
+              disabled={!resetUnderstood || resetConfirmText !== t("deleteTypePlaceholder") || resetFinetuneMutation.isPending}
+            >
+              {t("finetuneResetConfirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

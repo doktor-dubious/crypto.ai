@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -8,12 +9,15 @@ import { useCustomer } from "@/components/providers/customer-provider"
 import {
   Info, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, RotateCcw, Globe, Focus,
 } from "lucide-react"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -144,8 +148,8 @@ function generateConclusion(run: OptimizationRunResponse, results: OptimizationC
   const bestDesc = describeCombination(run.best_combination, run)
   const bestScore = run.best_score?.toFixed(2) ?? "N/A"
   const worst = results[results.length - 1]
-  const diff = run.best_score != null ? (run.best_score - worst.score) : 0
-  const pct = worst.score !== 0 ? Math.abs(diff / worst.score * 100).toFixed(1) : "N/A"
+  const diff = run.best_score != null && worst.score != null ? (run.best_score - worst.score) : 0
+  const pct = worst.score != null && worst.score !== 0 ? Math.abs(diff / worst.score * 100).toFixed(1) : "N/A"
 
   const parts: string[] = [
     `The optimal configuration is ${bestDesc} with a profit score of ${bestScore}.`,
@@ -155,7 +159,7 @@ function generateConclusion(run: OptimizationRunResponse, results: OptimizationC
   if (run.optimize_variation_adjustment && results.length >= 2) {
     const vaOn = results.find((r) => r.combination.variation_adjustment === true)
     const vaOff = results.find((r) => r.combination.variation_adjustment === false)
-    if (vaOn && vaOff) {
+    if (vaOn && vaOff && vaOn.score != null && vaOff.score != null) {
       parts.push(
         vaOn.score >= vaOff.score
           ? "Variation Adjustment improves results."
@@ -167,7 +171,7 @@ function generateConclusion(run: OptimizationRunResponse, results: OptimizationC
   if (run.optimize_eo_methodology && results.length >= 2) {
     const interp = results.find((r) => Number(r.combination.eo_methodology) === 1)
     const snap = results.find((r) => Number(r.combination.eo_methodology) === 2)
-    if (interp && snap) {
+    if (interp && snap && interp.score != null && snap.score != null) {
       parts.push(
         interp.score >= snap.score
           ? "Interpolate methodology performs better."
@@ -493,14 +497,18 @@ function SortableHead({
 // ─── Component ──────────────────────────────────────────────────────────────
 
 interface AutomatizationTabProps {
-  onOpenOptimize: () => void
+  onOpenOptimize?: () => void
 }
 
-export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
+export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {}) {
   const t = useTranslations("configuration")
+  const router = useRouter()
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [detailTab, setDetailTab] = useState("details")
+  const detailTabsRef = useRef<HTMLDivElement>(null)
+  const [detailIndicator, setDetailIndicator] = useState({ left: 0, width: 0 })
 
   // Master table state
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
@@ -575,6 +583,13 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
     },
     onError: () => toast.error(t("automatizationResumeError")),
   })
+
+  // ── Detail tab indicator ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!detailTabsRef.current) return
+    const el = detailTabsRef.current.querySelector("[data-state='active']") as HTMLElement | null
+    if (el) setDetailIndicator({ left: el.offsetLeft, width: el.offsetWidth })
+  }, [detailTab, selectedRunId])
 
   // ── Sorting & filtering ─────────────────────────────────────────────────
 
@@ -657,22 +672,13 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
   }
 
   const sortedResults = selectedRun?.results
-    ? [...selectedRun.results].sort((a, b) => b.score - a.score)
+    ? [...selectedRun.results].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity))
     : []
 
   const bestScore = sortedResults.length > 0 ? sortedResults[0].score : null
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h3 className="text-sm font-semibold">{t("automatizationTitle")}</h3>
-        <p className="text-xs text-muted-foreground mt-1">{t("automatizationDescription")}</p>
-        <Button onClick={onOpenOptimize} className="cursor-pointer mt-3">
-          {t("automatizationRunButton")}
-        </Button>
-      </div>
-
       {/* History table */}
       <div>
         <h4 className="text-sm font-semibold mb-2">{t("automatizationHistoryTitle")}</h4>
@@ -820,13 +826,11 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
 
       {/* Detail pane */}
       {selectedRun && (
-        <div className="space-y-4 border-t pt-4">
-          <h4 className="text-sm font-semibold">{t("automatizationDetailTitle")}</h4>
-
+        <div className="border-t pt-4">
           {/* Progress for running/stopped runs */}
           {(selectedRun.status === "running" || selectedRun.status === "started" || isStoppedStatus(selectedRun.status)) &&
             selectedRun.total_combinations > 0 && (
-            <div className="rounded-md border p-3 bg-muted/30">
+            <div className="rounded-md border p-3 bg-muted/30 mb-4">
               <p className="text-sm text-muted-foreground">
                 {t("automatizationProgress", {
                   completed: selectedRun.completed_combinations,
@@ -844,7 +848,7 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
 
           {/* Resume button for stopped runs */}
           {isStoppedStatus(selectedRun.status) && (
-            <div className="rounded-md border border-[var(--border)] p-4 flex items-center justify-between gap-4">
+            <div className="rounded-md border border-[var(--border)] p-4 flex items-center justify-between gap-4 mb-4">
               <div className="space-y-0.5">
                 <p className="text-sm font-semibold">{t("automatizationResumeButton")}</p>
                 <p className="text-xs text-[var(--muted-foreground)]">{t("automatizationResumeDescription")}</p>
@@ -888,131 +892,207 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps) {
             </div>
           )}
 
-          {/* Best configuration summary */}
-          {selectedRun.best_combination && (
-            <div className="rounded-md border p-3 bg-muted/30">
-              <p className="text-sm font-medium">
-                {t("automatizationBestConfig")}:{" "}
-                <span className="text-foreground">
-                  {describeCombination(selectedRun.best_combination, selectedRun)}
-                </span>
-              </p>
-              {selectedRun.best_score != null && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  {t("automatizationProfitScore")}: {selectedRun.best_score.toFixed(2)}
-                </p>
+          <Tabs value={detailTab} onValueChange={setDetailTab}>
+            <div className="relative w-full">
+              <TabsList ref={detailTabsRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="details">{t("automatizationTabDetails")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="results">{t("automatizationTabResults")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="diagnostics">{t("automatizationTabDiagnostics")}</TabsTrigger>
+              </TabsList>
+              <div
+                className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
+                style={{ left: detailIndicator.left, width: detailIndicator.width }}
+              />
+            </div>
+
+            {/* ─ Details tab ─ */}
+            <TabsContent value="details" className="space-y-4 mt-4">
+              {/* ID */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">ID</label>
+                <div className="flex items-center gap-2">
+                  <Input value={selectedRun.id} readOnly className="h-8 text-xs font-mono bg-muted/30 max-w-sm" />
+                  <AnimateIcon animateOnHover className="cursor-pointer">
+                    <CopyIcon
+                      size={14}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedRun.id)
+                        toast.success(t("automatizationCopied"))
+                      }}
+                    />
+                  </AnimateIcon>
+                </div>
+              </div>
+
+              {/* Name */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">{t("automatizationDetailName")}</label>
+                <span className="text-sm">{selectedRun.name}</span>
+              </div>
+
+              {/* Combinations */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">{t("automatizationDetailCombinations")}</label>
+                <span className="text-sm tabular-nums">{selectedRun.completed_combinations} / {selectedRun.total_combinations}</span>
+              </div>
+
+              {/* Period */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">{t("automatizationDetailPeriod")}</label>
+                <span className="text-sm tabular-nums">{selectedRun.simulation_days} {t("automatizationDetailDays")}</span>
+              </div>
+
+              {/* Date */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground">{t("automatizationDetailDate")}</label>
+                <span className="text-sm">{new Date(selectedRun.created_at).toLocaleString()}</span>
+              </div>
+            </TabsContent>
+
+            {/* ─ Results tab ─ */}
+            <TabsContent value="results" className="space-y-4 mt-4">
+              {/* Best configuration summary */}
+              {selectedRun.best_combination && (
+                <div className="rounded-md border p-3 bg-muted/30">
+                  <p className="text-sm font-medium">
+                    {t("automatizationBestConfig")}:{" "}
+                    <span className="text-foreground">
+                      {describeCombination(selectedRun.best_combination, selectedRun)}
+                    </span>
+                  </p>
+                  {selectedRun.best_score != null && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {t("automatizationProfitScore")}: {selectedRun.best_score.toFixed(2)}
+                    </p>
+                  )}
+                </div>
               )}
-            </div>
-          )}
 
-          {/* Results table */}
-          {sortedResults.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">{t("automatizationRank")}</TableHead>
-                  <TableHead>{t("automatizationSettings")}</TableHead>
-                  <TableHead className="text-right">{t("automatizationProfitScore")}</TableHead>
-                  <TableHead className="text-right">{t("automatizationSold")}</TableHead>
-                  <TableHead className="text-right">{t("automatizationReturned")}</TableHead>
-                  <TableHead className="text-right">{t("automatizationSoldOutPct")}</TableHead>
-                  <TableHead className="w-20"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedResults.map((result, idx) => {
-                  const rank = idx + 1
-                  const best = sortedResults[0]
-                  const dProfit = result.score - best.score
-                  const dSold = result.metrics.eo_total_sold - best.metrics.eo_total_sold
-                  const dReturned = result.metrics.eo_total_returned - best.metrics.eo_total_returned
-                  const dSoldOut = result.metrics.sold_out_pct != null && best.metrics.sold_out_pct != null
-                    ? result.metrics.sold_out_pct - best.metrics.sold_out_pct
-                    : null
-                  const fmtDelta = (v: number, decimals = 0) => {
-                    const s = decimals > 0
-                      ? v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
-                      : v.toLocaleString()
-                    return v > 0 ? `+${s}` : s
-                  }
-                  return (
-                    <TableRow key={result.simulation_id} className="group">
-                      <TableCell className="font-medium align-top">
-                        {rank === 1 ? (
-                          <Badge variant="success" className="text-xs">
-                            {t("automatizationBest")}
-                          </Badge>
-                        ) : rank}
-                      </TableCell>
-                      <TableCell className="text-xs align-top">
-                        {describeCombination(result.combination, selectedRun)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono align-top">
-                        {result.score.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        {rank > 1 && (
-                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dProfit, 2)}</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right font-mono align-top">
-                        {result.metrics.eo_total_sold.toLocaleString()}
-                        {rank > 1 && (
-                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dSold)}</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right font-mono align-top">
-                        {result.metrics.eo_total_returned.toLocaleString()}
-                        {rank > 1 && (
-                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dReturned)}</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right font-mono align-top">
-                        {result.metrics.sold_out_pct != null
-                          ? `${result.metrics.sold_out_pct.toFixed(1)}%`
-                          : "\u2014"}
-                        {rank > 1 && dSoldOut != null && (
-                          <div className="text-[10px] text-muted-foreground">{fmtDelta(dSoldOut, 1)}%</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="align-top">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="cursor-pointer h-7 text-xs"
-                          disabled={applyMutation.isPending}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            applyMutation.mutate({
-                              runId: selectedRun.id,
-                              data: comboToApplyRequest(result.combination),
-                            })
-                          }}
-                        >
-                          {t("automatizationApply")}
-                        </Button>
-                      </TableCell>
+              {/* Results table */}
+              {sortedResults.length > 0 && (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">{t("automatizationRank")}</TableHead>
+                      <TableHead>{t("automatizationSettings")}</TableHead>
+                      <TableHead className="text-right">{t("automatizationProfitScore")}</TableHead>
+                      <TableHead className="text-right">{t("automatizationSold")}</TableHead>
+                      <TableHead className="text-right">{t("automatizationReturned")}</TableHead>
+                      <TableHead className="text-right">{t("automatizationSoldOutPct")}</TableHead>
+                      <TableHead className="w-20"></TableHead>
                     </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
+                  </TableHeader>
+                  <TableBody>
+                    {sortedResults.map((result, idx) => {
+                      const rank = idx + 1
+                      const best = sortedResults[0]
+                      const dProfit = result.score != null && best.score != null ? result.score - best.score : null
+                      const m = result.metrics
+                      const bm = best.metrics
+                      const dSold = m?.eo_total_sold != null && bm?.eo_total_sold != null ? m.eo_total_sold - bm.eo_total_sold : null
+                      const dReturned = m?.eo_total_returned != null && bm?.eo_total_returned != null ? m.eo_total_returned - bm.eo_total_returned : null
+                      const dSoldOut = m?.sold_out_pct != null && bm?.sold_out_pct != null
+                        ? m.sold_out_pct - bm.sold_out_pct
+                        : null
+                      const fmtDelta = (v: number, decimals = 0) => {
+                        const s = decimals > 0
+                          ? v.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+                          : v.toLocaleString()
+                        return v > 0 ? `+${s}` : s
+                      }
+                      const failed = result.score == null
+                      return (
+                        <TableRow key={result.simulation_id ?? `combo-${idx}`} className="group">
+                          <TableCell className="font-medium align-top">
+                            {failed ? (
+                              <Badge variant="destructive" className="text-xs">
+                                {t("automatizationFailed")}
+                              </Badge>
+                            ) : rank === 1 ? (
+                              <Badge variant="success" className="text-xs">
+                                {t("automatizationBest")}
+                              </Badge>
+                            ) : rank}
+                          </TableCell>
+                          <TableCell className="text-xs align-top">
+                            {describeCombination(result.combination, selectedRun)}
+                            {failed && result.error && (
+                              <div className="text-[10px] text-destructive mt-0.5">{result.error}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {result.score != null ? result.score.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "–"}
+                            {rank > 1 && dProfit != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtDelta(dProfit, 2)}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.eo_total_sold != null ? m.eo_total_sold.toLocaleString() : "–"}
+                            {rank > 1 && dSold != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtDelta(dSold)}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.eo_total_returned != null ? m.eo_total_returned.toLocaleString() : "–"}
+                            {rank > 1 && dReturned != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtDelta(dReturned)}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.sold_out_pct != null
+                              ? `${m.sold_out_pct.toFixed(1)}%`
+                              : "\u2014"}
+                            {rank > 1 && dSoldOut != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtDelta(dSoldOut, 1)}%</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="cursor-pointer h-7 text-xs"
+                              disabled={failed || applyMutation.isPending}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                applyMutation.mutate({
+                                  runId: selectedRun.id,
+                                  data: comboToApplyRequest(result.combination),
+                                })
+                              }}
+                            >
+                              {t("automatizationApply")}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              )}
 
-          {/* Conclusion */}
-          {sortedResults.length > 0 && selectedRun.best_combination && (
-            <div className="rounded-md border p-3 bg-muted/20">
-              <h5 className="text-xs font-semibold text-muted-foreground mb-1">
-                {t("automatizationConclusion")}
-              </h5>
-              <p className="text-sm">
-                {generateConclusion(selectedRun, sortedResults)}
-              </p>
-            </div>
-          )}
+              {/* Conclusion */}
+              {sortedResults.length > 0 && selectedRun.best_combination && (
+                <div className="rounded-md border p-3 bg-muted/20">
+                  <h5 className="text-xs font-semibold text-muted-foreground mb-1">
+                    {t("automatizationConclusion")}
+                  </h5>
+                  <p className="text-sm">
+                    {generateConclusion(selectedRun, sortedResults)}
+                  </p>
+                </div>
+              )}
+            </TabsContent>
 
-          {/* Diagnostics */}
-          {selectedRun.diagnostics && (
-            <DiagnosticsPanel diagnostics={selectedRun.diagnostics} t={t} />
-          )}
+            {/* ─ Diagnostics tab ─ */}
+            <TabsContent value="diagnostics" className="mt-4">
+              {selectedRun.diagnostics ? (
+                <DiagnosticsPanel diagnostics={selectedRun.diagnostics} t={t} />
+              ) : (
+                <p className="text-sm text-muted-foreground">{t("automatizationNoDiagnostics")}</p>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       )}
 

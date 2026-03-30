@@ -132,7 +132,7 @@ class TaskService:
         offset: int = 0,
     ) -> tuple[list[TaskRecord], int]:
         """List task records with optional filters. Returns (items, total)."""
-        base_where = []
+        base_where = [TaskRecord.active.is_(True)]
         if customer_id is not None:
             base_where.append(TaskRecord.customer_id == customer_id)
         if task_type is not None:

@@ -247,6 +247,8 @@ class Chronos2DirectEngine(PredictionEngine):
             self._load_model()
 
         if self._pipeline is None:
+            if not self.allow_fallback:
+                raise RuntimeError("Chronos model failed to load and engine fallback is disabled")
             from gorm_ai.prediction.engines.statistical import StatisticalEngine
             fallback = StatisticalEngine()
             return await fallback.predict_batch(items, horizon, prediction_from, batch_size)

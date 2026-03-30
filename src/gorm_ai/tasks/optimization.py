@@ -194,6 +194,23 @@ async def _run_optimization(
             request.customer_id,
         )
 
+    # Resolve engine slug if a specific engine was requested
+    engine_slug: str | None = None
+    if request.prediction_engine_id:
+        from gorm_ai.database.models.prediction_engine import (
+            PredictionEngine as PredictionEngineModel,
+        )
+
+        async with task_session() as session:
+            pe_result = await session.execute(
+                select(PredictionEngineModel).where(
+                    PredictionEngineModel.id == request.prediction_engine_id,
+                )
+            )
+            pe = pe_result.scalar_one_or_none()
+            if pe:
+                engine_slug = pe.slug
+
     logger.info(
         "optimization.start",
         customer_id=request.customer_id,
@@ -201,6 +218,7 @@ async def _run_optimization(
         simulation_to=str(simulation_to),
         cost_per_unit=default_cost,
         profit_per_unit=default_profit,
+        engine=engine_slug,
     )
 
     # --- Generate all parameter combinations ---
@@ -299,6 +317,7 @@ async def _run_optimization(
             delay=request.delay,
             name=f"Optimization combo {i + 1}/{total_simulations}",
             use_financials=True,
+            engine=engine_slug,
         )
 
         try:
@@ -358,10 +377,12 @@ async def _run_optimization(
             all_results.append(combo_result)
 
         except Exception as e:
+            import traceback
             logger.warning(
                 "optimization.simulation_failed",
                 combo=combo,
                 error=str(e),
+                traceback=traceback.format_exc(),
             )
             all_results.append({
                 "combination": combo,

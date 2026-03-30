@@ -88,16 +88,23 @@ class PredictionService:
         if horizon < 1:
             raise ValueError("prediction_to must be on or after prediction_from")
 
+        # Resolve fallback_engine setting
+        allow_fallback = await self._resolve_fallback_engine(request.customer_id)
+
         # When a finetuned model is selected, use the finetuned engine variant
         # with the specific checkpoint path
         if finetuned_model and finetuned_model_base_path:
             import os
             checkpoint_path = os.path.join(finetuned_model_base_path, finetuned_model)
             from gorm_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
-            engine = TimesFMFinetunedEngine(checkpoint_path=checkpoint_path)
+            engine = TimesFMFinetunedEngine(
+                checkpoint_path=checkpoint_path,
+                allow_fallback=allow_fallback,
+            )
             logger.info("Using finetuned model: %s", checkpoint_path)
         else:
             engine = self.engine_registry.get_engine(engine_type)
+        engine.allow_fallback = allow_fallback
         resolved_engine_params = await self._apply_engine_parameters(
             engine, engine_type.value, request.prediction_strategy_id,
         )
@@ -343,6 +350,11 @@ class PredictionService:
 
         actual_engine = engine.get_actual_slug() or engine_type.value
         if actual_engine != engine_type.value:
+            if not allow_fallback:
+                raise RuntimeError(
+                    f"Engine fallback disabled: requested {engine_type.value} "
+                    f"but fell back to {actual_engine}"
+                )
             logger.warning(
                 "prediction.engine_fallback: requested=%s actual=%s task=%s",
                 engine_type.value, actual_engine, task_id,
@@ -1327,6 +1339,28 @@ class PredictionService:
             "methodology": _resolve("eo_methodology", 1),
             "extrapolation": _resolve("eo_extrapolation", 1),
         }
+
+    async def _resolve_fallback_engine(self, customer_id: str) -> bool:
+        """Resolve fallback_engine: customer_configuration → configuration → False."""
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+        if cc and cc.fallback_engine is not None:
+            return cc.fallback_engine
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+        if gc is not None:
+            return gc.fallback_engine
+        return False
 
     async def _resolve_rounding(self, customer_id: str) -> int:
         """Resolve eo_to_delivery_rounding: customer_configuration → configuration → default (ceil)."""

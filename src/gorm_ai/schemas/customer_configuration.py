@@ -39,6 +39,7 @@ class CustomerConfigurationBase(BaseModel):
     variation_history_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
+    fallback_engine: bool | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None
@@ -88,6 +89,7 @@ class CustomerConfigurationUpdate(BaseModel):
     variation_history_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
+    fallback_engine: bool | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None

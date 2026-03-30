@@ -1,13 +1,10 @@
 """Fine-tuning service."""
 
-import asyncio
 import logging
 import os
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
-
-import numpy as np
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,13 +61,19 @@ class FinetuneService:
         self._session = session
 
     async def count_finetuned(self, engine_id: str) -> dict[str, int]:
-        """Count distinct customers and outlets that have been fine-tuned for an engine."""
+        """Count distinct customers and outlets that have been fine-tuned for an engine.
+
+        Matches on both the engine UUID and the engine slug, since the
+        standalone script records the slug while the Celery task records
+        the UUID.
+        """
+        engine = await self._resolve_engine(engine_id)
         result = await self._session.execute(
             select(
                 func.count(func.distinct(FinetuneProgress.customer_id)),
                 func.count(func.distinct(FinetuneProgress.outlet_id)),
             ).where(
-                FinetuneProgress.engine == engine_id,
+                FinetuneProgress.engine.in_([engine_id, engine.slug]),
                 FinetuneProgress.active.is_(True),
             )
         )
@@ -192,8 +195,50 @@ class FinetuneService:
         sync_target = (engine.finetune_sync_target or env_sync) if env_sync else None
         sync_every = engine.finetune_sync_every or int(os.environ.get("SYNC_EVERY", "5"))
 
+        # ── Per-outlet progress callback ─────────────────────────────────
+        # Write a progress record immediately after each outlet is trained
+        # so that progress survives worker termination.
+        from gorm_ai.database.connection import task_session
+
+        async def _on_outlet_done(
+            outlet_id: str, trained: bool,
+        ) -> None:
+            if not trained:
+                return
+            now = datetime.now(UTC)
+            async with task_session() as sess:
+                existing = await sess.execute(
+                    select(FinetuneProgress).where(
+                        FinetuneProgress.outlet_id == outlet_id,
+                        FinetuneProgress.engine.in_(
+                            [engine_id, slug],
+                        ),
+                    )
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    row.completed_at = now
+                    row.engine = engine_id
+                    row.context_length = context_length
+                    row.horizon = horizon
+                    row.epochs = epochs
+                    row.data_end_date = end_date
+                else:
+                    sess.add(FinetuneProgress(
+                        outlet_id=outlet_id,
+                        customer_id=customer_id,
+                        engine=engine_id,
+                        completed_at=now,
+                        context_length=context_length,
+                        horizon=horizon,
+                        epochs=epochs,
+                        data_start_date=start_date,
+                        data_end_date=end_date,
+                    ))
+                await sess.commit()
+
         # ── Dispatch to engine-specific training ─────────────────────────
-        stopped = await runner(
+        runner_result = await runner(
             outlet_series=outlet_series,
             context_length=context_length,
             horizon=horizon,
@@ -202,40 +247,24 @@ class FinetuneService:
             batch_size=batch_size,
             output_dir=output_dir,
             on_progress=on_progress,
+            on_outlet_done=_on_outlet_done,
             sync_target=sync_target,
             sync_every=sync_every,
             early_stopping_patience=early_stopping_patience,
             should_stop=should_stop,
+            sane_check_epochs=engine.finetune_sane_epochs,
+            max_sane_loss=engine.finetune_max_mae,
         )
 
-        # ── Record progress for each outlet ──────────────────────────────
-        now = datetime.now(UTC)
-        for outlet_id in outlet_ids:
-            existing = await self._session.execute(
-                select(FinetuneProgress).where(
-                    FinetuneProgress.outlet_id == outlet_id,
-                    FinetuneProgress.engine == engine_id,
-                )
-            )
-            row = existing.scalar_one_or_none()
-            if row:
-                row.completed_at = now
-                row.context_length = context_length
-                row.horizon = horizon
-                row.epochs = epochs
-                row.data_end_date = end_date
-            else:
-                self._session.add(FinetuneProgress(
-                    outlet_id=outlet_id,
-                    customer_id=customer_id,
-                    engine=engine_id,
-                    completed_at=now,
-                    context_length=context_length,
-                    horizon=horizon,
-                    epochs=epochs,
-                    data_start_date=start_date,
-                    data_end_date=end_date,
-                ))
+        # Handle both old bool returns and new dict returns
+        if isinstance(runner_result, dict):
+            stopped = runner_result.get("stopped", False)
+            finetuned_count = runner_result.get("finetuned", 0)
+            pathological_count = runner_result.get("pathological", 0)
+        else:
+            stopped = runner_result
+            finetuned_count = 0
+            pathological_count = 0
 
         if stopped:
             if on_progress:
@@ -250,6 +279,8 @@ class FinetuneService:
                 "outlets_processed": len(outlet_ids),
                 "sales_records": len(sales),
                 "stopped": True,
+                "finetuned_count": finetuned_count,
+                "pathological_count": pathological_count,
             }
 
         if on_progress:
@@ -261,4 +292,6 @@ class FinetuneService:
             "customer_id": customer_id,
             "outlets_processed": len(outlet_ids),
             "sales_records": len(sales),
+            "finetuned_count": finetuned_count,
+            "pathological_count": pathological_count,
         }

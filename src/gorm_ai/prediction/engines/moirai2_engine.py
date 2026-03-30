@@ -177,6 +177,8 @@ class Moirai2Engine(PredictionEngine):
             return []
 
         if not self._check_uni2ts():
+            if not self.allow_fallback:
+                raise RuntimeError("uni2ts not available and engine fallback is disabled")
             from gorm_ai.prediction.engines.statistical import StatisticalEngine
             return await StatisticalEngine().predict_batch(items, horizon, prediction_from, batch_size)
 
@@ -186,6 +188,8 @@ class Moirai2Engine(PredictionEngine):
         if not self._module_loaded:
             ok = await loop.run_in_executor(None, self._load_module)
             if not ok:
+                if not self.allow_fallback:
+                    raise RuntimeError("MOIRAI-2 model failed to load and engine fallback is disabled")
                 from gorm_ai.prediction.engines.statistical import StatisticalEngine
                 return await StatisticalEngine().predict_batch(
                     items, horizon, prediction_from, batch_size

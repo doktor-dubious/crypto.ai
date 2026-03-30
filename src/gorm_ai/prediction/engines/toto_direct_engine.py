@@ -97,6 +97,8 @@ class TotoDirectEngine(Chronos2DirectEngine):
         protection_days: int = 7,
     ) -> list[list]:
         if not _check_cuda():
+            if not self.allow_fallback:
+                raise RuntimeError("Toto requires CUDA and engine fallback is disabled")
             from gorm_ai.prediction.engines.statistical import StatisticalEngine
 
             logger.warning("Toto requires CUDA; falling back to StatisticalEngine")

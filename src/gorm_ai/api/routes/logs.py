@@ -15,11 +15,13 @@ router = APIRouter()
 LOG_DIR = Path("/app/log")
 GORM_LOG_FILE = LOG_DIR / "gorm_ai.log"
 CLAUDE_LOG_FILE = LOG_DIR / "claude.log"
+FINETUNE_LOG_FILE = LOG_DIR / "finetune.log"
 
 # File-based log sources (not Docker)
 FILE_LOG_MAP = {
     "gorm": GORM_LOG_FILE,
     "claude": CLAUDE_LOG_FILE,
+    "finetuning": FINETUNE_LOG_FILE,
 }
 
 CONTAINER_PREFIX = "gormai"
@@ -128,7 +130,9 @@ def _get_docker_logs(service: str, tail: int = 10000) -> list[str]:
 
 @router.get("", response_model=LogResponse)
 async def get_logs(
-    source: str = Query(..., description="Log source: gorm, fastapi, celery-worker, redis, database, frontend"),
+    source: str = Query(
+        ..., description="Log source identifier",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=1000),
     search: str = Query("", description="Filter lines containing this text"),

@@ -36,6 +36,7 @@ class ConfigurationUpdate(BaseModel):
     variation_history_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
+    fallback_engine: bool | None = None
     open_monday: bool | None = None
     open_tuesday: bool | None = None
     open_wednesday: bool | None = None
@@ -87,6 +88,7 @@ class ConfigurationResponse(BaseModel):
     variation_history_days: int = 365
     eo_methodology: int = 1
     eo_extrapolation: int = 3
+    fallback_engine: bool = False
     open_monday: bool = True
     open_tuesday: bool = True
     open_wednesday: bool = True

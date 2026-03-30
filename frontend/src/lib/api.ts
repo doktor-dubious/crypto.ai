@@ -307,6 +307,8 @@ export interface PredictionEngineResponse {
   finetuned_model_path: string | null
   finetune_sync_every: number | null
   finetune_sync_target: string | null
+  finetune_sane_epochs: number | null
+  finetune_max_mae: number | null
 }
 
 export interface PredictionEngineCreate {
@@ -323,6 +325,8 @@ export interface PredictionEngineUpdate {
   finetuned_model_path?: string | null
   finetune_sync_every?: number | null
   finetune_sync_target?: string | null
+  finetune_sane_epochs?: number | null
+  finetune_max_mae?: number | null
 }
 
 export interface PredictionEngineParameterResponse {
@@ -383,6 +387,9 @@ export const predictionEnginesApi = {
 
   listFinetuneModels: (engineId: string) =>
     apiFetch<string[]>(`/prediction-engines/${engineId}/finetune/models`),
+
+  resetFinetune: (engineId: string) =>
+    apiFetch<void>(`/prediction-engines/${engineId}/finetune/reset`, { method: "DELETE" }),
 }
 
 // ─── Finetuning ──────────────────────────────────────────────────────────────
@@ -390,6 +397,8 @@ export const predictionEnginesApi = {
 export interface FinetuneRequest {
   prediction_engine_id: string
   customer_id: string
+  name?: string
+  description?: string
   outlet_group_id?: string | null
   start_date?: string
   end_date?: string
@@ -431,6 +440,48 @@ export const finetuneApi = {
 
   count: (engineId: string) =>
     apiFetch<FinetuneCountResponse>(`/prediction-engines/${engineId}/finetune/count`),
+}
+
+// ─── Fine-tune Tracking ──────────────────────────────────────────────────────
+
+export interface FineTuneResponse {
+  id: string
+  customer_id: string
+  name: string
+  description: string | null
+  started_at: string | null
+  ended_at: string | null
+  end_condition: string | null
+  outlet_group_id: string | null
+  outlet_group_name: string | null
+  finetune_from: string | null
+  finetune_to: string | null
+  finetuned_outlets: number
+  pathological_outlets: number
+  worker_name: string | null
+  prediction_engine_id: string | null
+  engine_name: string | null
+  task_id: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface FineTuneListResponse {
+  items: FineTuneResponse[]
+  total: number
+}
+
+export const fineTunesApi = {
+  list: (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set("limit", String(params?.limit ?? 500))
+    if (params?.offset) qs.set("offset", String(params.offset))
+    return apiFetch<FineTuneListResponse>(`/fine-tunes?${qs}`)
+  },
+
+  delete: (id: string) =>
+    apiFetch<void>(`/fine-tunes/${id}`, { method: "DELETE" }),
 }
 
 export interface PredictionStrategyResponse {
@@ -660,6 +711,7 @@ export interface CustomerConfigurationResponse {
   variation_history_days: number | null
   eo_methodology: number | null
   eo_extrapolation: number | null
+  fallback_engine: boolean | null
   open_monday: boolean | null
   open_tuesday: boolean | null
   open_wednesday: boolean | null
@@ -1755,19 +1807,21 @@ export interface OptimizeSettingsRequest {
   correction_threshold_iterations?: number
   simulation_days?: number
   delay?: number
+  prediction_engine_id?: string | null
   worker?: string | null
 }
 
 export interface OptimizationCombinationResult {
   combination: Record<string, unknown>
-  score: number
+  score: number | null
   metrics: {
-    eo_total_sold: number
-    eo_total_delivered: number
-    eo_total_returned: number
-    sold_out_pct: number | null
+    eo_total_sold?: number | null
+    eo_total_delivered?: number | null
+    eo_total_returned?: number | null
+    sold_out_pct?: number | null
   }
-  simulation_id: string
+  simulation_id: string | null
+  error?: string
 }
 
 export interface OptimizationRunResponse {

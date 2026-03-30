@@ -1,6 +1,6 @@
 """Prediction engine registry."""
 
-from sqlalchemy import Integer, String, Text, UniqueConstraint
+from sqlalchemy import Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gorm_ai.database.base import Base
@@ -25,3 +25,5 @@ class PredictionEngine(Base):
     finetune_sync_target: Mapped[str | None] = mapped_column(
         String(500), nullable=True,
     )
+    finetune_sane_epochs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finetune_max_mae: Mapped[float | None] = mapped_column(Float, nullable=True)

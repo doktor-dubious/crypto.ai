@@ -33,6 +33,11 @@ class OptimizationRun(Base):
     # Simulation parameters
     simulation_days: Mapped[int] = mapped_column(Integer, default=180)
     delay: Mapped[int] = mapped_column(Integer, default=1)
+    prediction_engine_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("prediction_engine.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     simulation_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     simulation_to: Mapped[date | None] = mapped_column(Date, nullable=True)
 

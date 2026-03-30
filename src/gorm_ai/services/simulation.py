@@ -280,6 +280,7 @@ class SimulationService:
 
         engine_type = await self._resolve_engine(request.customer_id, request.engine, strategy_engine_slug)
         engine = self.engine_registry.get_engine(engine_type)
+        engine.allow_fallback = await self._prediction_service._resolve_fallback_engine(request.customer_id)
         resolved_engine_params = await self._prediction_service._apply_engine_parameters(engine, engine_type.value)
         capabilities = engine.get_capabilities()
 
@@ -587,6 +588,11 @@ class SimulationService:
 
             # Detect engine fallback and flag it on the simulation record (once)
             if not is_same_draw and actual_engine != engine_type.value and not engine_fell_back:
+                if not engine.allow_fallback:
+                    raise RuntimeError(
+                        f"Engine fallback disabled: requested {engine_type.value} "
+                        f"but fell back to {actual_engine}"
+                    )
                 engine_fell_back = True
                 log.warning(
                     "simulation.engine_fallback",

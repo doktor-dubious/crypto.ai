@@ -144,8 +144,15 @@ const EXPORT_SUBNAV_ITEMS = [
   { href: "/export/log", icon: ScrollText, labelKey: "exportLog" },
 ] as const
 
-const AI_MODELS_SUBNAV_ITEMS = [
+const AI_MODELS_SUBNAV_TOP = [
   { href: "/ai-models", icon: List, labelKey: "aiModelsModels" },
+] as const
+
+const AI_MODELS_SUBNAV_BOT = [
+  { href: "/ai-models/finetune", icon: Sparkles, labelKey: "aiModelsFinetuneNew" },
+  { href: "/ai-models/finetune/completed", icon: CheckCircle, labelKey: "aiModelsFinetuneRuns" },
+  { href: "/simulations/finetune-new", icon: Plus, labelKey: "aiModelsFinetuneAnalysis" },
+  { href: "/simulations/finetune-completed", icon: CheckCircle, labelKey: "aiModelsFinetuneCompleted" },
 ] as const
 
 const SYSTEM_SUBNAV_ITEMS = [
@@ -154,8 +161,13 @@ const SYSTEM_SUBNAV_ITEMS = [
   { href: "/system/docker", icon: Container, labelKey: "systemDocker" },
 ] as const
 
-const CONFIG_ITEMS = [
-  { href: "/configuration", icon: Settings, labelKey: "configuration" },
+const CONFIG_SUBNAV_TOP = [
+  { href: "/configuration", icon: Settings, labelKey: "configSettings" },
+] as const
+
+const CONFIG_SUBNAV_BOT = [
+  { href: "/configuration/exploration/new", icon: Plus, labelKey: "configExplorationNew" },
+  { href: "/configuration/exploration", icon: CheckCircle, labelKey: "configExplorationCompleted" },
 ] as const
 
 
@@ -426,15 +438,6 @@ export function AppSidebar() {
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
                   </DropdownMenuItem>
                 ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.push("/simulations/finetune-new")}>
-                  <Plus className="h-4 w-4" />
-                  {t("nav.simulationsFinetuneNew" as Parameters<typeof t>[0])}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/simulations/finetune-completed")}>
-                  <AnimatedScissors className="h-4 w-4" />
-                  {t("nav.simulationsFinetuneCompleted" as Parameters<typeof t>[0])}
-                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
@@ -511,7 +514,14 @@ export function AppSidebar() {
                 {t("nav.aiModels")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {AI_MODELS_SUBNAV_ITEMS.map((item) => (
+                {AI_MODELS_SUBNAV_TOP.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {AI_MODELS_SUBNAV_BOT.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
@@ -555,12 +565,29 @@ export function AppSidebar() {
             </DropdownMenuSub>
 
             <DropdownMenuSeparator />
-            {CONFIG_ITEMS.map((item) => (
-              <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+
+            {/* Configuration */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
                 <AnimatedSettings className="h-4 w-4" />
-                {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-              </DropdownMenuItem>
-            ))}
+                {t("nav.configuration")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {CONFIG_SUBNAV_TOP.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {CONFIG_SUBNAV_BOT.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
 
             {/* System */}
             <DropdownMenuSub>

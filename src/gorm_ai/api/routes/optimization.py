@@ -50,6 +50,7 @@ def _run_to_response(run: OptimizationRun) -> OptimizationRunResponse:
         optimize_weekday_profile_correction=run.optimize_weekday_profile_correction,
         simulation_days=run.simulation_days,
         delay=run.delay,
+        prediction_engine_id=run.prediction_engine_id,
         simulation_from=str(run.simulation_from) if run.simulation_from else None,
         simulation_to=str(run.simulation_to) if run.simulation_to else None,
         total_combinations=run.total_combinations,
@@ -130,6 +131,7 @@ async def start_optimization(
         optimize_weekday_profile_correction=data.optimize_weekday_profile_correction,
         simulation_days=data.simulation_days,
         delay=data.delay,
+        prediction_engine_id=data.prediction_engine_id,
     )
     session.add(optimization_run)
     await session.flush()

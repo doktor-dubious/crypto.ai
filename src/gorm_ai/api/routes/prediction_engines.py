@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from gorm_ai.api.deps import (
+    DbSession,
     PredictionEngineParameterServiceDep,
     PredictionEngineServiceDep,
     TaskServiceDep,
@@ -21,6 +22,8 @@ class FinetuneRequest(BaseModel):
     """Schema for fine-tuning request."""
     prediction_engine_id: str
     customer_id: str
+    name: str = ""
+    description: str | None = None
     outlet_group_id: str | None = None
     start_date: str | None = None
     end_date: str | None = None
@@ -190,6 +193,38 @@ async def list_finetune_models(
     )
 
 
+@router.delete("/{engine_id}/finetune/reset", status_code=204)
+async def reset_finetune(
+    engine_id: str,
+    engine_service: PredictionEngineServiceDep,
+    session: DbSession,
+) -> None:
+    """Delete all fine-tuned model files and progress records for an engine."""
+    import os
+    import shutil
+
+    from sqlalchemy import delete as sa_delete
+
+    from gorm_ai.database.models.finetune_progress import FinetuneProgress
+
+    engine = await engine_service.get(engine_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="Engine not found")
+
+    # Delete checkpoint files
+    base = engine.finetuned_model_path
+    if base and os.path.isdir(base):
+        shutil.rmtree(base, ignore_errors=True)
+
+    # Delete finetune_progress records for this engine
+    await session.execute(
+        sa_delete(FinetuneProgress).where(
+            FinetuneProgress.engine.in_([engine_id, engine.slug]),
+        )
+    )
+    await session.commit()
+
+
 @router.get("/{engine_id}/finetune/count", response_model=FinetuneCountResponse)
 async def get_finetune_count(
     engine_id: str,
@@ -207,22 +242,57 @@ async def get_finetune_count(
 async def start_finetune(
     data: FinetuneRequest,
     task_service: TaskServiceDep,
+    session: DbSession,
 ) -> FinetuneTaskResponse:
     """Start a fine-tuning task asynchronously."""
     from datetime import UTC, datetime
 
+    from gorm_ai.services.fine_tune import FineTuneTrackingService
     from gorm_ai.tasks.finetuning import run_finetune_task
 
-    dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
+    # Build request data and create FineTune tracking row
+    request_data = data.model_dump(mode="json")
+
+    finetune_from = None
+    finetune_to = None
+    if data.start_date:
+        from datetime import date as date_type
+        finetune_from = date_type.fromisoformat(data.start_date)
+    if data.end_date:
+        from datetime import date as date_type
+        finetune_to = date_type.fromisoformat(data.end_date)
+
+    ft_service = FineTuneTrackingService(session)
+    ft_name = data.name or f"Finetune {data.customer_id[:8]}"
+    ft_row = await ft_service.create(
+        customer_id=data.customer_id,
+        name=ft_name,
+        description=data.description,
+        prediction_engine_id=data.prediction_engine_id,
+        outlet_group_id=data.outlet_group_id,
+        finetune_from=finetune_from,
+        finetune_to=finetune_to,
+        worker_name=data.worker,
+    )
+    request_data["fine_tune_id"] = ft_row.id
+
+    dispatch_kwargs: dict = {"args": [request_data]}
     if data.worker:
         dispatch_kwargs["queue"] = data.worker
 
     task = run_finetune_task.apply_async(**dispatch_kwargs)
-    task_name = f"Finetune {data.customer_id[:8]}"
+
+    # Update the FineTune row with the celery task_id
+    ft_row.task_id = task.id
+    await session.flush()
+
+    task_name = ft_name
     await task_service.create(
         task.id, "finetune", data.customer_id,
-        name=task_name, request_data=data.model_dump(mode="json"),
+        name=task_name, request_data=request_data,
     )
+
+    await session.commit()
 
     now = datetime.now(UTC)
     return FinetuneTaskResponse(

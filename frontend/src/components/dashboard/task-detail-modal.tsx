@@ -121,6 +121,7 @@ export function TaskDetailModal({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] })
       setConfirmStop(false)
+      onOpenChange(false)
     },
   })
 
@@ -307,59 +308,63 @@ export function TaskDetailModal({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-2">
-          {/* Redirect link for current customer */}
-          {isCurrentCustomer && redirectPath && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => {
-                router.push(redirectPath)
-                onOpenChange(false)
-              }}
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {t("detail.viewDetails")}
-            </Button>
-          )}
-
-          {/* Stop button */}
-          {canStop && !confirmStop && (
-            <Button
-              variant="destructive"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setConfirmStop(true)}
-            >
-              <Square className="h-3.5 w-3.5" />
-              {t("detail.stop")}
-            </Button>
-          )}
-
           {/* Stop confirmation */}
-          {canStop && confirmStop && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--muted-foreground)]">{t("detail.stopConfirm")}</span>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setConfirmStop(false)}
-              >
-                {t("cancelConfirmNo")}
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => stopMutation.mutate()}
-                disabled={stopMutation.isPending}
-              >
-                {stopMutation.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  t("detail.stopYes")
-                )}
-              </Button>
+          {canStop && confirmStop ? (
+            <div className="flex w-full items-center justify-between gap-2">
+              <span className="text-sm text-[var(--muted-foreground)]">{t("detail.stopConfirm")}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConfirmStop(false)}
+                >
+                  {t("cancelConfirmNo")}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => stopMutation.mutate()}
+                  disabled={stopMutation.isPending}
+                >
+                  {stopMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    t("detail.stopYes")
+                  )}
+                </Button>
+              </div>
             </div>
+          ) : (
+            <>
+              {/* Redirect link for current customer */}
+              {isCurrentCustomer && redirectPath && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => {
+                    router.push(redirectPath)
+                    onOpenChange(false)
+                  }}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {t("detail.viewDetails")}
+                </Button>
+              )}
+
+              {/* Stop button */}
+              {canStop && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setConfirmStop(true)}
+                >
+                  <Square className="h-3.5 w-3.5" />
+                  {t("detail.stop")}
+                </Button>
+              )}
+            </>
           )}
 
           {/* Resume button */}

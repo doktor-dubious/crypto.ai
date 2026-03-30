@@ -96,6 +96,8 @@ class EngineCapabilities:
 class PredictionEngine(ABC):
     """Abstract base class for all prediction engines."""
 
+    allow_fallback: bool = True
+
     @abstractmethod
     async def predict(
         self,

@@ -32,8 +32,6 @@ import {
   type PredictionEngineResponse,
   type OutletGroupResponse,
 } from "@/lib/api"
-import { OptimalSettingsModal } from "@/components/configuration/optimal-settings-modal"
-import { AutomatizationTab } from "@/components/configuration/automatization-tab"
 
 // ─── Sub-components (matching prediction→strategies patterns) ────────────────
 
@@ -406,6 +404,13 @@ function CoreTab({
           <option value="3">{t("eoExtrapolationCap")}</option>
         </select>
       </FieldRow>
+
+      <SwitchRow
+        label={t("fallbackEngine")}
+        info={t("fallbackEngineInfo")}
+        checked={draft.fallback_engine as boolean ?? false}
+        onCheckedChange={(v) => set("fallback_engine", v)}
+      />
     </>
   )
 }
@@ -678,7 +683,6 @@ export default function ConfigurationPage() {
   const queryClient = useQueryClient()
   const cid = activeCustomer?.id ?? ""
 
-  const [optimizeModalOpen, setOptimizeModalOpen] = useState(false)
   const [mode, setMode] = useState<"gorm" | "customer">(() => loadCfgV<"gorm" | "customer">(cid, "mode", "customer"))
   const [tab, setTab] = useState(() => loadCfgV<string>(cid, "tab", "details"))
   const tabsListRef = useRef<HTMLDivElement>(null)
@@ -950,7 +954,6 @@ export default function ConfigurationPage() {
                 { value: "details", label: t("tabDetails") },
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
-                { value: "automatization", label: t("tabAutomatization") },
               ],
               <>
                 <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -970,10 +973,6 @@ export default function ConfigurationPage() {
                 <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
-                <TabsContent value="automatization" className="mt-6 pl-[2px] overflow-visible">
-                  <AutomatizationTab onOpenOptimize={() => setOptimizeModalOpen(true)} />
-                </TabsContent>
-                <OptimalSettingsModal open={optimizeModalOpen} onOpenChange={setOptimizeModalOpen} />
               </>
             )
           ) : (
