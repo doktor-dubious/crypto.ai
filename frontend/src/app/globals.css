@@ -28,6 +28,8 @@
   --color-destructive: var(--destructive);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
 }
 
 /* Light theme */
@@ -76,6 +78,7 @@
 
 /* Dark theme */
 .dark {
+  color-scheme: dark;
   --primary: #4A5759;
   --primary-foreground: white;
   --secondary-border: #bbb;

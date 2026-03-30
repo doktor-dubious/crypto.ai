@@ -48,10 +48,13 @@ function saveStarred(s: Set<string>) {
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
 
-type StatusKey = "statusCompleted" | "statusStopped" | "statusCancelled" | "statusWorkerTerminated" | "statusError" | "statusRunning"
+type StatusKey = "statusCompleted" | "statusStopped" | "statusCancelled" | "statusWorkerTerminated" | "statusError" | "statusRunning" | "statusPending"
 
 function getStatusInfo(item: FineTuneResponse): { key: StatusKey; variant: "success" | "warning" | "destructive" | "info" | "muted" } {
-  if (!item.end_condition) return { key: "statusRunning", variant: "info" }
+  if (!item.end_condition) {
+    if (!item.started_at) return { key: "statusPending", variant: "muted" }
+    return { key: "statusRunning", variant: "info" }
+  }
   switch (item.end_condition) {
     case "completed": return { key: "statusCompleted", variant: "success" }
     case "stopped": return { key: "statusStopped", variant: "warning" }

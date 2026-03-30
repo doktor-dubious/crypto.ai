@@ -76,7 +76,7 @@ class FinetuneDbHandler(logging.Handler):
             entry = {
                 "fine_tune_id": self._fine_tune_id,
                 "level": record.levelname.lower(),
-                "message": self.format(record) if self.formatter else record.getMessage(),
+                "message": record.getMessage(),
                 "worker_name": self._worker_name,
                 "seq": self._seq,
                 "logged_at": datetime.now(UTC),

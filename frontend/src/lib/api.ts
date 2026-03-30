@@ -895,6 +895,260 @@ export const salesApi = {
     }),
 }
 
+// ─── Analysis Types ──────────────────────────────────────────────────────────
+
+export interface AnalysisRequest {
+  customer_id: string
+  outlet_ids: string[]
+  start_date: string
+  end_date: string
+}
+
+export interface MissingDataGap {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  missing_dates: string[]
+  gap_count: number
+}
+
+export interface ZeroSalesAnomaly {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  dates: string[]
+  count: number
+}
+
+export interface FieldDiscrepancy {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  field: string
+  avg_difference: number
+  occurrence_count: number
+  total_records: number
+}
+
+export interface LevelShift {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  shift_date: string
+  before_mean: number
+  after_mean: number
+  magnitude: number
+  magnitude_pct: number
+}
+
+export interface DataQualitySummary {
+  total_missing_dates: number
+  total_zero_sales: number
+  total_discrepancies: number
+  total_level_shifts: number
+  outlets_with_issues: number
+  total_expected_dates: number
+  total_sales_records: number
+  total_outlets_with_scan_or_net: number
+  total_outlets_analyzed: number
+  total_outlets: number
+}
+
+export interface DataQualityResponse {
+  missing_data: MissingDataGap[]
+  zero_sales: ZeroSalesAnomaly[]
+  discrepancies: FieldDiscrepancy[]
+  level_shifts: LevelShift[]
+  summary: DataQualitySummary
+}
+
+export interface DateOutlier {
+  date: string
+  value: number
+  expected: number
+  z_score: number
+  direction: string
+  is_pad_date: boolean
+  pad_name: string | null
+}
+
+export interface RecurringDateOutlier {
+  month: number
+  day: number
+  years: number[]
+  avg_z_score: number
+  direction: string
+  is_registered_pad: boolean
+  pad_name: string | null
+}
+
+export interface OutlierResponse {
+  recurring_sales: RecurringDateOutlier[]
+  non_recurring_sales: DateOutlier[]
+  recurring_delivery: RecurringDateOutlier[]
+  non_recurring_delivery: DateOutlier[]
+}
+
+export interface WeeklyDataPoint {
+  date: string
+  value: number
+  trend_value: number
+}
+
+export interface TrendInfo {
+  slope: number
+  slope_per_week: number
+  direction: string
+  r_squared: number
+  weekly_data: WeeklyDataPoint[]
+}
+
+export interface Changepoint {
+  date: string
+  before_mean: number
+  after_mean: number
+  magnitude_pct: number
+}
+
+export interface YearlyProfilePoint {
+  week: number
+  month: number
+  value: number
+}
+
+export interface SeasonalityInfo {
+  has_weekly: boolean
+  has_yearly: boolean
+  weekly_strength: number
+  yearly_strength: number | null
+  weekly_profile: { weekday: number; avg_value: number }[]
+  yearly_profile: YearlyProfilePoint[]
+}
+
+export interface WeekdayEffectOutlet {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  effect_strength: number
+  weekday_means: number[]
+}
+
+export interface DivergentOutlet {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  outlet_slope: number
+  aggregate_slope: number
+  divergence: number
+}
+
+export interface PatternsResponse {
+  trend: TrendInfo
+  changepoints: Changepoint[]
+  seasonality: SeasonalityInfo
+  weekday_effects: WeekdayEffectOutlet[]
+  divergent_outlets: DivergentOutlet[]
+}
+
+export interface HighReturnOutlet {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  avg_return_pct: number
+  days_with_data: number
+}
+
+export interface SoldOutOutlet {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  sold_out_pct: number
+  sold_out_days: number
+  total_days: number
+}
+
+export interface WeekdayEfficiency {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  weekday: number
+  avg_return_pct: number | null
+  sold_out_pct: number
+  day_count: number
+}
+
+export interface FixedAccount {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  cv: number
+  sold_eq_delivered_pct: number
+  avg_sold: number
+}
+
+export interface DeliveryPerformanceResponse {
+  high_return: HighReturnOutlet[]
+  sold_out: SoldOutOutlet[]
+  weekday_efficiency: WeekdayEfficiency[]
+  fixed_accounts: FixedAccount[]
+}
+
+export interface OutletCluster {
+  cluster_id: number
+  outlet_ids: string[]
+  outlet_names: string[]
+  cluster_profile: number[]
+}
+
+export interface PredictabilityScore {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  cv: number
+  difficulty: string
+}
+
+export interface CorrelationCluster {
+  cluster_id: number
+  outlet_ids: string[]
+  outlet_names: string[]
+  avg_correlation: number
+}
+
+export interface SegmentationResponse {
+  seasonal_clusters: OutletCluster[]
+  predictability: PredictabilityScore[]
+  correlation_clusters: CorrelationCluster[]
+}
+
+export const analysisApi = {
+  dataQuality: (params: AnalysisRequest) =>
+    apiFetch<DataQualityResponse>("/analysis/data-quality", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  outliers: (params: AnalysisRequest) =>
+    apiFetch<OutlierResponse>("/analysis/outliers", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  patterns: (params: AnalysisRequest) =>
+    apiFetch<PatternsResponse>("/analysis/patterns", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  deliveryPerformance: (params: AnalysisRequest) =>
+    apiFetch<DeliveryPerformanceResponse>("/analysis/delivery-performance", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  segmentation: (params: AnalysisRequest) =>
+    apiFetch<SegmentationResponse>("/analysis/segmentation", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+}
+
 export interface ConfigurationUpdate {
   peak_period?: boolean | null
   minimum_delivery?: number | null

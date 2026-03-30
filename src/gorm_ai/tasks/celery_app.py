@@ -147,7 +147,12 @@ def clear_stop_flag(task_id: str) -> None:
 def _get_redis():
     """Return a Redis client from the broker URL."""
     import redis
-    return redis.Redis.from_url(settings.celery_broker_url)
+    return redis.Redis.from_url(
+        settings.celery_broker_url,
+        socket_keepalive=True,
+        retry_on_timeout=True,
+        socket_connect_timeout=5,
+    )
 
 
 def _get_worker_models() -> str:
@@ -219,7 +224,10 @@ celery_app.conf.update(
     worker_concurrency=4,
     broker_transport_options={
         "visibility_timeout": 604800,  # 7 days – must exceed longest task (simulations)
+        "socket_keepalive": True,
+        "retry_on_timeout": True,
     },
+    broker_connection_retry_on_startup=True,
     # Solo pool: when the worker is killed mid-task (e.g. revoke with
     # terminate=True), do NOT re-queue the message.  Without this the
     # cancelled task gets redelivered after the container restarts.

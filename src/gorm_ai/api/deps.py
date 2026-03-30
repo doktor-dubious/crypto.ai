@@ -7,6 +7,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.connection import get_session
+from gorm_ai.services.analysis import AnalysisService
 from gorm_ai.services.configuration import ConfigurationService
 from gorm_ai.services.customer import CustomerService
 from gorm_ai.services.customer_configuration import CustomerConfigurationService
@@ -36,6 +37,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 # Type aliases for dependency injection
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+def get_analysis_service(session: DbSession) -> AnalysisService:
+    """Get analysis service."""
+    return AnalysisService(session)
 
 
 def get_customer_service(session: DbSession) -> CustomerService:
@@ -134,6 +140,7 @@ def get_simulation_strategy_service(session: DbSession) -> SimulationStrategySer
 
 
 # Type aliases for service injection
+AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
 ConfigurationServiceDep = Annotated[ConfigurationService, Depends(get_configuration_service)]
 FinancialDateServiceDep = Annotated[FinancialDateService, Depends(get_financial_date_service)]
 CustomerConfigurationServiceDep = Annotated[

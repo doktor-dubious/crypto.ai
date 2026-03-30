@@ -86,6 +86,7 @@ function ChartTooltipContent({
   indicator = "dot",
   nameKey,
   labelKey,
+  labelFormatter,
 }: {
   active?: boolean
   payload?: TooltipPayloadItem[]
@@ -97,9 +98,16 @@ function ChartTooltipContent({
   indicator?: "line" | "dot" | "dashed"
   nameKey?: string
   labelKey?: string
+  labelFormatter?: (label: string, payload: TooltipPayloadItem[]) => React.ReactNode
 }) {
   const { config } = useChart()
   if (!active || !payload?.length) return null
+
+  const resolvedLabel = labelFormatter
+    ? labelFormatter(label ?? "", payload)
+    : labelKey
+      ? (payload[0]?.payload as Record<string, unknown>)?.[labelKey] as string
+      : label
 
   return (
     <div
@@ -109,7 +117,7 @@ function ChartTooltipContent({
       )}
     >
       {!hideLabel && (
-        <div className="font-medium">{labelKey ? (payload[0]?.payload as Record<string, unknown>)?.[labelKey] as string : label}</div>
+        <div className="font-medium">{resolvedLabel}</div>
       )}
       <div className="grid gap-1.5">
         {payload.map((item, idx) => {

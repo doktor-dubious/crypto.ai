@@ -187,6 +187,19 @@ class TaskService:
         is_running = record.status == "started"
 
         await self.update_status(task_id, "revoked", completed_at=datetime.now(UTC))
+
+        # Also mark any associated finetune record as cancelled so its
+        # status column reflects the cancellation correctly.
+        if record.type == "finetune":
+            from gorm_ai.database.models.fine_tune import FineTune
+            result = await self.session.execute(
+                select(FineTune).where(FineTune.task_id == task_id)
+            )
+            ft = result.scalar_one_or_none()
+            if ft and ft.end_condition is None:
+                ft.end_condition = "cancelled"
+                ft.ended_at = datetime.now(UTC)
+
         await self.session.commit()
 
         if is_running:
@@ -231,25 +244,46 @@ class TaskService:
         )
         return len(result.all())
 
-    async def _close_simulations_for_tasks(self, task_ids: list[str]) -> None:
-        """Set ended_at on simulations whose task_id is in the given list."""
+    async def _close_associated_records_for_tasks(
+        self,
+        task_ids: list[str],
+        end_condition: str = "worker_terminated",
+    ) -> None:
+        """Close simulations and finetunes linked to the given tasks."""
         if not task_ids:
             return
-        Simulation = _get_simulation_model()
-        # Find task_id values for these task records
+        # Resolve task record UUIDs → celery task_id strings
         rows = await self.session.execute(
-            select(TaskRecord.task_id).where(TaskRecord.id.in_(task_ids))
+            select(TaskRecord.task_id)
+            .where(TaskRecord.id.in_(task_ids))
         )
         celery_task_ids = [r[0] for r in rows.all() if r[0]]
-        if celery_task_ids:
-            await self.session.execute(
-                update(Simulation)
-                .where(
-                    Simulation.task_id.in_(celery_task_ids),
-                    Simulation.ended_at.is_(None),
-                )
-                .values(ended_at=datetime.now(UTC))
+        if not celery_task_ids:
+            return
+
+        now = datetime.now(UTC)
+
+        # Close simulations
+        sim_model = _get_simulation_model()
+        await self.session.execute(
+            update(sim_model)
+            .where(
+                sim_model.task_id.in_(celery_task_ids),
+                sim_model.ended_at.is_(None),
             )
+            .values(ended_at=now)
+        )
+
+        # Close finetunes
+        from gorm_ai.database.models.fine_tune import FineTune
+        await self.session.execute(
+            update(FineTune)
+            .where(
+                FineTune.task_id.in_(celery_task_ids),
+                FineTune.end_condition.is_(None),
+            )
+            .values(end_condition=end_condition, ended_at=now)
+        )
 
     async def mark_stale_tasks_failed(self, stale_seconds: int = 0) -> int:
         """Mark all 'started' tasks as failed.
@@ -273,8 +307,43 @@ class TaskService:
             .returning(TaskRecord.id)
         )
         rows = result.all()
-        await self._close_simulations_for_tasks([r[0] for r in rows])
+        await self._close_associated_records_for_tasks([r[0] for r in rows])
         return len(rows)
+
+    async def get_active_worker_names(self) -> set[str]:
+        """Return short worker names that have at least one running task."""
+        result = await self.session.execute(
+            select(TaskRecord.worker_name)
+            .where(
+                TaskRecord.status.in_(("started", "pending")),
+                TaskRecord.worker_name.isnot(None),
+            )
+            .distinct()
+        )
+        return {row[0] for row in result.all()}
+
+    async def get_recently_active_worker_names(
+        self,
+        seconds: int = 1800,
+    ) -> set[str]:
+        """Return worker names with started tasks updated recently.
+
+        A task whose ``updated_at`` is within *seconds* was making
+        progress recently (via progress callbacks).  Even if the worker
+        is temporarily unreachable (e.g. instance syncing), it is very
+        likely still alive and should not be considered orphaned.
+        """
+        cutoff = datetime.now(UTC) - timedelta(seconds=seconds)
+        result = await self.session.execute(
+            select(TaskRecord.worker_name)
+            .where(
+                TaskRecord.status == "started",
+                TaskRecord.worker_name.isnot(None),
+                TaskRecord.updated_at >= cutoff,
+            )
+            .distinct()
+        )
+        return {row[0] for row in result.all()}
 
     async def mark_orphaned_worker_tasks_failed(
         self,
@@ -319,7 +388,7 @@ class TaskService:
             .returning(TaskRecord.id)
         )
         rows = result.all()
-        await self._close_simulations_for_tasks([r[0] for r in rows])
+        await self._close_associated_records_for_tasks([r[0] for r in rows])
         return len(rows)
 
     async def mark_worker_tasks_failed(self, worker_name: str) -> int:
@@ -344,7 +413,7 @@ class TaskService:
             .returning(TaskRecord.id)
         )
         rows = result.all()
-        await self._close_simulations_for_tasks([r[0] for r in rows])
+        await self._close_associated_records_for_tasks([r[0] for r in rows])
         return len(rows)
 
     async def get_active_from_db(self) -> list[CeleryWorkerTask]:

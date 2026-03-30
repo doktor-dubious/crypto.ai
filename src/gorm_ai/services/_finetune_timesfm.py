@@ -197,10 +197,15 @@ def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
     ]
     logger.info("Syncing checkpoint to %s ...", sync_target)
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+        subprocess.run(
+            cmd, check=True, capture_output=True, text=True,
+            timeout=1200,
+        )
         logger.info("Sync complete.")
     except FileNotFoundError:
-        logger.warning("rsync not found — install rsync to enable checkpoint sync")
+        logger.warning(
+            "rsync not found — install rsync to enable checkpoint sync",
+        )
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
         logger.warning("Sync failed: %s", e)
 
@@ -246,6 +251,7 @@ async def run_finetune(
     processed = 0
     pathological = 0
     idx = 0
+    loop = asyncio.get_event_loop()
 
     for outlet_id, values in outlet_series.items():
         idx += 1
@@ -255,7 +261,9 @@ async def run_finetune(
             logger.info("Graceful stop requested after %d/%d outlets", processed, total)
             if sync_target and processed > 0:
                 logger.info("  Final sync before stop...")
-                _sync_checkpoint(output_dir, sync_target)
+                await loop.run_in_executor(
+                    None, _sync_checkpoint, output_dir, sync_target,
+                )
             return {"stopped": True, "finetuned": processed, "pathological": pathological}
 
         series = np.array(values, dtype=np.float32)
@@ -275,7 +283,6 @@ async def run_finetune(
             len(series),
             f" — {until_sync} outlet(s) until next sync" if sync_target else "",
         )
-        loop = asyncio.get_event_loop()
         trained = await loop.run_in_executor(
             None,
             lambda: _train_outlet(
@@ -295,7 +302,9 @@ async def run_finetune(
                     "  Syncing checkpoint (%d outlets trained)...",
                     processed,
                 )
-                _sync_checkpoint(output_dir, sync_target)
+                await loop.run_in_executor(
+                    None, _sync_checkpoint, output_dir, sync_target,
+                )
         else:
             pathological += 1
 
@@ -308,6 +317,8 @@ async def run_finetune(
 
     if sync_target and processed > 0:
         logger.info("  Final sync after completion...")
-        _sync_checkpoint(output_dir, sync_target)
+        await loop.run_in_executor(
+            None, _sync_checkpoint, output_dir, sync_target,
+        )
     logger.info("TimesFM fine-tuning done: %d/%d outlets trained", processed, total)
     return {"stopped": False, "finetuned": processed, "pathological": pathological}

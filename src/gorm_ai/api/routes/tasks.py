@@ -104,6 +104,15 @@ async def ping_workers(service: TaskServiceDep) -> WorkerPingResponse:
         if container_up:
             alive_workers.add(local_name)
 
+    # DB-based fallback: workers with recently-updated started tasks are
+    # likely still alive even if temporarily unreachable (e.g. Vast.ai
+    # instance syncing).  The progress callbacks update `updated_at`, so
+    # a recent timestamp is strong evidence the worker is running.
+    db_active = await service.get_recently_active_worker_names(
+        seconds=1800,
+    )
+    alive_workers.update(db_active)
+
     if not alive_workers:
         # No workers alive at all — mark everything started as failed.
         await service.mark_stale_tasks_failed(stale_seconds=0)
@@ -189,9 +198,14 @@ class WorkerInfoResponse(BaseModel):
 
 
 @router.get("/workers/list", response_model=list[WorkerInfoResponse])
-async def list_workers() -> list[WorkerInfoResponse]:
+async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
     """Return registered Celery workers with their supported models."""
     from gorm_ai.tasks.celery_app import WORKER_MODELS_PREFIX, WORKER_REGISTRY_PREFIX, celery_app
+
+    # Query workers that have active tasks — these are definitely alive even
+    # if their Redis registry key expired (e.g. remote solo-pool workers
+    # whose TTL lapsed during a long-running task).
+    active_worker_names = await service.get_active_worker_names()
 
     def _get_workers() -> list[WorkerInfoResponse]:
         import redis
@@ -211,6 +225,13 @@ async def list_workers() -> list[WorkerInfoResponse]:
                 registered.update(ping_result.keys())
         except Exception:
             pass
+
+        # Also include workers with active tasks in the database — they are
+        # definitely running even if Redis keys expired or ping timed out.
+        # These are short names (e.g. "RunPod"), so synthesise the full
+        # hostname format used by the rest of this function.
+        for wn in active_worker_names:
+            registered.add(f"celery@{wn}")
 
         # Build worker info with models from Redis
         result = []

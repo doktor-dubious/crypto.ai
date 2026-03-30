@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
+import { useSearchParams } from "next/navigation"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Plus, X, Info,
 } from "lucide-react"
@@ -247,13 +248,14 @@ export default function OutletsListPage() {
   const { activeCustomer } = useCustomer()
   const { isLocked } = useLock()
   const queryClient = useQueryClient()
+  const searchParams = useSearchParams()
   const cid = activeCustomer?.id ?? ""
 
   // ── Table state (persisted)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(loadJson<string[]>(cid, "checked", [])))
   const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadJson<string[]>(cid, "starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
-  const [search, setSearch] = useState("")
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "")
   const [sortField, setSortField] = useState<SortField>("name")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)

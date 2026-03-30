@@ -14,6 +14,7 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/customers/new": "customersNew",
   "/outlets": "outletsList",
   "/sales": "sales",
+  "/sales/analyse": "salesAnalyse",
   "/predictions": "predictions",
   "/predictions/new": "predictionsNew",
   "/predictions/strategies": "predictionsStrategies",

@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from gorm_ai.api.routes import (
+    analysis,
     configuration,
     currencies,
     customers,
@@ -30,6 +31,7 @@ from gorm_ai.api.routes import (
 
 api_router = APIRouter()
 
+api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
 api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-tunes"])
 api_router.include_router(
