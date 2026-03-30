@@ -156,6 +156,12 @@ export const customersApi = {
 
   get: (id: string) => apiFetch<CustomerResponse>(`/customers/${id}`),
 
+  create: (data: { name: string; description?: string | null; notes?: string | null }) =>
+    apiFetch<CustomerResponse>(`/customers`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   update: (id: string, data: CustomerUpdate) =>
     apiFetch<CustomerResponse>(`/customers/${id}`, {
       method: "PATCH",
@@ -164,6 +170,9 @@ export const customersApi = {
 
   opened: (id: string) =>
     apiFetch<CustomerResponse>(`/customers/${id}/opened`, { method: "POST" }),
+
+  delete: (id: string) =>
+    apiFetch<void>(`/customers/${id}`, { method: "DELETE" }),
 }
 
 export interface CompletedPredictionResponse {

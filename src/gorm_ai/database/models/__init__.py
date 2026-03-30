@@ -11,6 +11,7 @@ from gorm_ai.database.models.customer import Customer
 from gorm_ai.database.models.finetune_examination import FinetuneExamination
 from gorm_ai.database.models.finetune_progress import FinetuneProgress
 from gorm_ai.database.models.fine_tune import FineTune
+from gorm_ai.database.models.finetune_log import FinetuneLog
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
 from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
@@ -46,6 +47,7 @@ __all__ = [
     "FinetuneExamination",
     "FinetuneProgress",
     "FineTune",
+    "FinetuneLog",
     "ImportTemplate",
     "ImportTemplateElement",
     "CustomerConfiguration",

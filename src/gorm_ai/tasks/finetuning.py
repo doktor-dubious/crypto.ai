@@ -53,6 +53,13 @@ async def _run_finetune_async(
 
     fine_tune_id = request_data.get("fine_tune_id")
 
+    # Point the DB log handler at this run so log lines are persisted
+    from gorm_ai.logging_db import get_finetune_db_handler
+
+    db_log_handler = get_finetune_db_handler()
+    if db_log_handler:
+        db_log_handler.set_fine_tune_id(fine_tune_id)
+
     try:
         from gorm_ai.services.finetune import FinetuneService
         from gorm_ai.tasks.celery_app import clear_stop_flag, is_stop_requested
@@ -116,3 +123,6 @@ async def _run_finetune_async(
                 await ft_svc.complete(fine_tune_id, "error")
             await session.commit()
         raise
+    finally:
+        if db_log_handler:
+            db_log_handler.set_fine_tune_id(None)

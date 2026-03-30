@@ -11,6 +11,7 @@ import { useLock } from "@/components/providers/lock-provider"
 const ROUTE_TITLE_MAP: Record<string, string> = {
   "/": "home",
   "/customers": "customers",
+  "/customers/new": "customersNew",
   "/outlets": "outletsList",
   "/sales": "sales",
   "/predictions": "predictions",

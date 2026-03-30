@@ -82,8 +82,16 @@ function getInitials(name: string): string {
 
 const NAV_ITEMS = [
   { href: "/", icon: Home, labelKey: "home" },
-  { href: "/customers", icon: Users, labelKey: "customers" },
-  { href: "/sales", icon: CreditCard, labelKey: "sales" },
+] as const
+
+const CUSTOMER_SUBNAV_ITEMS = [
+  { href: "/customers/new", icon: Plus, labelKey: "customersNew" },
+  { href: "/customers", icon: List, labelKey: "customersList" },
+] as const
+
+const SALES_SUBNAV_ITEMS = [
+  { href: "/sales", icon: CreditCard, labelKey: "salesList" },
+  { href: "/sales/analyse", icon: LineChart, labelKey: "salesAnalyse" },
 ] as const
 
 const OUTLET_SUBNAV_ITEMS = [
@@ -386,16 +394,17 @@ export function AppSidebar() {
           </DropdownMenuTrigger>
 
           <DropdownMenuContent side="top" align="start" className="w-56 mb-1">
-            {/* Navigation */}
+            {/* Home */}
             {NAV_ITEMS.map((item) => (
               <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                 <item.icon className="h-4 w-4" />
                 {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
               </DropdownMenuItem>
             ))}
+
             <DropdownMenuSeparator />
 
-            {/* Predictions — New, Strategies, Completed | Analytics | Adjustments, Export Configuration */}
+            {/* Predictions */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Activity className="h-4 w-4" />
@@ -441,7 +450,41 @@ export function AppSidebar() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
-            {/* Outlets — moved below Simulations */}
+            <DropdownMenuSeparator />
+
+            {/* Customers */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Users className="h-4 w-4" />
+                {t("nav.customers")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {CUSTOMER_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* Sales */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <CreditCard className="h-4 w-4" />
+                {t("nav.sales")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {SALES_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* Outlets */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <ShoppingCart className="h-4 w-4" />
@@ -491,45 +534,6 @@ export function AppSidebar() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
-            {/* Statistics */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <PieChart className="h-4 w-4" />
-                {t("nav.statistics")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {STATISTICS_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* AI Models */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Brain className="h-4 w-4" />
-                {t("nav.aiModels")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {AI_MODELS_SUBNAV_TOP.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                {AI_MODELS_SUBNAV_BOT.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
             <DropdownMenuSeparator />
 
             {/* Import */}
@@ -566,6 +570,24 @@ export function AppSidebar() {
 
             <DropdownMenuSeparator />
 
+            {/* Statistics */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <PieChart className="h-4 w-4" />
+                {t("nav.statistics")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {STATISTICS_SUBNAV_ITEMS.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            <DropdownMenuSeparator />
+
             {/* Configuration */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
@@ -581,6 +603,29 @@ export function AppSidebar() {
                 ))}
                 <DropdownMenuSeparator />
                 {CONFIG_SUBNAV_BOT.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* AI Models */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Brain className="h-4 w-4" />
+                {t("nav.aiModels")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {AI_MODELS_SUBNAV_TOP.map((item) => (
+                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                    <item.icon className="h-4 w-4" />
+                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {AI_MODELS_SUBNAV_BOT.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
@@ -605,16 +650,17 @@ export function AppSidebar() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
-            <DropdownMenuSeparator />
-
-            {/* Theme + logout */}
+            {/* Theme */}
             <DropdownMenuItem asChild>
               <div className="flex items-center justify-between cursor-default">
                 <span className="text-sm">Theme</span>
                 <ThemeToggle className="h-6 w-6" />
               </div>
             </DropdownMenuItem>
+
             <DropdownMenuSeparator />
+
+            {/* Log out */}
             <DropdownMenuItem
               className="text-[var(--destructive)] focus:text-[var(--destructive)]"
               onClick={handleSignOut}

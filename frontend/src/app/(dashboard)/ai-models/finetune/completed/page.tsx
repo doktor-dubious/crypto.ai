@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, ArrowUpDown, ChevronDown,
+  Search, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Focus,
 } from "lucide-react"
 import { format, formatDistanceStrict } from "date-fns"
 import { Button } from "@/components/ui/button"
@@ -17,11 +17,15 @@ import {
 } from "@/components/ui/dialog"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
+import {
+  Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
+  PaginationLink, PaginationNext, PaginationPrevious,
+} from "@/components/ui/pagination"
 import { fineTunesApi, type FineTuneResponse } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -65,12 +69,24 @@ function getDuration(item: FineTuneResponse): string {
   return formatDistanceStrict(start, end)
 }
 
+// ─── Pagination helper ──────────────────────────────────────────────────────
+
+function buildPaginationPages(current: number, total: number): (number | "ellipsis")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | "ellipsis")[] = [1]
+  if (current > 3) pages.push("ellipsis")
+  for (let p = Math.max(2, current - 1); p <= Math.min(total - 1, current + 1); p++) pages.push(p)
+  if (current < total - 2) pages.push("ellipsis")
+  pages.push(total)
+  return pages
+}
+
 // ─── Sort types ──────────────────────────────────────────────────────────────
 
-type SortField = "name" | "engine_name" | "end_condition" | "outlet_group_name" | "finetuned_outlets" | "pathological_outlets" | "worker_name" | "duration" | "created_at"
+type SortField = "name" | "engine_name" | "end_condition" | "outlet_group_name" | "finetuned_outlets" | "pathological_outlets" | "worker_name" | "duration" | "created_at" | "starred"
 type SortDir = "asc" | "desc"
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 10
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
@@ -129,8 +145,8 @@ export default function FineTuneCompletedPage() {
     })
   }
 
-  // ── Pagination
-  const [page, setPage] = useState(0)
+  // ── Pagination (1-based)
+  const [currentPage, setCurrentPage] = useState(1)
 
   // ── Filtered & sorted items
   const filtered = useMemo(() => {
@@ -166,29 +182,22 @@ export default function FineTuneCompletedPage() {
           break
         }
         case "created_at": cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime(); break
+        case "starred": cmp = (starred.has(a.id) ? 1 : 0) - (starred.has(b.id) ? 1 : 0); break
       }
       return sortDir === "asc" ? cmp : -cmp
     })
     return result
-  }, [items, search, sortField, sortDir, showOnlySelected, selectedIds])
+  }, [items, search, sortField, sortDir, showOnlySelected, selectedIds, starred])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  const safePage = Math.min(currentPage, totalPages)
+  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   // Reset page when search changes
   const handleSearchChange = useCallback((val: string) => {
     setSearch(val)
-    setPage(0)
+    setCurrentPage(1)
   }, [])
-
-  // ── Select helpers
-  function selectAll() {
-    setSelectedIds(new Set(filtered.map((i) => i.id)))
-  }
-
-  function selectStarred() {
-    setSelectedIds(new Set(filtered.filter((i) => starred.has(i.id)).map((i) => i.id)))
-  }
 
   // ── Check all on current page
   const allPageSelected = paged.length > 0 && paged.every((i) => selectedIds.has(i.id))
@@ -208,6 +217,12 @@ export default function FineTuneCompletedPage() {
         return next
       })
     }
+  }
+
+  // ── Right-click handler
+  function handleRowRightClick(e: React.MouseEvent, id: string) {
+    e.preventDefault()
+    toggleStar(id)
   }
 
   // ── Delete
@@ -233,7 +248,6 @@ export default function FineTuneCompletedPage() {
   })
 
   function handleDelete() {
-    // Only delete items that are not currently running
     const deletable = [...selectedIds].filter((id) => {
       const item = items.find((i) => i.id === id)
       return item && item.end_condition !== null
@@ -243,7 +257,6 @@ export default function FineTuneCompletedPage() {
     }
   }
 
-  // Can any selected items be deleted?
   const canDeleteSelected = useMemo(() => {
     return [...selectedIds].some((id) => {
       const item = items.find((i) => i.id === id)
@@ -253,99 +266,71 @@ export default function FineTuneCompletedPage() {
 
   // ── Sortable header helper
   function SortHeader({ field, label, className }: { field: SortField; label: string; className?: string }) {
+    const active = sortField === field
     return (
       <TableHead className={cn("cursor-pointer select-none", className)} onClick={() => toggleSort(field)}>
         <span className="inline-flex items-center gap-1">
           {label}
-          <ArrowUpDown className={cn("h-3 w-3", sortField === field ? "opacity-100" : "opacity-30")} />
+          {active ? (
+            sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ArrowUpDown className="h-3 w-3 opacity-40" />
+          )}
         </span>
       </TableHead>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4 px-6 py-6 h-full">
+    <div className="flex flex-col">
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-3">
-        {/* Search */}
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+      <div className="flex items-center justify-between px-4 py-2 shrink-0 bg-background">
+        <div />
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder={t("searchPlaceholder")}
-            className="h-8 pl-8 text-xs"
+            className="h-7 pl-8 w-52 text-s"
           />
         </div>
-
-        {/* Select dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">
-              <ChevronDown className="h-3 w-3" />
-              {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Select"}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={selectAll}>{t("selectAll")}</DropdownMenuItem>
-            <DropdownMenuItem onClick={selectStarred}>{t("selectStarred")}</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setSelectedIds(new Set())}>Clear</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Action bar when items selected */}
-        {selectedIds.size > 0 && (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => setShowOnlySelected(!showOnlySelected)}
-            >
-              {showOnlySelected ? t("showAll") : t("showOnlySelected")}
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8 text-[var(--destructive)]"
-              disabled={!canDeleteSelected}
-              onClick={() => { setDeleteDialogOpen(true); setDeleteUnderstood(false); setDeleteConfirmText("") }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </>
-        )}
-
-        {/* Spacer + pagination */}
-        <div className="flex-1" />
-        {totalPages > 1 && (
-          <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Prev</Button>
-            <span>{page + 1} / {totalPages}</span>
-            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        )}
       </div>
 
       {/* ── Table ── */}
       {filtered.length === 0 && !isLoading ? (
-        <div className="flex flex-col items-center justify-center gap-2 py-20 text-[var(--muted-foreground)]">
+        <div className="flex flex-col items-center justify-center gap-2 py-20 text-muted-foreground">
           <p className="text-sm font-medium">{t("noResults")}</p>
           <p className="text-xs">{t("noResultsHint")}</p>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto border rounded-md">
+        <div>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
-                    onCheckedChange={togglePageSelect}
-                  />
+                <TableHead className="w-12 pl-4">
+                  <div className="flex items-center gap-0.5">
+                    <Checkbox
+                      checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                      onCheckedChange={togglePageSelect}
+                    />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="h-5 w-4 flex items-center justify-center hover:text-foreground transition-colors">
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuItem onClick={() => setSelectedIds(new Set(filtered.map((i) => i.id)))}>
+                          {t("selectAll")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedIds(new Set(filtered.filter((i) => starred.has(i.id)).map((i) => i.id)))}>
+                          {t("selectStarred")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </TableHead>
-                <TableHead className="w-8" />
                 <SortHeader field="name" label={t("colName")} />
                 <SortHeader field="engine_name" label={t("colEngine")} />
                 <SortHeader field="end_condition" label={t("colStatus")} />
@@ -355,6 +340,17 @@ export default function FineTuneCompletedPage() {
                 <SortHeader field="worker_name" label={t("colWorker")} />
                 <SortHeader field="duration" label={t("colDuration")} />
                 <SortHeader field="created_at" label={t("colCreated")} />
+                <TableHead className="w-10 text-center">
+                  <button
+                    onClick={() => toggleSort("starred")}
+                    className="flex items-center gap-1 font-medium hover:text-foreground transition-colors"
+                  >
+                    <Star className={cn("h-4 w-4", sortField === "starred" ? "" : "opacity-40")} />
+                    {sortField === "starred" && (
+                      sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+                    )}
+                  </button>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -366,17 +362,10 @@ export default function FineTuneCompletedPage() {
                   <TableRow
                     key={item.id}
                     className={cn(isSelected && "bg-[var(--muted)]/50")}
+                    onContextMenu={(e) => handleRowRightClick(e, item.id)}
                   >
-                    <TableCell>
+                    <TableCell className="pl-4">
                       <Checkbox checked={isSelected} onCheckedChange={() => toggleSelected(item.id)} />
-                    </TableCell>
-                    <TableCell>
-                      <button
-                        onClick={() => toggleStar(item.id)}
-                        className="text-[var(--muted-foreground)] hover:text-yellow-500 transition-colors cursor-pointer"
-                      >
-                        <Star className={cn("h-3.5 w-3.5", isStarred && "fill-yellow-500 text-yellow-500")} />
-                      </button>
                     </TableCell>
                     <TableCell className="font-medium text-xs max-w-[200px] truncate">{item.name}</TableCell>
                     <TableCell className="text-xs">{item.engine_name ?? "—"}</TableCell>
@@ -393,11 +382,103 @@ export default function FineTuneCompletedPage() {
                     <TableCell className="text-xs tabular-nums">
                       {format(new Date(item.created_at), "MMM d, yyyy HH:mm")}
                     </TableCell>
+                    <TableCell className="text-center">
+                      <button
+                        onClick={() => toggleStar(item.id)}
+                        className="hover:text-amber-400 transition-colors cursor-pointer"
+                        aria-label="Toggle star"
+                      >
+                        <Star
+                          className={cn(
+                            "h-4 w-4",
+                            isStarred
+                              ? "fill-amber-400 text-amber-400"
+                              : "text-muted-foreground"
+                          )}
+                        />
+                      </button>
+                    </TableCell>
                   </TableRow>
                 )
               })}
             </TableBody>
           </Table>
+        </div>
+      )}
+
+      {/* ── Bottom: pagination + selection bar ── */}
+      {filtered.length > 0 && (
+        <div className="flex items-center justify-between px-4 py-1.5 border-t">
+          <span className="text-s text-muted-foreground">
+            {t("showing", {
+              from: (safePage - 1) * PAGE_SIZE + 1,
+              to: Math.min(safePage * PAGE_SIZE, filtered.length),
+              total: filtered.length,
+            })}
+          </span>
+          {totalPages > 1 && (
+            <Pagination className="w-auto mx-0">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                  />
+                </PaginationItem>
+                {buildPaginationPages(safePage, totalPages).map((p, i) =>
+                  p === "ellipsis" ? (
+                    <PaginationItem key={`e${i}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        isActive={safePage === p}
+                        onClick={() => setCurrentPage(p)}
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )
+                )}
+                <PaginationItem>
+                  <PaginationNext
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30">
+          <span className="text-xs text-muted-foreground">
+            {t("selectedCount", { selected: selectedIds.size, total: filtered.length })}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 cursor-pointer"
+              onClick={() => setShowOnlySelected((v) => !v)}
+              title={showOnlySelected ? "Show all" : "Show only selected"}
+            >
+              <Focus className={cn("h-4 w-4", showOnlySelected && "text-primary")} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-destructive hover:text-destructive cursor-pointer"
+              disabled={!canDeleteSelected}
+              onClick={() => { setDeleteDialogOpen(true); setDeleteUnderstood(false); setDeleteConfirmText("") }}
+              title="Delete selected"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 

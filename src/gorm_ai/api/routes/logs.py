@@ -7,8 +7,11 @@ import re
 from pathlib import Path
 
 import docker
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gorm_ai.database.connection import get_session
 
 router = APIRouter()
 
@@ -128,6 +131,59 @@ def _get_docker_logs(service: str, tail: int = 10000) -> list[str]:
         return [f"Error reading logs for {service}: {exc}"]
 
 
+async def _get_finetune_db_logs(
+    session: AsyncSession,
+    page: int,
+    page_size: int,
+    search: str,
+    fine_tune_id: str | None,
+) -> LogResponse:
+    """Read finetune logs from the database."""
+    from sqlalchemy import func, select
+
+    from gorm_ai.database.models.finetune_log import FinetuneLog
+
+    query = select(FinetuneLog).where(FinetuneLog.active.is_(True))
+    count_query = select(func.count()).select_from(FinetuneLog).where(FinetuneLog.active.is_(True))
+
+    if fine_tune_id:
+        query = query.where(FinetuneLog.fine_tune_id == fine_tune_id)
+        count_query = count_query.where(FinetuneLog.fine_tune_id == fine_tune_id)
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(FinetuneLog.message.ilike(pattern))
+        count_query = count_query.where(FinetuneLog.message.ilike(pattern))
+
+    total = (await session.execute(count_query)).scalar_one()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    # Newest first
+    query = (
+        query
+        .order_by(FinetuneLog.logged_at.desc(), FinetuneLog.seq.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await session.execute(query)).scalars().all()
+
+    entries = [
+        LogEntry(
+            timestamp=row.logged_at.strftime("%Y.%m.%d %H:%M:%S") if row.logged_at else "",
+            message=f"[{row.level:<9s}][{row.worker_name or 'local'}] {row.message}",
+        )
+        for row in rows
+    ]
+
+    return LogResponse(
+        entries=entries,
+        total_lines=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
 @router.get("", response_model=LogResponse)
 async def get_logs(
     source: str = Query(
@@ -136,8 +192,20 @@ async def get_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=1000),
     search: str = Query("", description="Filter lines containing this text"),
+    fine_tune_id: str = Query(
+        "", description="Filter by fine-tune run ID",
+    ),
+    session: AsyncSession = Depends(get_session),
 ) -> LogResponse:
     """Retrieve paginated, parsed log entries, newest first."""
+
+    # Finetune logs come from the database
+    if source == "finetuning":
+        return await _get_finetune_db_logs(
+            session, page, page_size, search,
+            fine_tune_id=fine_tune_id or None,
+        )
+
     if source in FILE_LOG_MAP:
         raw_lines = await asyncio.to_thread(_read_file_lines, FILE_LOG_MAP[source])
     elif source in DOCKER_SERVICE_MAP:

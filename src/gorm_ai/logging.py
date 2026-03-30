@@ -128,6 +128,13 @@ def configure_logging(
     )
     finetune_handler.setFormatter(finetune_formatter)
 
+    # Database-backed handler for finetune logs (survives remote workers)
+    from gorm_ai.logging_db import FinetuneDbHandler
+
+    finetune_db_handler = FinetuneDbHandler()
+    # Use the same raw formatter so DB entries match the file log style
+    finetune_db_handler.setFormatter(finetune_formatter)
+
     # Only capture finetuning-related loggers
     for ft_logger_name in (
         "gorm_ai.services._finetune_timesfm",
@@ -138,6 +145,7 @@ def configure_logging(
     ):
         ft_logger = logging.getLogger(ft_logger_name)
         ft_logger.addHandler(finetune_handler)
+        ft_logger.addHandler(finetune_db_handler)
 
     # Attach all handlers to the root logger
     root = logging.getLogger()
