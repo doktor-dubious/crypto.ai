@@ -23,6 +23,7 @@ class MissingDataGap(BaseModel):
     ext_id: str
     missing_dates: list[date]
     gap_count: int
+    expected_count: int
 
 
 class ZeroSalesAnomaly(BaseModel):
@@ -31,6 +32,7 @@ class ZeroSalesAnomaly(BaseModel):
     ext_id: str
     dates: list[date]
     count: int
+    total_sales_days: int
 
 
 class FieldDiscrepancy(BaseModel):

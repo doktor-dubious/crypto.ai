@@ -294,6 +294,7 @@ export default function AIModelsPage() {
         finetuned_model_path: selectedModel.finetuned_model_path,
         finetune_sync_every: selectedModel.finetune_sync_every,
         finetune_sync_target: selectedModel.finetune_sync_target,
+        finetune_allow_new_checkpoint: selectedModel.finetune_allow_new_checkpoint,
       })
     }
   }, [selectedModel?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -312,7 +313,8 @@ export default function AIModelsPage() {
       draft.notes !== selectedModel.notes ||
       draft.finetuned_model_path !== selectedModel.finetuned_model_path ||
       draft.finetune_sync_every !== selectedModel.finetune_sync_every ||
-      draft.finetune_sync_target !== selectedModel.finetune_sync_target
+      draft.finetune_sync_target !== selectedModel.finetune_sync_target ||
+      draft.finetune_allow_new_checkpoint !== selectedModel.finetune_allow_new_checkpoint
     )
   }, [draft, selectedModel])
 
@@ -325,6 +327,7 @@ export default function AIModelsPage() {
       finetuned_model_path: selectedModel.finetuned_model_path,
       finetune_sync_every: selectedModel.finetune_sync_every,
       finetune_sync_target: selectedModel.finetune_sync_target,
+      finetune_allow_new_checkpoint: selectedModel.finetune_allow_new_checkpoint,
     })
   }
 
@@ -924,6 +927,26 @@ export default function AIModelsPage() {
                             onChange={(e) => setDraft((d) => ({ ...d, finetune_sync_target: e.target.value || null }))}
                             className="h-9 text-xs"
                           />
+                        </div>
+                        <div className="flex items-start gap-2 pt-1">
+                          <Checkbox
+                            checked={draft.finetune_allow_new_checkpoint ?? false}
+                            onCheckedChange={(v) => setDraft((d) => ({ ...d, finetune_allow_new_checkpoint: !!v }))}
+                            className="mt-0.5"
+                          />
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1">
+                              <label className="text-xs font-medium text-muted-foreground">{t("finetuneAllowNewCheckpoint")}</label>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs text-xs">
+                                  {t("finetuneAllowNewCheckpointInfo")}
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
                         </div>
                       </div>
 

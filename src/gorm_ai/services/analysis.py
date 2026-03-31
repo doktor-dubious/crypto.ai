@@ -159,6 +159,7 @@ class AnalysisService:
                     missing_data.append({
                         "outlet_id": oid, "outlet_name": name, "ext_id": ext_id,
                         "missing_dates": missing, "gap_count": len(missing),
+                        "expected_count": len(expected),
                     })
 
             # Zero-sales on open days (skip low-volume outlets)
@@ -174,6 +175,7 @@ class AnalysisService:
                             "outlet_id": oid, "outlet_name": name,
                             "ext_id": ext_id,
                             "dates": zero_dates, "count": len(zero_dates),
+                            "total_sales_days": len(sales_rows),
                         })
 
             # Field discrepancies

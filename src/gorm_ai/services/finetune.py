@@ -254,6 +254,7 @@ class FinetuneService:
             should_stop=should_stop,
             sane_check_epochs=engine.finetune_sane_epochs,
             max_sane_loss=engine.finetune_max_mae,
+            allow_new_checkpoint=engine.finetune_allow_new_checkpoint,
         )
 
         # Handle both old bool returns and new dict returns

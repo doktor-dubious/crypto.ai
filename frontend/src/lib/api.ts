@@ -318,6 +318,7 @@ export interface PredictionEngineResponse {
   finetune_sync_target: string | null
   finetune_sane_epochs: number | null
   finetune_max_mae: number | null
+  finetune_allow_new_checkpoint: boolean
 }
 
 export interface PredictionEngineCreate {
@@ -336,6 +337,7 @@ export interface PredictionEngineUpdate {
   finetune_sync_target?: string | null
   finetune_sane_epochs?: number | null
   finetune_max_mae?: number | null
+  finetune_allow_new_checkpoint?: boolean
 }
 
 export interface PredictionEngineParameterResponse {
@@ -910,6 +912,7 @@ export interface MissingDataGap {
   ext_id: string
   missing_dates: string[]
   gap_count: number
+  expected_count: number
 }
 
 export interface ZeroSalesAnomaly {
@@ -918,6 +921,7 @@ export interface ZeroSalesAnomaly {
   ext_id: string
   dates: string[]
   count: number
+  total_sales_days: number
 }
 
 export interface FieldDiscrepancy {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Info } from "lucide-react"
@@ -11,10 +11,13 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog"
+import {
   Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
-import { analysisApi } from "@/lib/api"
+import { analysisApi, type MissingDataGap, type ZeroSalesAnomaly } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 interface Props {
@@ -45,6 +48,8 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
   const [zeroPage, setZeroPage] = useState(1)
   const [discPage, setDiscPage] = useState(1)
   const [shiftPage, setShiftPage] = useState(1)
+  const [selectedMissing, setSelectedMissing] = useState<MissingDataGap | null>(null)
+  const [selectedZero, setSelectedZero] = useState<ZeroSalesAnomaly | null>(null)
 
   if (isLoading) return <Loading t={t} />
   if (!data) return null
@@ -110,16 +115,70 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
                 </TableRow>
               }
             >
-              {paginate(data.missing_data, missingPage).map((row) => (
-                <TableRow key={row.outlet_id}>
-                  <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
-                  <TableCell className="text-xs">{row.outlet_name}</TableCell>
-                  <TableCell className="text-xs text-right tabular-nums">{row.gap_count}</TableCell>
-                </TableRow>
-              ))}
+              {paginate(data.missing_data, missingPage).map((row) => {
+                const pct = row.expected_count > 0
+                  ? (row.gap_count / row.expected_count * 100).toFixed(1)
+                  : "0"
+                return (
+                  <TableRow
+                    key={row.outlet_id}
+                    className="cursor-pointer"
+                    onClick={() => setSelectedMissing(row)}
+                  >
+                    <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
+                    <TableCell className="text-xs">{row.outlet_name}</TableCell>
+                    <TableCell className="text-xs text-right tabular-nums">
+                      {row.gap_count} <span className="text-[var(--muted-foreground)]">({pct}%)</span>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </PaginatedTable>
           )}
         </CollapsibleSection>
+
+        {/* Missing data detail modal */}
+        <Dialog open={!!selectedMissing} onOpenChange={(open) => { if (!open) setSelectedMissing(null) }}>
+          <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-base">{selectedMissing?.outlet_name}</DialogTitle>
+              <DialogDescription className="font-mono text-xs">{selectedMissing?.ext_id}</DialogDescription>
+            </DialogHeader>
+            {selectedMissing && (
+              <div className="flex gap-6">
+                {/* Left: stats */}
+                <div className="flex flex-col gap-2 text-sm min-w-[140px]">
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("count")}</span>
+                    <div className="font-semibold tabular-nums">{selectedMissing.gap_count}</div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("missingPct")}</span>
+                    <div className="font-semibold tabular-nums">
+                      {selectedMissing.expected_count > 0
+                        ? (selectedMissing.gap_count / selectedMissing.expected_count * 100).toFixed(1)
+                        : "0"}%
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("expectedDates")}</span>
+                    <div className="font-semibold tabular-nums">{selectedMissing.expected_count}</div>
+                  </div>
+                </div>
+                {/* Vertical separator */}
+                <div className="w-px bg-[var(--border)]" />
+                {/* Right: timeline */}
+                <div className="flex-1 min-w-0">
+                  <MissingTimeline
+                    missingDates={selectedMissing.missing_dates}
+                    startDate={startDate}
+                    endDate={endDate}
+                  />
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <CollapsibleSection title={t("zeroSales")} desc={t("zeroSalesDesc")} count={data.zero_sales.length}>
           {data.zero_sales.length === 0 ? (
@@ -137,13 +196,24 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
                 </TableRow>
               }
             >
-              {paginate(data.zero_sales, zeroPage).map((row) => (
-                <TableRow key={row.outlet_id}>
-                  <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
-                  <TableCell className="text-xs">{row.outlet_name}</TableCell>
-                  <TableCell className="text-xs text-right tabular-nums">{row.count}</TableCell>
-                </TableRow>
-              ))}
+              {paginate(data.zero_sales, zeroPage).map((row) => {
+                const pct = row.total_sales_days > 0
+                  ? (row.count / row.total_sales_days * 100).toFixed(1)
+                  : "0"
+                return (
+                  <TableRow
+                    key={row.outlet_id}
+                    className="cursor-pointer"
+                    onClick={() => setSelectedZero(row)}
+                  >
+                    <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
+                    <TableCell className="text-xs">{row.outlet_name}</TableCell>
+                    <TableCell className="text-xs text-right tabular-nums">
+                      {row.count} <span className="text-[var(--muted-foreground)]">({pct}%)</span>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </PaginatedTable>
           )}
         </CollapsibleSection>
@@ -352,6 +422,80 @@ function PaginatedTable(
         </div>
       )}
     </>
+  )
+}
+
+function MissingTimeline(
+  { missingDates, startDate, endDate }: { missingDates: string[]; startDate: string; endDate: string },
+) {
+  const { months } = useMemo(() => {
+    const mSet = new Set(missingDates)
+    const start = new Date(startDate + "T00:00:00")
+    const end = new Date(endDate + "T00:00:00")
+    const ms: { label: string; days: { date: string; isMissing: boolean }[] }[] = []
+
+    const d = new Date(start)
+    let currentMonth = -1
+    let currentDays: { date: string; isMissing: boolean }[] = []
+    let currentLabel = ""
+
+    while (d <= end) {
+      const m = d.getMonth()
+      if (m !== currentMonth) {
+        if (currentDays.length > 0) {
+          ms.push({ label: currentLabel, days: currentDays })
+        }
+        currentMonth = m
+        currentLabel = d.toLocaleString("en", { month: "short", year: "2-digit" })
+        currentDays = []
+      }
+      const ds = d.toISOString().slice(0, 10)
+      currentDays.push({ date: ds, isMissing: mSet.has(ds) })
+      d.setDate(d.getDate() + 1)
+    }
+    if (currentDays.length > 0) {
+      ms.push({ label: currentLabel, days: currentDays })
+    }
+    return { months: ms }
+  }, [missingDates, startDate, endDate])
+
+  return (
+    <div className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto pr-1">
+      {months.map((month) => {
+        const hasMissing = month.days.some((d) => d.isMissing)
+        return (
+          <div key={month.label} className="flex items-center gap-2">
+            <span className="text-[10px] text-[var(--muted-foreground)] w-14 shrink-0 text-right">
+              {month.label}
+            </span>
+            <div className="flex gap-px flex-wrap">
+              {month.days.map((day) => (
+                <div
+                  key={day.date}
+                  className={cn(
+                    "w-2 h-2 rounded-[1px]",
+                    day.isMissing
+                      ? "bg-red-500"
+                      : "bg-[var(--accent)]/40",
+                  )}
+                  title={day.date}
+                />
+              ))}
+            </div>
+          </div>
+        )
+      })}
+      <div className="flex items-center gap-3 mt-1 text-[10px] text-[var(--muted-foreground)]">
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-[1px] bg-red-500" />
+          <span>Missing</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-[1px] bg-[var(--accent)]/40" />
+          <span>Present</span>
+        </div>
+      </div>
+    </div>
   )
 }
 

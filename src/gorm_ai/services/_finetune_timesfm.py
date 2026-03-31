@@ -188,6 +188,36 @@ def _save_checkpoint(model, output_dir):
                 shutil.rmtree(old, ignore_errors=True)
 
 
+def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
+    """Pull an existing checkpoint from the sync target before training.
+
+    This is the reverse of _sync_checkpoint: on a fresh remote worker the
+    local ``output_dir`` is empty, so we pull from the server to resume
+    from the last fine-tuned weights instead of starting from scratch.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    source = sync_target.rstrip("/") + "/"
+    dest = output_dir.rstrip("/") + "/"
+    cmd = [
+        "rsync", "-az",
+        "-e", "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30",
+        source, dest,
+    ]
+    logger.info("Pulling checkpoint from %s ...", sync_target)
+    try:
+        subprocess.run(
+            cmd, check=True, capture_output=True, text=True,
+            timeout=1200,
+        )
+        logger.info("Pull complete.")
+    except FileNotFoundError:
+        logger.warning(
+            "rsync not found — install rsync to enable checkpoint pull",
+        )
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        logger.warning("Pull failed (will start from base model): %s", e)
+
+
 def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
     source = output_dir.rstrip("/") + "/"
     cmd = [
@@ -226,6 +256,7 @@ async def run_finetune(
     should_stop: Callable[[], bool] | None = None,
     sane_check_epochs: int | None = None,
     max_sane_loss: float | None = None,
+    allow_new_checkpoint: bool = True,
 ) -> dict:
     """Fine-tune TimesFM on the provided outlet series.
 
@@ -233,10 +264,26 @@ async def run_finetune(
     """
     import timesfm
 
-    # Use local checkpoint only if it contains actual model files
+    # If we're on a remote worker with no local checkpoint, pull from the
+    # sync target so we resume from the last fine-tuned weights.
     has_local = os.path.isdir(output_dir) and any(
         f.endswith((".safetensors", ".bin")) for f in os.listdir(output_dir)
     )
+    if not has_local and sync_target:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _pull_checkpoint, output_dir, sync_target)
+        has_local = os.path.isdir(output_dir) and any(
+            f.endswith((".safetensors", ".bin")) for f in os.listdir(output_dir)
+        )
+
+    if not has_local and not allow_new_checkpoint:
+        raise RuntimeError(
+            "No existing checkpoint found and allow_new_checkpoint is disabled. "
+            "Cannot start fine-tuning from the base model — this would overwrite "
+            "a previously trained checkpoint on sync. Enable 'Allow New Checkpoint' "
+            "in the engine settings to start from scratch.",
+        )
+
     checkpoint = output_dir if has_local else "google/timesfm-2.5-200m-pytorch"
     model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(checkpoint)
     model.compile(timesfm.ForecastConfig(

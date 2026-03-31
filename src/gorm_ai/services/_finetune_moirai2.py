@@ -153,6 +153,28 @@ def _save_checkpoint(module, output_dir):
                 shutil.rmtree(old, ignore_errors=True)
 
 
+def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
+    """Pull an existing checkpoint from the sync target before training."""
+    os.makedirs(output_dir, exist_ok=True)
+    source = sync_target.rstrip("/") + "/"
+    dest = output_dir.rstrip("/") + "/"
+    cmd = [
+        "rsync", "-az",
+        "-e", "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30",
+        source, dest,
+    ]
+    logger.info("Pulling checkpoint from %s ...", sync_target)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=1200)
+        logger.info("Pull complete.")
+    except FileNotFoundError:
+        logger.warning(
+            "rsync not found — install rsync to enable checkpoint pull",
+        )
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        logger.warning("Pull failed (will start from base model): %s", e)
+
+
 def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
     source = output_dir.rstrip("/") + "/"
     cmd = [
@@ -182,6 +204,7 @@ async def run_finetune(
     sync_every: int = 5,
     early_stopping_patience: int = 0,
     should_stop: Callable[[], bool] | None = None,
+    allow_new_checkpoint: bool = True,
 ) -> bool:
     """Fine-tune MOIRAI-2 on the provided outlet series."""
     from uni2ts.model.moirai2 import Moirai2Module
@@ -194,7 +217,26 @@ async def run_finetune(
     if s.hf_token:
         os.environ.setdefault("HF_TOKEN", s.hf_token)
 
-    checkpoint = output_dir if os.path.isdir(output_dir) else "Salesforce/moirai-2.0-R-small"
+    # If we're on a remote worker with no local checkpoint, pull from the
+    # sync target so we resume from the last fine-tuned weights.
+    has_local = os.path.isdir(output_dir) and any(
+        f.endswith((".safetensors", ".bin")) for f in os.listdir(output_dir)
+    )
+    if not has_local and sync_target:
+        _pull_checkpoint(output_dir, sync_target)
+        has_local = os.path.isdir(output_dir) and any(
+            f.endswith((".safetensors", ".bin")) for f in os.listdir(output_dir)
+        )
+
+    if not has_local and not allow_new_checkpoint:
+        raise RuntimeError(
+            "No existing checkpoint found and allow_new_checkpoint is disabled. "
+            "Cannot start fine-tuning from the base model — this would overwrite "
+            "a previously trained checkpoint on sync. Enable 'Allow New Checkpoint' "
+            "in the engine settings to start from scratch.",
+        )
+
+    checkpoint = output_dir if has_local else "Salesforce/moirai-2.0-R-small"
     module = Moirai2Module.from_pretrained(checkpoint)
     logger.info("MOIRAI-2 loaded from '%s'", checkpoint)
 

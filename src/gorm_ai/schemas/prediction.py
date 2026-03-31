@@ -283,6 +283,7 @@ class PredictionEngineResponse(BaseModel):
     finetune_sync_target: str | None = None
     finetune_sane_epochs: int | None = None
     finetune_max_mae: float | None = None
+    finetune_allow_new_checkpoint: bool = False
 
 
 class PredictionEngineCreate(BaseModel):
@@ -305,6 +306,7 @@ class PredictionEngineUpdate(BaseModel):
     finetune_sync_target: str | None = None
     finetune_sane_epochs: int | None = None
     finetune_max_mae: float | None = None
+    finetune_allow_new_checkpoint: bool | None = None
 
 
 class PredictionStrategyResponse(BaseModel):
