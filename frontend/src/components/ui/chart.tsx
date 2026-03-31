@@ -137,7 +137,7 @@ function ChartTooltipContent({
                   style={{ "--color-bg": indicatorColor, "--color-border": indicatorColor } as React.CSSProperties}
                 />
               )}
-              <div className="flex flex-1 justify-between leading-none">
+              <div className={cn("flex flex-1 leading-none", hideIndicator ? "gap-1.5" : "justify-between")}>
                 <span className="text-muted-foreground">
                   {itemConfig?.label ?? item.name}
                 </span>

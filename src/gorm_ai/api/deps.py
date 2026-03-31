@@ -12,6 +12,7 @@ from gorm_ai.services.configuration import ConfigurationService
 from gorm_ai.services.customer import CustomerService
 from gorm_ai.services.customer_configuration import CustomerConfigurationService
 from gorm_ai.services.financial_date import FinancialDateService
+from gorm_ai.services.health_check import HealthCheckService
 from gorm_ai.services.import_template import ImportTemplateService
 from gorm_ai.services.outlet import OutletService
 from gorm_ai.services.outlet_group import OutletGroupService
@@ -22,6 +23,7 @@ from gorm_ai.services.prediction_adjustment import PredictionAdjustmentService
 from gorm_ai.services.prediction_engine import PredictionEngineService
 from gorm_ai.services.prediction_engine_parameter import PredictionEngineParameterService
 from gorm_ai.services.prediction_strategy import PredictionStrategyService
+from gorm_ai.services.price_history import PriceHistoryService
 from gorm_ai.services.sales import SalesService
 from gorm_ai.services.sales_filter import SalesFilterService
 from gorm_ai.services.simulation_filter import SimulationFilterService
@@ -42,6 +44,11 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 def get_analysis_service(session: DbSession) -> AnalysisService:
     """Get analysis service."""
     return AnalysisService(session)
+
+
+def get_health_check_service(session: DbSession) -> HealthCheckService:
+    """Get health check service."""
+    return HealthCheckService(session)
 
 
 def get_customer_service(session: DbSession) -> CustomerService:
@@ -109,6 +116,11 @@ def get_task_service(session: DbSession) -> TaskService:
     return TaskService(session)
 
 
+def get_price_history_service(session: DbSession) -> PriceHistoryService:
+    """Get price history service."""
+    return PriceHistoryService(session)
+
+
 def get_prediction_engine_service(session: DbSession) -> PredictionEngineService:
     """Get prediction engine service."""
     return PredictionEngineService(session)
@@ -141,6 +153,7 @@ def get_simulation_strategy_service(session: DbSession) -> SimulationStrategySer
 
 # Type aliases for service injection
 AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
+HealthCheckServiceDep = Annotated[HealthCheckService, Depends(get_health_check_service)]
 ConfigurationServiceDep = Annotated[ConfigurationService, Depends(get_configuration_service)]
 FinancialDateServiceDep = Annotated[FinancialDateService, Depends(get_financial_date_service)]
 CustomerConfigurationServiceDep = Annotated[
@@ -159,6 +172,7 @@ ImportTemplateServiceDep = Annotated[ImportTemplateService, Depends(get_import_t
 SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]
 SalesServiceDep = Annotated[SalesService, Depends(get_sales_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+PriceHistoryServiceDep = Annotated[PriceHistoryService, Depends(get_price_history_service)]
 PredictionEngineServiceDep = Annotated[PredictionEngineService, Depends(get_prediction_engine_service)]
 PredictionEngineParameterServiceDep = Annotated[
     PredictionEngineParameterService, Depends(get_prediction_engine_parameter_service)

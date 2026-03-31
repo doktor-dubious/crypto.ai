@@ -1149,6 +1149,93 @@ export const analysisApi = {
     }),
 }
 
+// ─── Health Check ────────────────────────────────────────────────────────────
+
+export interface HealthCheckDateRange {
+  earliest: string | null
+  latest: string | null
+}
+
+export interface CoverageMetrics {
+  total_outlets: number
+  outlets_with_sales: number
+  outlets_with_enough_history: number
+  coverage_ratio: number
+  min_history_threshold_days: number
+  date_range: HealthCheckDateRange
+  median_history_days: number | null
+  date_alignment_std_days: number | null
+  pct_records_with_delivered: number
+  pct_records_with_scan_sold: number
+  pct_records_with_net_sold: number
+  total_sales_records: number
+  days_since_last_sale: number | null
+}
+
+export interface DeadOutlet {
+  outlet_id: string
+  ext_id: string
+  name: string
+  last_sale_date: string
+  days_since_last_sale: number
+}
+
+export interface DuplicateGroup {
+  outlet_ids: string[]
+  names: string[]
+  addresses: (string | null)[]
+}
+
+export interface VolumeOutlet {
+  outlet_id: string
+  ext_id: string
+  name: string
+  total_sold: number
+  pct_of_total: number
+}
+
+export interface StructuralFlags {
+  dead_outlets: DeadOutlet[]
+  dead_outlet_count: number
+  duplicate_groups: DuplicateGroup[]
+  duplicate_group_count: number
+  volume_top10_pct: number
+  volume_top10_outlets: VolumeOutlet[]
+  delivery_config_coverage: number
+  outlets_with_delivery_config: number
+  outlets_without_delivery_config: number
+}
+
+export interface EngineReadiness {
+  engine: string
+  min_history: number
+  qualifying_outlets: number
+  total_outlets: number
+  pct_qualifying: number
+}
+
+export interface ViabilityMetrics {
+  engine_readiness: EngineReadiness[]
+  aggregate_cv: number | null
+  overall_status: string
+}
+
+export interface HealthCheckResponse {
+  customer_id: string
+  customer_name: string
+  coverage: CoverageMetrics
+  structural: StructuralFlags
+  viability: ViabilityMetrics
+}
+
+export const healthCheckApi = {
+  get: (customerId: string, outletIds?: string[]) =>
+    apiFetch<HealthCheckResponse>(`/health-check/${customerId}`, {
+      method: "POST",
+      body: JSON.stringify({ outlet_ids: outletIds }),
+    }),
+}
+
 export interface ConfigurationUpdate {
   peak_period?: boolean | null
   minimum_delivery?: number | null
@@ -2245,4 +2332,44 @@ export const finetuneExaminationsApi = {
 
   delete: (id: string) =>
     apiFetch<void>(`/finetune-examinations/${id}`, { method: "DELETE" }),
+}
+
+// ─── Price History ────────────────────────────────────────────────────────────
+
+export interface PriceHistoryResponse {
+  id: string
+  customer_id: string
+  name: string
+  description: string | null
+  effective_date: string
+  cost_per_unit: number | null
+  profit_per_unit: number | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PriceHistoryCreate {
+  customer_id: string
+  name: string
+  description?: string | null
+  effective_date: string
+  cost_per_unit?: number | null
+  profit_per_unit?: number | null
+}
+
+export const priceHistoryApi = {
+  list: (customerId: string) =>
+    apiFetch<PriceHistoryResponse[]>(
+      `/price-history?customer_id=${customerId}`,
+    ),
+
+  create: (data: PriceHistoryCreate) =>
+    apiFetch<PriceHistoryResponse>("/price-history", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    apiFetch<void>(`/price-history/${id}`, { method: "DELETE" }),
 }

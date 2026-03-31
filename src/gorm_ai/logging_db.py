@@ -127,6 +127,22 @@ class FinetuneDbHandler(logging.Handler):
 
         try:
             asyncio.run(self._write_batch(batch))
+        except RuntimeError:
+            # Already inside a running event loop (e.g. called from the
+            # async finetune task).  Offload to a short-lived thread that
+            # can safely call asyncio.run().
+            import concurrent.futures
+
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(asyncio.run, self._write_batch(batch))
+                    future.result(timeout=10)
+            except Exception:
+                import sys
+                print(
+                    f"[FinetuneDbHandler] failed to flush {len(batch)} log entries (thread)",
+                    file=sys.stderr,
+                )
         except Exception:
             # If DB write fails, don't lose the records — log to stderr
             import sys

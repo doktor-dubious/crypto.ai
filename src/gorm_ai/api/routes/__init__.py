@@ -10,6 +10,7 @@ from gorm_ai.api.routes import (
     financial_dates,
     fine_tunes,
     finetune_examinations,
+    health_check,
     import_templates,
     logs,
     optimization,
@@ -21,6 +22,7 @@ from gorm_ai.api.routes import (
     prediction_engines,
     prediction_strategies,
     predictions,
+    price_history,
     sales,
     sales_filters,
     simulation_filters,
@@ -32,6 +34,7 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
+api_router.include_router(health_check.router, prefix="/health-check", tags=["health-check"])
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
 api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-tunes"])
 api_router.include_router(
@@ -51,6 +54,7 @@ api_router.include_router(
 api_router.include_router(pads.router, prefix="/pads", tags=["pads"])
 api_router.include_router(predefined_pads.router, prefix="/predefined-pads", tags=["predefined-pads"])
 api_router.include_router(prediction_engines.router, prefix="/prediction-engines", tags=["prediction-engines"])
+api_router.include_router(price_history.router, prefix="/price-history", tags=["price-history"])
 api_router.include_router(sales.router, prefix="/sales", tags=["sales"])
 api_router.include_router(
     prediction_strategies.router, prefix="/prediction-strategies", tags=["prediction-strategies"]

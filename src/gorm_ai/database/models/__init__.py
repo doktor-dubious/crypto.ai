@@ -23,6 +23,7 @@ from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
 from gorm_ai.database.models.outlet_info import OutletInfo
 from gorm_ai.database.models.pad import Pad, PadDate
+from gorm_ai.database.models.price_history import PriceHistory
 from gorm_ai.database.models.predefined_pad import PredefinedPad, PredefinedPadDate
 from gorm_ai.database.models.prediction import Prediction
 from gorm_ai.database.models.prediction_engine import PredictionEngine
@@ -64,6 +65,7 @@ __all__ = [
     "Pad",
     "PadDate",
     "PredefinedPad",
+    "PriceHistory",
     "PredefinedPadDate",
     "Prediction",
     "PredictionEngine",

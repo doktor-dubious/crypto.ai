@@ -4,7 +4,7 @@ import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
-import { ExternalLink } from "lucide-react"
+import { ExternalLink, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
@@ -52,6 +52,15 @@ interface HighReturnOutlet {
   days_with_data: number
 }
 
+interface SoldOutOutlet {
+  outlet_id: string
+  ext_id: string
+  outlet_name: string
+  sold_out_pct: number
+  sold_out_days: number
+  total_days: number
+}
+
 export function DeliveryTab({ customerId, outletIds, startDate, endDate, active }: Props) {
   const t = useTranslations("salesAnalysis")
   const router = useRouter()
@@ -60,6 +69,7 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
   const [fixedPage, setFixedPage] = useState(1)
   const [wdEffPage, setWdEffPage] = useState(1)
   const [selectedOutlet, setSelectedOutlet] = useState<HighReturnOutlet | null>(null)
+  const [selectedSoldOut, setSelectedSoldOut] = useState<SoldOutOutlet | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ["analysis-delivery", customerId, outletIds, startDate, endDate],
@@ -104,7 +114,7 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                   tickFormatter={(v: string) => v.length > 14 ? v.slice(0, 12) + "…" : v}
                 />
                 <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
-                <ChartTooltip content={<ChartTooltipContent labelFormatter={(_v, payload) => {
+                <ChartTooltip content={<ChartTooltipContent hideIndicator labelFormatter={(_v, payload) => {
                   const name = (payload[0]?.payload as Record<string, unknown>)?.outlet_name as string | undefined
                   return name && name.length > 30 ? name.slice(0, 28) + "…" : name ?? ""
                 }} />} />
@@ -140,7 +150,7 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                 </div>
                 <DialogFooter>
                   <Button
-                    variant="outline"
+                    variant="default"
                     size="sm"
                     className="gap-1.5"
                     onClick={() => {
@@ -200,12 +210,69 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                 margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.4} />
-                <XAxis dataKey="ext_id" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} />
+                <XAxis
+                  dataKey="outlet_name"
+                  tick={{ fontSize: 9 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: string) => v.length > 14 ? v.slice(0, 12) + "\u2026" : v}
+                />
                 <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="sold_out_pct" fill={soldOutConfig.sold_out_pct.color} radius={[4, 4, 0, 0]} />
+                <ChartTooltip content={<ChartTooltipContent hideIndicator labelFormatter={(_v, payload) => {
+                  const name = (payload[0]?.payload as Record<string, unknown>)?.outlet_name as string | undefined
+                  return name && name.length > 30 ? name.slice(0, 28) + "\u2026" : name ?? ""
+                }} />} />
+                <Bar
+                  dataKey="sold_out_pct"
+                  fill={soldOutConfig.sold_out_pct.color}
+                  radius={[4, 4, 0, 0]}
+                  className="cursor-pointer"
+                  onClick={(_d, idx) => {
+                    const outlet = data.sold_out.slice(0, 20)[idx]
+                    if (outlet) setSelectedSoldOut(outlet as SoldOutOutlet)
+                  }}
+                />
               </BarChart>
             </ChartContainer>
+
+            {/* Sold-out outlet detail modal */}
+            <Dialog open={!!selectedSoldOut} onOpenChange={(open) => { if (!open) setSelectedSoldOut(null) }}>
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="text-base">{selectedSoldOut?.outlet_name}</DialogTitle>
+                  <DialogDescription className="font-mono text-xs">{selectedSoldOut?.ext_id}</DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2 py-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("soldOutPct")}</span>
+                    <Badge variant="secondary">{selectedSoldOut?.sold_out_pct}%</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("soldOutDays")}</span>
+                    <span className="tabular-nums">{selectedSoldOut?.sold_out_days}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("totalDays")}</span>
+                    <span className="tabular-nums">{selectedSoldOut?.total_days}</span>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => {
+                      if (selectedSoldOut) {
+                        router.push(`/outlets?search=${encodeURIComponent(selectedSoldOut.ext_id)}`)
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
             <div className="border border-[var(--border)] rounded-lg overflow-hidden">
               <Table>
                 <TableHeader>
@@ -288,6 +355,8 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
   )
 }
 
+type WdSortField = "ext_id" | "name" | `ret_${number}` | `so_${number}`
+
 function WeekdayHeatmap(
   { data, t, page, setPage }: {
     data: { outlet_id: string; outlet_name: string; ext_id: string; weekday: number; avg_return_pct: number | null; sold_out_pct: number; day_count: number }[]
@@ -296,8 +365,21 @@ function WeekdayHeatmap(
     setPage: (p: number) => void
   },
 ) {
+  const [sortField, setSortField] = useState<WdSortField>("ext_id")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+
+  function handleSort(field: WdSortField) {
+    if (sortField === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortField(field)
+      setSortDir("desc")
+    }
+    setPage(1)
+  }
+
   // Group by outlet
-  const allOutlets = useMemo(() => {
+  const grouped = useMemo(() => {
     const map = new Map<string, { ext_id: string; name: string; weekdays: Map<number, { ret: number | null; so: number }> }>()
     for (const row of data) {
       if (!map.has(row.outlet_id)) {
@@ -308,7 +390,35 @@ function WeekdayHeatmap(
     return Array.from(map.entries())
   }, [data])
 
+  // Sort
+  const allOutlets = useMemo(() => {
+    const sorted = [...grouped]
+    const dir = sortDir === "asc" ? 1 : -1
+    sorted.sort((a, b) => {
+      const ai = a[1], bi = b[1]
+      if (sortField === "ext_id") return ai.ext_id.localeCompare(bi.ext_id) * dir
+      if (sortField === "name") return ai.name.localeCompare(bi.name) * dir
+      const match = sortField.match(/^(ret|so)_(\d)$/)
+      if (match) {
+        const type = match[1] as "ret" | "so"
+        const wd = Number(match[2])
+        const av = type === "ret" ? (ai.weekdays.get(wd)?.ret ?? -1) : (ai.weekdays.get(wd)?.so ?? -1)
+        const bv = type === "ret" ? (bi.weekdays.get(wd)?.ret ?? -1) : (bi.weekdays.get(wd)?.so ?? -1)
+        return (av - bv) * dir
+      }
+      return 0
+    })
+    return sorted
+  }, [grouped, sortField, sortDir])
+
   const outlets = allOutlets.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
+
+  function SortIcon({ field }: { field: WdSortField }) {
+    if (sortField !== field) return <ArrowUpDown className="h-3 w-3 opacity-30" />
+    return sortDir === "asc"
+      ? <ChevronUp className="h-3 w-3" />
+      : <ChevronDown className="h-3 w-3" />
+  }
 
   return (
     <section>
@@ -318,10 +428,44 @@ function WeekdayHeatmap(
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-xs">{t("accountId")}</TableHead>
-              <TableHead className="text-xs">{t("outlet")}</TableHead>
+              <TableHead
+                className="text-xs cursor-pointer select-none"
+                onClick={() => handleSort("ext_id")}
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  {t("accountId")}
+                  <SortIcon field="ext_id" />
+                </span>
+              </TableHead>
+              <TableHead
+                className="text-xs cursor-pointer select-none"
+                onClick={() => handleSort("name")}
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  {t("outlet")}
+                  <SortIcon field="name" />
+                </span>
+              </TableHead>
               {[1, 2, 3, 4, 5, 6, 7].map((wd) => (
-                <TableHead key={wd} className="text-xs text-center">{WEEKDAY_LABELS[wd]}</TableHead>
+                <TableHead key={wd} className="text-xs text-center px-1">
+                  <span className="inline-flex items-center justify-center gap-0">
+                    <button
+                      onClick={() => handleSort(`ret_${wd}` as WdSortField)}
+                      className="cursor-pointer p-0.5 hover:text-red-500"
+                      title={`${t("returnPct")} ${WEEKDAY_LABELS[wd]}`}
+                    >
+                      <SortIcon field={`ret_${wd}` as WdSortField} />
+                    </button>
+                    <span className="mx-0.5">{WEEKDAY_LABELS[wd]}</span>
+                    <button
+                      onClick={() => handleSort(`so_${wd}` as WdSortField)}
+                      className="cursor-pointer p-0.5 hover:text-amber-500"
+                      title={`${t("soldOutPct")} ${WEEKDAY_LABELS[wd]}`}
+                    >
+                      <SortIcon field={`so_${wd}` as WdSortField} />
+                    </button>
+                  </span>
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -334,11 +478,13 @@ function WeekdayHeatmap(
                   const val = info.weekdays.get(wd)
                   if (!val) return <TableCell key={wd} className="text-xs text-center text-[var(--muted-foreground)]">&mdash;</TableCell>
                   const ret = val.ret
-                  const bgColor = ret != null && ret > 25 ? "bg-red-50 dark:bg-red-950/30"
-                    : val.so > 50 ? "bg-amber-50 dark:bg-amber-950/30" : ""
                   return (
-                    <TableCell key={wd} className={cn("text-xs text-center tabular-nums", bgColor)}>
-                      {ret != null ? `${ret}%` : ""}{ret != null && val.so > 0 ? " / " : ""}{val.so > 0 ? `${val.so}%` : ""}
+                    <TableCell key={wd} className="text-xs text-center tabular-nums">
+                      {ret != null && (
+                        <span className={ret > 25 ? "text-red-500" : undefined}>{ret}%</span>
+                      )}
+                      {ret != null && <span className="text-[var(--muted-foreground)]"> / </span>}
+                      <span className={val.so > 30 ? "text-amber-500" : undefined}>{val.so}%</span>
                     </TableCell>
                   )
                 })}

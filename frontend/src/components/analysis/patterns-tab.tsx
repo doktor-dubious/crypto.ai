@@ -108,7 +108,7 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
                 interval="preserveStartEnd"
               />
               <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={56} />
-              <ChartTooltip content={<ChartTooltipContent labelKey="date" />} />
+              <ChartTooltip content={<ChartTooltipContent hideIndicator labelKey="date" formatter={(v) => Number(v).toLocaleString()} />} />
               {changepoints.map((cp) => (
                 <ReferenceLine
                   key={cp.date}
@@ -194,7 +194,7 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.4} />
             <XAxis dataKey="label" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
             <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
-            <ChartTooltip content={<ChartTooltipContent />} />
+            <ChartTooltip content={<ChartTooltipContent hideIndicator formatter={(v) => Number(v).toLocaleString()} />} />
             <Bar dataKey="avg_value" fill={weekdayConfig.avg_value.color} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ChartContainer>
@@ -248,7 +248,7 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
               />
               <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={56} />
               <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3" />
-              <ChartTooltip content={<ChartTooltipContent labelFormatter={(_v, payload) => {
+              <ChartTooltip content={<ChartTooltipContent hideIndicator labelFormatter={(_v, payload) => {
                 const w = (payload[0]?.payload as Record<string, unknown>)?.week as number | undefined
                 if (w == null) return ""
                 const month = MONTH_LABELS[Math.min(Math.floor((w - 1) / (52 / 12)), 11)]

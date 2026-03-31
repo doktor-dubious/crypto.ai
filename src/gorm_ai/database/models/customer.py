@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from gorm_ai.database.models.outlet_group import OutletGroup
     from gorm_ai.database.models.pad import Pad
     from gorm_ai.database.models.prediction_strategy import PredictionStrategy
+    from gorm_ai.database.models.price_history import PriceHistory
     from gorm_ai.database.models.sales import Sales
     from gorm_ai.database.models.sales_filter import SalesFilter
     from gorm_ai.database.models.simulation_filter import SimulationFilter
@@ -80,6 +81,12 @@ class Customer(Base):
     )
     prediction_strategies: Mapped[list["PredictionStrategy"]] = relationship(
         "PredictionStrategy",
+        back_populates="customer",
+        lazy="noload",
+        cascade="all, delete-orphan",
+    )
+    price_history: Mapped[list["PriceHistory"]] = relationship(
+        "PriceHistory",
         back_populates="customer",
         lazy="noload",
         cascade="all, delete-orphan",

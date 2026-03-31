@@ -404,6 +404,8 @@ class AnalysisService:
     ) -> dict:
         rows = await self._fetch_sales_raw(customer_id, outlet_ids, start_date, end_date)
         outlet_info = await self._fetch_outlet_info(outlet_ids)
+        pad_dates = await self._fetch_pad_dates(customer_id)
+        pad_date_set = set(pad_dates.keys())
 
         # Aggregate daily across all outlets
         daily_sold: dict[date, int] = defaultdict(int)
@@ -507,18 +509,43 @@ class AnalysisService:
                 has_weekly = weekly_strength > 0.05
 
         # Yearly seasonality via STL if enough data
+        # Filter out PAD dates so point events don't dominate the
+        # seasonal component — we want gradual seasonal curves only.
         has_yearly = False
         yearly_strength = None
         yearly_profile: list[dict] = []
-        if len(weekly_arr) >= 104:
+
+        daily_no_pads = {
+            d: v for d, v in daily_sold.items() if d not in pad_date_set
+        }
+        stl_weekly_dates: list[date] = []
+        stl_weekly_values: list[float] = []
+        if daily_no_pads:
+            stl_dates = sorted(daily_no_pads.keys())
+            d = stl_dates[0]
+            while d <= stl_dates[-1]:
+                week_end = d + timedelta(days=6)
+                wv = [
+                    daily_no_pads[d + timedelta(days=i)]
+                    for i in range(7)
+                    if (d + timedelta(days=i)) in daily_no_pads
+                ]
+                if wv:
+                    stl_weekly_dates.append(d)
+                    stl_weekly_values.append(float(sum(wv)))
+                d = week_end + timedelta(days=1)
+
+        stl_weekly_arr = np.array(stl_weekly_values, dtype=float)
+        if len(stl_weekly_arr) >= 104:
             try:
                 import pandas as pd
                 from statsmodels.tsa.seasonal import STL
 
                 idx = pd.date_range(
-                    start=weekly_dates[0], periods=len(weekly_arr), freq="W",
+                    start=stl_weekly_dates[0],
+                    periods=len(stl_weekly_arr), freq="W",
                 )
-                series = pd.Series(weekly_arr, index=idx)
+                series = pd.Series(stl_weekly_arr, index=idx)
                 stl = STL(series, period=52, robust=True).fit()
                 var_resid = np.var(stl.resid)
                 var_detrended = np.var(series - stl.trend)
@@ -535,7 +562,6 @@ class AnalysisService:
                     trimmed = seasonal[:n_full_years * 52]
                     reshaped = trimmed.reshape(n_full_years, 52)
                     avg_profile = reshaped.mean(axis=0)
-                    # Map weeks to approximate month labels
                     for w in range(52):
                         month = (w * 7 // 30) + 1
                         month = min(month, 12)
@@ -880,7 +906,7 @@ class AnalysisService:
                 "outlet_id": oid, "outlet_name": name, "ext_id": ext_id,
                 "cv": round(cv, 4), "difficulty": difficulty,
             })
-        predictability.sort(key=lambda x: x["cv"])
+        predictability.sort(key=lambda x: x["cv"], reverse=True)
 
         # Correlation clusters
         correlation_clusters = []

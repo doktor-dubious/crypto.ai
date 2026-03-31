@@ -19,6 +19,7 @@ import { OutlierTab } from "@/components/analysis/outlier-tab"
 import { PatternsTab } from "@/components/analysis/patterns-tab"
 import { DeliveryTab } from "@/components/analysis/delivery-tab"
 import { SegmentationTab } from "@/components/analysis/segmentation-tab"
+import { HealthCheckTab } from "@/components/analysis/health-check-tab"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,16 @@ export default function SalesAnalysePage() {
     () => loadSsV<string | null>(cid, "groupId", null),
   )
   const [weeks, setWeeks] = useState(() => loadSsV<number>(cid, "weeks", 104))
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
+    const saved = loadSsV<{ from?: string; to?: string } | null>(cid, "dateRange", null)
+    if (saved?.from) {
+      return {
+        from: new Date(saved.from + "T00:00:00"),
+        to: saved.to ? new Date(saved.to + "T00:00:00") : undefined,
+      }
+    }
+    return undefined
+  })
   const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [activeTab, setActiveTab] = useState(
     () => loadSsV<string>(cid, "tab", "data-quality"),
@@ -63,19 +73,38 @@ export default function SalesAnalysePage() {
     if (el) setIndicatorStyle({ left: el.offsetLeft, width: el.offsetWidth })
   }, [activeTab])
 
-  // Persist
-  useEffect(() => { if (cid) saveSsV(cid, "groupId", selectedGroupId) }, [cid, selectedGroupId])
-  useEffect(() => { if (cid) saveSsV(cid, "weeks", weeks) }, [cid, weeks])
-  useEffect(() => { if (cid) saveSsV(cid, "tab", activeTab) }, [cid, activeTab])
-  const prevCidRef = useRef(cid)
+  // Restore saved values when customer ID becomes available or changes
+  const prevCidRef = useRef("")
+  const readyToSaveRef = useRef(false)
   useEffect(() => {
-    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
+    if (cid && prevCidRef.current !== cid) {
+      readyToSaveRef.current = false
       setSelectedGroupId(loadSsV<string | null>(cid, "groupId", null))
       setWeeks(loadSsV(cid, "weeks", 104))
+      const savedDr = loadSsV<{ from?: string; to?: string } | null>(cid, "dateRange", null)
+      setDateRange(savedDr?.from ? {
+        from: new Date(savedDr.from + "T00:00:00"),
+        to: savedDr.to ? new Date(savedDr.to + "T00:00:00") : undefined,
+      } : undefined)
       setActiveTab(loadSsV(cid, "tab", "data-quality"))
+      // Allow persisting after state has settled (next render cycle)
+      requestAnimationFrame(() => { readyToSaveRef.current = true })
     }
     prevCidRef.current = cid
   }, [cid])
+
+  // Persist (only after restore has completed for this customer)
+  useEffect(() => { if (cid && readyToSaveRef.current) saveSsV(cid, "groupId", selectedGroupId) }, [cid, selectedGroupId])
+  useEffect(() => { if (cid && readyToSaveRef.current) saveSsV(cid, "weeks", weeks) }, [cid, weeks])
+  useEffect(() => {
+    if (cid && readyToSaveRef.current) {
+      saveSsV(cid, "dateRange", dateRange?.from ? {
+        from: format(dateRange.from, "yyyy-MM-dd"),
+        to: dateRange.to ? format(dateRange.to, "yyyy-MM-dd") : undefined,
+      } : null)
+    }
+  }, [cid, dateRange])
+  useEffect(() => { if (cid && readyToSaveRef.current) saveSsV(cid, "tab", activeTab) }, [cid, activeTab])
 
   // Customer config (for production group default)
   const { data: customerConfig } = useQuery({
@@ -267,6 +296,12 @@ export default function SalesAnalysePage() {
           >
             {t("tabSegmentation")}
           </TabsTrigger>
+          <TabsTrigger
+            value="health-check"
+            className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
+          >
+            {t("tabHealthCheck")}
+          </TabsTrigger>
           <div
             className="absolute bottom-0 h-0.5 bg-[var(--foreground)] transition-all duration-300 ease-in-out z-0"
             style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
@@ -316,6 +351,13 @@ export default function SalesAnalysePage() {
             startDate={startDate}
             endDate={endDate}
             active={ready && activeTab === "segmentation"}
+          />
+        </TabsContent>
+        <TabsContent value="health-check">
+          <HealthCheckTab
+            customerId={cid}
+            outletIds={outletIds}
+            active={ready && activeTab === "health-check"}
           />
         </TabsContent>
       </Tabs>

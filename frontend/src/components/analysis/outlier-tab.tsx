@@ -216,7 +216,7 @@ function OutlierScatter({ items }: { items: DateOutlier[] }) {
           label={{ value: "Z-Score", angle: -90, position: "insideLeft", style: { fontSize: 10 } }}
         />
         <ReferenceLine y={0} stroke="var(--border)" />
-        <ChartTooltip content={<ChartTooltipContent labelKey="date" />} />
+        <ChartTooltip content={<ChartTooltipContent hideIndicator labelKey="date" />} />
         <Scatter data={chartData} />
       </ScatterChart>
     </ChartContainer>

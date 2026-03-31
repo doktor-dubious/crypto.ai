@@ -3,10 +3,10 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from gorm_ai.config import get_settings
 from gorm_ai.database.base import Base
 
@@ -19,6 +19,7 @@ from gorm_ai.database.models import (  # noqa: F401
     OutletGroupMember,
     OutletInfo,
     PredictionEngine,
+    PriceHistory,
     Sales,
 )
 
