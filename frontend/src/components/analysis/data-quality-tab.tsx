@@ -218,6 +218,49 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
           )}
         </CollapsibleSection>
 
+        {/* Zero-sales detail modal */}
+        <Dialog open={!!selectedZero} onOpenChange={(open) => { if (!open) setSelectedZero(null) }}>
+          <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-base">{selectedZero?.outlet_name}</DialogTitle>
+              <DialogDescription className="font-mono text-xs">{selectedZero?.ext_id}</DialogDescription>
+            </DialogHeader>
+            {selectedZero && (
+              <div className="flex gap-6">
+                {/* Left: stats */}
+                <div className="flex flex-col gap-2 text-sm min-w-[140px]">
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("zeroSalesDays")}</span>
+                    <div className="font-semibold tabular-nums">{selectedZero.count}</div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("zeroPct")}</span>
+                    <div className="font-semibold tabular-nums">
+                      {selectedZero.total_sales_days > 0
+                        ? (selectedZero.count / selectedZero.total_sales_days * 100).toFixed(1)
+                        : "0"}%
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--muted-foreground)] text-xs">{t("totalSalesDays")}</span>
+                    <div className="font-semibold tabular-nums">{selectedZero.total_sales_days}</div>
+                  </div>
+                </div>
+                {/* Vertical separator */}
+                <div className="w-px bg-[var(--border)]" />
+                {/* Right: timeline */}
+                <div className="flex-1 min-w-0">
+                  <MissingTimeline
+                    missingDates={selectedZero.dates}
+                    startDate={startDate}
+                    endDate={endDate}
+                  />
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
         <CollapsibleSection title={t("fieldDiscrepancies")} desc={t("fieldDiscrepanciesDesc")} count={data.discrepancies.length}>
           {data.discrepancies.length === 0 ? (
             <EmptyState t={t} />
