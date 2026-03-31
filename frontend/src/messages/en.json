@@ -59,6 +59,7 @@
     "aiModelsFinetuneAnalysis": "Fine-tune, start analysis",
     "aiModelsFinetuneCompleted": "Fine-tune, analysis",
     "configuration": "Configuration",
+    "configProfile": "Profile",
     "configSettings": "Settings",
     "configExplorationNew": "Exploration, new",
     "configExplorationCompleted": "Exploration, completed",
@@ -1633,6 +1634,7 @@
     "database": "Database",
     "frontend": "Frontend",
     "claude": "Claude",
+    "llm": "LLM",
     "searchPlaceholder": "Filter log lines...",
     "noLogs": "No log lines found",
     "noLogsHint": "There are no log entries matching your criteria",
@@ -2032,5 +2034,23 @@
     "healthAggregateCVLow": "Low variability",
     "healthAggregateCVModerate": "Moderate variability",
     "healthAggregateCVHigh": "High variability"
+  },
+  "profile": {
+    "title": "Token Usage",
+    "description": "Track available and expended tokens across LLM and prediction engine channels",
+    "loading": "Loading token data...",
+    "noTokenData": "No token usage recorded for this customer yet",
+    "summary": "Summary",
+    "totalUsed": "Total Used",
+    "totalAvailable": "Total Available",
+    "remaining": "Remaining",
+    "usage": "Usage",
+    "llmUsage": "LLM Usage",
+    "modelUsage": "Prediction Engine Usage",
+    "provider": "Provider",
+    "engine": "Engine",
+    "used": "Used",
+    "available": "Available",
+    "noBreakdown": "No detailed breakdown available yet"
   }
 }

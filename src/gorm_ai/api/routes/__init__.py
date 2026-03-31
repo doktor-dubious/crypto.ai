@@ -15,8 +15,8 @@ from gorm_ai.api.routes import (
     logs,
     optimization,
     outlet_groups,
-    outlier_investigate,
     outlets,
+    outlier_investigate,
     pads,
     predefined_pads,
     prediction_adjustments,
@@ -30,6 +30,7 @@ from gorm_ai.api.routes import (
     simulation_strategies,
     simulations,
     tasks,
+    token,
 )
 
 api_router = APIRouter()
@@ -73,5 +74,6 @@ api_router.include_router(
 api_router.include_router(simulations.router, prefix="/simulations", tags=["simulations"])
 api_router.include_router(sales_filters.router, prefix="/sales-filters", tags=["sales-filters"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
+api_router.include_router(token.router, prefix="/tokens", tags=["tokens"])
 
 __all__ = ["api_router"]

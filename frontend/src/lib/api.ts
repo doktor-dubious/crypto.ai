@@ -1189,6 +1189,38 @@ export const analysisApi = {
   },
 }
 
+// ─── Tokens ─────────────────────────────────────────────────────────────────
+
+export interface TokenLlmResponse {
+  llm_id: string
+  llm_name: string
+  used: number
+  available: number
+}
+
+export interface TokenModelResponse {
+  prediction_engine_id: string
+  engine_name: string
+  used: number
+  available: number
+}
+
+export interface TokenResponse {
+  id: string
+  customer_id: string
+  used: number
+  available: number
+  llms: TokenLlmResponse[]
+  models: TokenModelResponse[]
+}
+
+export const tokenApi = {
+  get: (customerId: string) =>
+    apiFetch<TokenResponse | null>(
+      `/tokens?customer_id=${customerId}`,
+    ),
+}
+
 // ─── Health Check ────────────────────────────────────────────────────────────
 
 export interface HealthCheckDateRange {

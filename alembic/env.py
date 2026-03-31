@@ -34,6 +34,13 @@ settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
+def _include_name(name, type_, parent_names):
+    """Exclude ba_* tables (managed by Prisma for Better Auth)."""
+    if type_ == "table" and name and name.startswith("ba_"):
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
@@ -42,6 +49,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=_include_name,
     )
 
     with context.begin_transaction():
@@ -50,7 +58,11 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection) -> None:
     """Run migrations with given connection."""
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=_include_name,
+    )
 
     with context.begin_transaction():
         context.run_migrations()

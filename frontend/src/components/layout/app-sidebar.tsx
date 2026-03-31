@@ -41,6 +41,7 @@ import {
   Brain,
   Server,
   Container,
+  UserCircle,
 } from "lucide-react"
 import { signOut, useSession } from "@/lib/auth-client"
 import {
@@ -171,6 +172,7 @@ const SYSTEM_SUBNAV_ITEMS = [
 ] as const
 
 const CONFIG_SUBNAV_TOP = [
+  { href: "/configuration/profile", icon: UserCircle, labelKey: "configProfile" },
   { href: "/configuration", icon: Settings, labelKey: "configSettings" },
 ] as const
 

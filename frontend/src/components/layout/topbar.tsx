@@ -48,6 +48,7 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/ai-models": "aiModelsModels",
   "/ai-models/finetune": "aiModelsFinetuneNew",
   "/ai-models/finetune/completed": "aiModelsFinetuneRuns",
+  "/configuration/profile": "configProfile",
   "/configuration": "configSettings",
   "/configuration/exploration/new": "configExplorationNew",
   "/configuration/exploration": "configExplorationCompleted",

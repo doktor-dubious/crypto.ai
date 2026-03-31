@@ -18,12 +18,14 @@ router = APIRouter()
 LOG_DIR = Path("/app/log")
 GORM_LOG_FILE = LOG_DIR / "gorm_ai.log"
 CLAUDE_LOG_FILE = LOG_DIR / "claude.log"
+LLM_LOG_FILE = LOG_DIR / "llm.txt"
 FINETUNE_LOG_FILE = LOG_DIR / "finetune.log"
 
 # File-based log sources (not Docker)
 FILE_LOG_MAP = {
     "gorm": GORM_LOG_FILE,
     "claude": CLAUDE_LOG_FILE,
+    "llm": LLM_LOG_FILE,
     "finetuning": FINETUNE_LOG_FILE,
 }
 

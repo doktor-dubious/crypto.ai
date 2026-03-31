@@ -147,6 +147,55 @@ def configure_logging(
         ft_logger.addHandler(finetune_handler)
         ft_logger.addHandler(finetune_db_handler)
 
+    # --- LLM file handler (llm.txt) ---
+    _llm_meta_keys = {
+        "provider", "model_tag", "level", "event",
+        "timestamp", "logger", "stack_info", "exception",
+    }
+
+    def _inject_llm_tag(
+        logger: logging.Logger,
+        method_name: str,
+        event_dict: dict,
+    ) -> dict:
+        provider = event_dict.pop("provider", "Claude")
+        model_tag = event_dict.pop("model_tag", "")
+        level = event_dict.get("level", "info")
+        event = event_dict.get("event", "")
+        ts = event_dict.get("timestamp", "")
+        tag = f"[{provider}]"
+        if model_tag:
+            tag += f"[{model_tag}]"
+        # Append extra kwargs as key=value pairs
+        extras = " ".join(
+            f"{k}={v}" for k, v in event_dict.items()
+            if k not in _llm_meta_keys
+        )
+        parts = [f"{ts} [{level:<9s}]{tag} {event}"]
+        if extras:
+            parts.append(extras)
+        return {"_final": " ".join(parts)}
+
+    llm_formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _inject_llm_tag,
+            _RawRenderer(),
+        ],
+        foreign_pre_chain=shared_processors,
+    )
+    llm_path = os.path.join(log_dir, "llm.txt")
+    llm_handler = logging.handlers.RotatingFileHandler(
+        llm_path,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    llm_handler.setFormatter(llm_formatter)
+
+    llm_logger = logging.getLogger("gorm_ai.llm")
+    llm_logger.addHandler(llm_handler)
+
     # Attach all handlers to the root logger
     root = logging.getLogger()
     root.handlers.clear()

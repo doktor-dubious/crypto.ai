@@ -3,6 +3,7 @@
 from collections import Counter
 
 import anthropic
+import structlog
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -10,9 +11,13 @@ from sqlalchemy import select
 
 from gorm_ai.api.deps import DbSession
 from gorm_ai.config import get_settings
+from gorm_ai.database.connection import get_session
+from gorm_ai.database.models.llm import Llm
 from gorm_ai.database.models.outlet import Outlet
+from gorm_ai.database.models.token import Token, TokenLlm
 
 router = APIRouter()
+log = structlog.get_logger("gorm_ai.llm")
 
 MONTH_NAMES = [
     "", "January", "February", "March", "April", "May", "June",
@@ -31,12 +36,68 @@ class InvestigateRequest(BaseModel):
     direction: str  # "positive" | "negative"
 
 
+async def _update_token_usage(
+    customer_id: str, total_tokens: int,
+) -> None:
+    """Add tokens used to token and token_llm tables."""
+    async for session in get_session():
+        try:
+            # Find or create Token for customer
+            result = await session.execute(
+                select(Token).where(
+                    Token.customer_id == customer_id,
+                    Token.active.is_(True),
+                )
+            )
+            token = result.scalar_one_or_none()
+            if not token:
+                token = Token(
+                    customer_id=customer_id,
+                    used=0, available=0,
+                )
+                session.add(token)
+                await session.flush()
+
+            # Find Anthropic LLM
+            result = await session.execute(
+                select(Llm).where(Llm.name == "Anthropic")
+            )
+            llm_row = result.scalar_one_or_none()
+            if not llm_row:
+                await session.commit()
+                return
+
+            # Find or create TokenLlm
+            result = await session.execute(
+                select(TokenLlm).where(
+                    TokenLlm.token_id == token.id,
+                    TokenLlm.llm_id == llm_row.id,
+                    TokenLlm.active.is_(True),
+                )
+            )
+            token_llm = result.scalar_one_or_none()
+            if not token_llm:
+                token_llm = TokenLlm(
+                    token_id=token.id,
+                    llm_id=llm_row.id,
+                    used=0, available=0,
+                )
+                session.add(token_llm)
+
+            # Update counts
+            token.used += total_tokens
+            token_llm.used += total_tokens
+            await session.commit()
+        except Exception:
+            await session.rollback()
+
+
 @router.post("/investigate")
 async def investigate_outlier(
     data: InvestigateRequest,
     session: DbSession,
 ) -> StreamingResponse:
-    """Investigate what may have caused a recurring sales outlier."""
+    """Investigate what may have caused a recurring outlier."""
     settings = get_settings()
     if not settings.claude_api:
         raise HTTPException(
@@ -46,7 +107,9 @@ async def investigate_outlier(
 
     # Determine customer location from outlet addresses
     result = await session.execute(
-        select(Outlet.country, Outlet.state, Outlet.city).where(
+        select(
+            Outlet.country, Outlet.state, Outlet.city,
+        ).where(
             Outlet.id.in_(data.outlet_ids),
             Outlet.active.is_(True),
         )
@@ -59,7 +122,6 @@ async def investigate_outlier(
     states = Counter(r.state for r in rows if r.state)
     cities = Counter(r.city for r in rows if r.city)
 
-    # Build location description
     location_parts = []
     if countries:
         top_country = countries.most_common(1)[0][0]
@@ -75,13 +137,22 @@ async def investigate_outlier(
             f"cities: {', '.join(top_cities)}"
         )
 
-    location = ", ".join(location_parts) if location_parts else "unknown location"
+    location = (
+        ", ".join(location_parts)
+        if location_parts else "unknown location"
+    )
     direction_desc = (
-        "abnormally high (spike)" if data.direction == "positive"
+        "abnormally high (spike)"
+        if data.direction == "positive"
         else "abnormally low (dip)"
     )
-    month_name = MONTH_NAMES[data.month] if 1 <= data.month <= 12 else str(data.month)
-    years_str = ", ".join(str(y) for y in sorted(data.years))
+    month_name = (
+        MONTH_NAMES[data.month]
+        if 1 <= data.month <= 12 else str(data.month)
+    )
+    years_str = ", ".join(
+        str(y) for y in sorted(data.years)
+    )
     date_str = f"{month_name} {data.day}"
 
     prompt = (
@@ -94,7 +165,7 @@ async def investigate_outlier(
         "Consider:\n"
         "- National and regional holidays or observances\n"
         "- Recurring cultural or sporting events\n"
-        "- Typical weather patterns for this region and time of year\n"
+        "- Typical weather patterns for this region and time\n"
         "- Industry-specific patterns (retail, distribution)\n"
         "- Election cycles if applicable\n"
         "- School schedules (breaks, start dates)\n"
@@ -109,16 +180,54 @@ async def investigate_outlier(
         "explanations ranked by probability."
     )
 
+    model = "claude-sonnet-4-20250514"
+    model_tag = "Sonnet 4"
+    llm = log.bind(provider="Claude", model_tag=model_tag)
+    llm.info("prompt", text=prompt)
+
     client = anthropic.Anthropic(api_key=settings.claude_api)
+    customer_id = data.customer_id
 
     async def generate():
-        with client.messages.stream(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
+        response_parts: list[str] = []
+        usage_info = None
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": prompt},
+                ],
+            ) as stream:
+                for text in stream.text_stream:
+                    response_parts.append(text)
+                    yield text
+                final = stream.get_final_message()
+                if final and final.usage:
+                    usage_info = final.usage
+        except Exception as exc:
+            llm.error("error", error=str(exc))
+            raise
+        finally:
+            full_response = "".join(response_parts)
+            resp_kwargs: dict = {
+                "text": full_response,
+            }
+            if usage_info:
+                resp_kwargs["input_tokens"] = (
+                    usage_info.input_tokens
+                )
+                resp_kwargs["output_tokens"] = (
+                    usage_info.output_tokens
+                )
+                total = (
+                    usage_info.input_tokens
+                    + usage_info.output_tokens
+                )
+                await _update_token_usage(
+                    customer_id, total,
+                )
+            llm.info("response", **resp_kwargs)
 
     return StreamingResponse(
         generate(),
