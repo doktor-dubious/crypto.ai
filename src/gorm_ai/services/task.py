@@ -203,12 +203,26 @@ class TaskService:
         await self.session.commit()
 
         if is_running:
-            # Restart the worker container so the running task is actually killed.
-            await asyncio.to_thread(_restart_worker_container)
+            # Set the graceful stop flag so the task stops at its next
+            # checkpoint.  This works for both local and remote workers
+            # since it writes to Redis which all workers share.
+            from gorm_ai.tasks.celery_app import request_graceful_stop
+            request_graceful_stop(task_id)
+
+            # For local Docker workers, also restart the container to
+            # kill the task immediately.  For remote workers (RunPod,
+            # Vast.ai) the graceful stop flag is the only mechanism —
+            # they'll stop at the next outlet/date boundary.
+            try:
+                await asyncio.to_thread(_restart_worker_container)
+            except Exception:
+                pass
         else:
             # Pending task: a normal revoke is sufficient.
             from gorm_ai.tasks.celery_app import celery_app
-            await asyncio.to_thread(celery_app.control.revoke, task_id, terminate=True)
+            await asyncio.to_thread(
+                celery_app.control.revoke, task_id, terminate=True,
+            )
 
     async def mark_stale_pending_revoked(self, stale_seconds: int = 86400 * 7) -> int:
         """Mark pending tasks as revoked if they have been waiting too long.
