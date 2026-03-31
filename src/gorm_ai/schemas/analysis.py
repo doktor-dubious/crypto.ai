@@ -49,6 +49,7 @@ class LevelShift(BaseModel):
     outlet_id: str
     outlet_name: str
     ext_id: str
+    weekday: int  # 1-7, Monday=1
     shift_date: date
     before_mean: float
     after_mean: float

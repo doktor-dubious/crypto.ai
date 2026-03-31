@@ -6,11 +6,14 @@ services:
     command: uvicorn gorm_ai.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - CLAUDE_API=${CLAUDE_API}
     group_add:
       - "124"  # docker group GID — grants access to /var/run/docker.sock
     volumes:

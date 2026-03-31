@@ -1735,10 +1735,14 @@ class SimulationService:
 
         Includes actual totals and profit group (g1-g4) data computed via classification.
         """
+        import bisect
+
         from sqlalchemy import extract
 
+        from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
         from gorm_ai.database.models.outlet_financials import OutletFinancials
         from gorm_ai.database.models.prediction import Prediction as PredictionModel
+        from gorm_ai.database.models.price_history import PriceHistory
         from gorm_ai.database.models.sales import Sales
         from gorm_ai.database.models.simulation_date import SimulationDate
 
@@ -1765,6 +1769,7 @@ class SimulationService:
         rows_result = await self.session.execute(
             select(
                 PredictionOutlet.outlet_id,
+                PredictionModel.date.label("prediction_date"),
                 extract("isodow", PredictionModel.date).label("weekday"),
                 col_attr.label("scenario_delivery"),
                 Sales.delivered.label("actual_delivered"),
@@ -1786,7 +1791,7 @@ class SimulationService:
         )
         rows = rows_result.all()
 
-        # Load financial data per outlet per weekday (OutletFinancials)
+        # Load financial data per outlet per weekday (Level B: OutletFinancials)
         outlet_ids = list({r.outlet_id for r in rows})
         financials_result = await self.session.execute(
             select(OutletFinancials.outlet_id, OutletFinancials.weekday,
@@ -1798,7 +1803,58 @@ class SimulationService:
             for r in financials_result
         }
 
+        # Level C/D: customer/global defaults
         default_cost, default_profit = await self._get_default_financials(sim.customer_id)
+
+        # Level PH: price history timeline
+        ph_result = await self.session.execute(
+            select(PriceHistory)
+            .where(
+                PriceHistory.customer_id == sim.customer_id,
+                PriceHistory.active.is_(True),
+                *([PriceHistory.effective_date <= sim.simulation_to] if sim.simulation_to else []),
+            )
+            .order_by(PriceHistory.effective_date)
+        )
+        ph_dates: list[date] = []
+        ph_cost: dict[date, float] = {}
+        ph_profit: dict[date, float] = {}
+        for ph_row in ph_result.scalars():
+            ph_dates.append(ph_row.effective_date)
+            if ph_row.cost_per_unit is not None:
+                ph_cost[ph_row.effective_date] = ph_row.cost_per_unit
+            if ph_row.profit_per_unit is not None:
+                ph_profit[ph_row.effective_date] = ph_row.profit_per_unit
+
+        # Level A: FinancialDate + OutletFinancialDate overrides
+        fd_filters = [
+            FinancialDate.customer_id == sim.customer_id,
+            FinancialDate.active.is_(True),
+        ]
+        if sim.simulation_from:
+            fd_filters.append(FinancialDate.date >= sim.simulation_from)
+        if sim.simulation_to:
+            fd_filters.append(FinancialDate.date <= sim.simulation_to)
+        fd_result = await self.session.execute(
+            select(FinancialDate, OutletFinancialDate)
+            .outerjoin(
+                OutletFinancialDate,
+                (OutletFinancialDate.financial_date_id == FinancialDate.id)
+                & (OutletFinancialDate.outlet_id.in_(outlet_ids))
+                & (OutletFinancialDate.active.is_(True)),
+            )
+            .where(*fd_filters)
+        )
+        # Build lookup: (outlet_id, date) → (cost, profit) for outlet-specific overrides
+        # and date → (cost, profit) for customer-wide financial dates (no outlet override)
+        fd_outlet_map: dict[tuple[str, date], tuple[float | None, float | None]] = {}
+        fd_date_map: dict[date, tuple[float | None, float | None]] = {}
+        for fd, ofd in fd_result.all():
+            if ofd is not None:
+                fd_outlet_map[(ofd.outlet_id, fd.date)] = (ofd.cost_per_unit, ofd.profit_per_unit)
+            # Keep customer-wide financial date as a secondary fallback within Level A
+            if fd.date not in fd_date_map:
+                fd_date_map[fd.date] = (None, None)
 
         # Accumulators
         total_delivered = 0.0
@@ -1864,12 +1920,33 @@ class SimulationService:
                     lost_sale_total += loss_sale
                     more_sale_total += more_sale
 
-                    # G1-G4 profit classification
-                    cost, profit_unit = fin_map.get((r.outlet_id, int(r.weekday)), (None, None))
-                    if cost is None:
-                        cost = default_cost
-                    if profit_unit is None:
-                        profit_unit = default_profit
+                    # G1-G4 profit classification (5-level fallback: A → PH → B → C/D)
+                    row_date = r.prediction_date
+                    weekday = int(r.weekday)
+
+                    # Level A: outlet-specific financial date override
+                    override_cost, override_profit = fd_outlet_map.get((r.outlet_id, row_date), (None, None))
+
+                    # Level PH: price history timeline
+                    ph_idx = bisect.bisect_right(ph_dates, row_date)
+                    ph_c = ph_cost.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    ph_p = ph_profit.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+
+                    # Level B: weekday-based outlet financials
+                    wb_cost, wb_profit = fin_map.get((r.outlet_id, weekday), (None, None))
+
+                    cost = (
+                        override_cost if override_cost is not None
+                        else ph_c if ph_c is not None
+                        else wb_cost if wb_cost is not None
+                        else default_cost
+                    )
+                    profit_unit = (
+                        override_profit if override_profit is not None
+                        else ph_p if ph_p is not None
+                        else wb_profit if wb_profit is not None
+                        else default_profit
+                    )
                     _cost = cost or 0.0
                     _profit = profit_unit or 0.0
                     if s_draw < actual_draw:
@@ -2197,11 +2274,15 @@ class SimulationService:
         group: str | None = None,
     ) -> dict | None:
         """Return per-row prediction-outlet data for a simulation."""
+        import bisect
+
         from sqlalchemy import case, extract, func
 
+        from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
         from gorm_ai.database.models.outlet_financials import (
             OutletFinancials,
         )
+        from gorm_ai.database.models.price_history import PriceHistory
         from gorm_ai.database.models.simulation_date import SimulationDate
 
         sim = await self.session.get(SimulationModel, simulation_id)
@@ -2350,7 +2431,7 @@ class SimulationService:
         )
         rows = rows_result.all()
 
-        # Load financial data
+        # Load financial data (Level B: OutletFinancials)
         all_outlet_ids = list({r.outlet_id for r in rows})
         fin_result = await self.session.execute(
             select(
@@ -2364,9 +2445,54 @@ class SimulationService:
             (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
             for r in fin_result
         }
+        # Level C/D: customer/global defaults
         default_cost, default_profit = await self._get_default_financials(
             sim.customer_id
         )
+
+        # Level PH: price history timeline
+        ph_result = await self.session.execute(
+            select(PriceHistory)
+            .where(
+                PriceHistory.customer_id == sim.customer_id,
+                PriceHistory.active.is_(True),
+                *([PriceHistory.effective_date <= sim.simulation_to] if sim.simulation_to else []),
+            )
+            .order_by(PriceHistory.effective_date)
+        )
+        ph_dates: list[date] = []
+        ph_cost: dict[date, float] = {}
+        ph_profit: dict[date, float] = {}
+        for ph_row in ph_result.scalars():
+            ph_dates.append(ph_row.effective_date)
+            if ph_row.cost_per_unit is not None:
+                ph_cost[ph_row.effective_date] = ph_row.cost_per_unit
+            if ph_row.profit_per_unit is not None:
+                ph_profit[ph_row.effective_date] = ph_row.profit_per_unit
+
+        # Level A: FinancialDate + OutletFinancialDate overrides
+        fd_filters = [
+            FinancialDate.customer_id == sim.customer_id,
+            FinancialDate.active.is_(True),
+        ]
+        if sim.simulation_from:
+            fd_filters.append(FinancialDate.date >= sim.simulation_from)
+        if sim.simulation_to:
+            fd_filters.append(FinancialDate.date <= sim.simulation_to)
+        fd_result = await self.session.execute(
+            select(FinancialDate, OutletFinancialDate)
+            .outerjoin(
+                OutletFinancialDate,
+                (OutletFinancialDate.financial_date_id == FinancialDate.id)
+                & (OutletFinancialDate.outlet_id.in_(all_outlet_ids))
+                & (OutletFinancialDate.active.is_(True)),
+            )
+            .where(*fd_filters)
+        )
+        fd_outlet_map: dict[tuple[str, date], tuple[float | None, float | None]] = {}
+        for fd, ofd in fd_result.all():
+            if ofd is not None:
+                fd_outlet_map[(ofd.outlet_id, fd.date)] = (ofd.cost_per_unit, ofd.profit_per_unit)
 
         result_rows = []
         for r in rows:
@@ -2413,15 +2539,39 @@ class SimulationService:
                     a_returned = max(0.0, actual_draw - actual_sale)
                     sold_out = a_returned == 0.0
 
-                    cost, profit_unit = fin_map.get(
-                        (r.outlet_id, int(r.weekday)), (None, None)
+                    # 5-level fallback: A → PH → B → C/D
+                    row_date = r.date
+                    weekday = int(r.weekday)
+
+                    # Level A: outlet-specific financial date override
+                    override_cost, override_profit = fd_outlet_map.get(
+                        (r.outlet_id, row_date), (None, None)
                     )
-                    _cost = (cost if cost is not None else default_cost) or 0.0
-                    _profit = (
-                        profit_unit
-                        if profit_unit is not None
+
+                    # Level PH: price history timeline
+                    ph_idx = bisect.bisect_right(ph_dates, row_date)
+                    ph_c = ph_cost.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    ph_p = ph_profit.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+
+                    # Level B: weekday-based outlet financials
+                    wb_cost, wb_profit = fin_map.get(
+                        (r.outlet_id, weekday), (None, None)
+                    )
+
+                    cost = (
+                        override_cost if override_cost is not None
+                        else ph_c if ph_c is not None
+                        else wb_cost if wb_cost is not None
+                        else default_cost
+                    )
+                    profit_unit = (
+                        override_profit if override_profit is not None
+                        else ph_p if ph_p is not None
+                        else wb_profit if wb_profit is not None
                         else default_profit
-                    ) or 0.0
+                    )
+                    _cost = cost or 0.0
+                    _profit = profit_unit or 0.0
 
                     if s_draw < actual_draw:
                         reduction = actual_draw - s_draw

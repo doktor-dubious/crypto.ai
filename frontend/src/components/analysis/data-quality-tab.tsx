@@ -3,7 +3,8 @@
 import { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Info } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ChevronDown, ChevronRight, AlertTriangle, CheckCircle, Info, ExternalLink } from "lucide-react"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
@@ -13,12 +14,21 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import {
   Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
-import { analysisApi, type MissingDataGap, type ZeroSalesAnomaly } from "@/lib/api"
+import {
+  ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
+} from "@/components/ui/chart"
+import { LineChart, Line, CartesianGrid, XAxis, YAxis, ReferenceLine } from "recharts"
+import { analysisApi, salesApi, type MissingDataGap, type ZeroSalesAnomaly, type LevelShift } from "@/lib/api"
 import { cn } from "@/lib/utils"
+
+const WEEKDAY_LABELS: Record<number, string> = {
+  1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun",
+}
 
 interface Props {
   customerId: string
@@ -32,6 +42,7 @@ const ITEMS_PER_PAGE = 10
 
 export function DataQualityTab({ customerId, outletIds, startDate, endDate, active }: Props) {
   const t = useTranslations("salesAnalysis")
+  const router = useRouter()
 
   const { data, isLoading } = useQuery({
     queryKey: ["analysis-data-quality", customerId, outletIds, startDate, endDate],
@@ -50,6 +61,7 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
   const [shiftPage, setShiftPage] = useState(1)
   const [selectedMissing, setSelectedMissing] = useState<MissingDataGap | null>(null)
   const [selectedZero, setSelectedZero] = useState<ZeroSalesAnomaly | null>(null)
+  const [selectedShift, setSelectedShift] = useState<LevelShift | null>(null)
 
   if (isLoading) return <Loading t={t} />
   if (!data) return null
@@ -164,6 +176,15 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
                     <span className="text-[var(--muted-foreground)] text-xs">{t("expectedDates")}</span>
                     <div className="font-semibold tabular-nums">{selectedMissing.expected_count}</div>
                   </div>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5 mt-auto"
+                    onClick={() => router.push(`/outlets?search=${encodeURIComponent(selectedMissing.ext_id)}`)}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
                 </div>
                 {/* Vertical separator */}
                 <div className="w-px bg-[var(--border)]" />
@@ -245,6 +266,15 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
                     <span className="text-[var(--muted-foreground)] text-xs">{t("totalSalesDays")}</span>
                     <div className="font-semibold tabular-nums">{selectedZero.total_sales_days}</div>
                   </div>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5 mt-auto"
+                    onClick={() => router.push(`/outlets?search=${encodeURIComponent(selectedZero.ext_id)}`)}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
                 </div>
                 {/* Vertical separator */}
                 <div className="w-px bg-[var(--border)]" />
@@ -304,6 +334,7 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="text-xs">{t("accountId")}</TableHead>
                   <TableHead className="text-xs">{t("outlet")}</TableHead>
+                  <TableHead className="text-xs">{t("weekday")}</TableHead>
                   <TableHead className="text-xs">{t("shiftDate")}</TableHead>
                   <TableHead className="text-xs text-right">{t("beforeMean")}</TableHead>
                   <TableHead className="text-xs text-right">{t("afterMean")}</TableHead>
@@ -312,9 +343,14 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
               }
             >
               {paginate(data.level_shifts, shiftPage).map((row) => (
-                <TableRow key={`${row.outlet_id}-${row.shift_date}`}>
+                <TableRow
+                  key={`${row.outlet_id}-${row.weekday}-${row.shift_date}`}
+                  className="cursor-pointer"
+                  onClick={() => setSelectedShift(row)}
+                >
                   <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                   <TableCell className="text-xs">{row.outlet_name}</TableCell>
+                  <TableCell className="text-xs">{WEEKDAY_LABELS[row.weekday] ?? row.weekday}</TableCell>
                   <TableCell className="text-xs">{row.shift_date}</TableCell>
                   <TableCell className="text-xs text-right tabular-nums">{row.before_mean}</TableCell>
                   <TableCell className="text-xs text-right tabular-nums">{row.after_mean}</TableCell>
@@ -326,6 +362,18 @@ export function DataQualityTab({ customerId, outletIds, startDate, endDate, acti
             </PaginatedTable>
           )}
         </CollapsibleSection>
+
+        {/* Level shift detail modal */}
+        {selectedShift && (
+          <LevelShiftModal
+            shift={selectedShift}
+            customerId={customerId}
+            startDate={startDate}
+            endDate={endDate}
+            onClose={() => setSelectedShift(null)}
+            t={t}
+          />
+        )}
       </div>
     </TooltipProvider>
   )
@@ -465,6 +513,140 @@ function PaginatedTable(
         </div>
       )}
     </>
+  )
+}
+
+const shiftChartConfig: ChartConfig = {
+  sold: { label: "Sales", color: "hsl(217 91% 60%)" },
+}
+
+function LevelShiftModal(
+  { shift, customerId, startDate, endDate, onClose, t }: {
+    shift: LevelShift
+    customerId: string
+    startDate: string
+    endDate: string
+    onClose: () => void
+    t: (key: string) => string
+  },
+) {
+  const router = useRouter()
+  const { data: salesData, isLoading } = useQuery({
+    queryKey: ["level-shift-sales", customerId, shift.outlet_id, startDate, endDate],
+    queryFn: () => salesApi.aggregated({
+      customer_id: customerId,
+      outlet_ids: [shift.outlet_id],
+      start_date: startDate,
+      end_date: endDate,
+    }),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Filter to only the shift's weekday (isoweekday 1=Mon matches JS getDay() 1=Mon)
+  const chartData = useMemo(() => {
+    if (!salesData?.data) return []
+    const jsDay = shift.weekday % 7 // iso 1-7 → JS 1-6,0
+    return salesData.data
+      .filter((s) => new Date(s.date + "T00:00:00").getDay() === jsDay)
+      .map((s) => ({ date: s.date, sold: s.sold }))
+  }, [salesData, shift.weekday])
+
+  const wdLabel = WEEKDAY_LABELS[shift.weekday] ?? String(shift.weekday)
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="sm:max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-base">{shift.outlet_name}</DialogTitle>
+          <DialogDescription className="font-mono text-xs">
+            {shift.ext_id} &mdash; {wdLabel}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex gap-6">
+          {/* Left: stats */}
+          <div className="flex flex-col gap-2 text-sm min-w-[140px]">
+            <div>
+              <span className="text-[var(--muted-foreground)] text-xs">{t("weekday")}</span>
+              <div className="font-semibold">{wdLabel}</div>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)] text-xs">{t("shiftDate")}</span>
+              <div className="font-semibold">{shift.shift_date}</div>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)] text-xs">{t("beforeMean")}</span>
+              <div className="font-semibold tabular-nums">{shift.before_mean}</div>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)] text-xs">{t("afterMean")}</span>
+              <div className="font-semibold tabular-nums">{shift.after_mean}</div>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)] text-xs">{t("magnitude")}</span>
+              <div className="font-semibold tabular-nums">
+                {shift.magnitude_pct > 0 ? "+" : ""}{shift.magnitude_pct}%
+              </div>
+            </div>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5 mt-auto"
+              onClick={() => router.push(`/outlets?search=${encodeURIComponent(shift.ext_id)}`)}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("openOutlet")}
+            </Button>
+          </div>
+          {/* Vertical separator */}
+          <div className="w-px bg-[var(--border)]" />
+          {/* Right: chart */}
+          <div className="flex-1 min-w-0">
+            {isLoading ? (
+              <div className="flex items-center justify-center h-48 text-xs text-[var(--muted-foreground)]">
+                {t("loading")}
+              </div>
+            ) : chartData.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-xs text-[var(--muted-foreground)]">
+                {t("noData")}
+              </div>
+            ) : (
+              <ChartContainer config={shiftChartConfig} className="h-56 w-full">
+                <LineChart data={chartData} margin={{ top: 20, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" opacity={0.4} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 9 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: string) => {
+                      const d = new Date(v + "T00:00:00")
+                      return `${d.getMonth() + 1}/${d.getDate()}`
+                    }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
+                  <ChartTooltip content={<ChartTooltipContent hideIndicator labelKey="date" formatter={(v) => Number(v).toLocaleString()} />} />
+                  <ReferenceLine
+                    x={shift.shift_date}
+                    stroke="hsl(38 92% 50%)"
+                    strokeDasharray="4 4"
+                    strokeWidth={2}
+                    label={{ value: t("shiftDate"), position: "insideTop", fill: "hsl(38 92% 50%)", fontSize: 10 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="sold"
+                    stroke={shiftChartConfig.sold.color}
+                    strokeWidth={1.5}
+                    dot={false}
+                  />
+                </LineChart>
+              </ChartContainer>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

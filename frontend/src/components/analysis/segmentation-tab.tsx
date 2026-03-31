@@ -227,7 +227,11 @@ export function SegmentationTab({ customerId, outletIds, startDate, endDate, act
                   {data.predictability
                     .slice((predPage - 1) * ITEMS_PER_PAGE, predPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedPred(row)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums">{row.cv}</TableCell>

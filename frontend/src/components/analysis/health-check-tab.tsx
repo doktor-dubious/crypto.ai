@@ -3,7 +3,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { Info } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Info, ExternalLink } from "lucide-react"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
@@ -14,6 +15,10 @@ import {
   Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { healthCheckApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -28,7 +33,11 @@ interface Props {
 
 export function HealthCheckTab({ customerId, outletIds, active }: Props) {
   const t = useTranslations("salesAnalysis")
+  const router = useRouter()
   const [deadPage, setDeadPage] = useState(1)
+  const [selectedDead, setSelectedDead] = useState<{ ext_id: string; name: string; last_sale_date: string; days_since_last_sale: number } | null>(null)
+  const [selectedVolume, setSelectedVolume] = useState<{ ext_id: string; name: string; total_sold: number; pct_of_total: number } | null>(null)
+  const [selectedDupOutlet, setSelectedDupOutlet] = useState<{ name: string; ext_id?: string } | null>(null)
   const [volumePage, setVolumePage] = useState(1)
   const [enginePage, setEnginePage] = useState(1)
 
@@ -163,7 +172,11 @@ export function HealthCheckTab({ customerId, outletIds, active }: Props) {
                 {structural.dead_outlets
                   .slice((deadPage - 1) * ITEMS_PER_PAGE, deadPage * ITEMS_PER_PAGE)
                   .map((o) => (
-                  <TableRow key={o.outlet_id}>
+                  <TableRow
+                    key={o.outlet_id}
+                    className="cursor-pointer"
+                    onClick={() => setSelectedDead(o)}
+                  >
                     <TableCell className="text-xs font-mono">{o.ext_id}</TableCell>
                     <TableCell className="text-xs">{o.name}</TableCell>
                     <TableCell className="text-xs text-right tabular-nums">{o.last_sale_date}</TableCell>
@@ -190,7 +203,12 @@ export function HealthCheckTab({ customerId, outletIds, active }: Props) {
               <div key={i} className="border border-[var(--border)] rounded-lg p-3">
                 <div className="flex flex-wrap gap-2">
                   {g.names.map((name, j) => (
-                    <Badge key={j} variant="secondary" className="text-xs">
+                    <Badge
+                      key={j}
+                      variant="secondary"
+                      className="text-xs cursor-pointer hover:bg-[var(--accent)]"
+                      onClick={() => setSelectedDupOutlet({ name, ext_id: undefined })}
+                    >
                       {name}
                     </Badge>
                   ))}
@@ -228,7 +246,11 @@ export function HealthCheckTab({ customerId, outletIds, active }: Props) {
                   {structural.volume_top10_outlets
                     .slice((volumePage - 1) * ITEMS_PER_PAGE, volumePage * ITEMS_PER_PAGE)
                     .map((o) => (
-                    <TableRow key={o.outlet_id}>
+                    <TableRow
+                      key={o.outlet_id}
+                      className="cursor-pointer"
+                      onClick={() => setSelectedVolume(o)}
+                    >
                       <TableCell className="text-xs font-mono">{o.ext_id}</TableCell>
                       <TableCell className="text-xs">{o.name}</TableCell>
                       <TableCell className="text-xs text-right tabular-nums">{o.pct_of_total}%</TableCell>
@@ -314,6 +336,94 @@ export function HealthCheckTab({ customerId, outletIds, active }: Props) {
           <div className="text-xs text-[var(--muted-foreground)] py-4 text-center">{t("noData")}</div>
         )}
       </section>
+
+      {/* Dead outlet modal */}
+      <Dialog open={!!selectedDead} onOpenChange={(open) => { if (!open) setSelectedDead(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">{selectedDead?.name}</DialogTitle>
+            <DialogDescription className="font-mono text-xs">{selectedDead?.ext_id}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--muted-foreground)]">{t("healthLastSale")}</span>
+              <span className="tabular-nums">{selectedDead?.last_sale_date}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--muted-foreground)]">{t("healthDaysAgo", { days: "" }).trim()}</span>
+              <span className="tabular-nums text-red-500">{selectedDead?.days_since_last_sale}</span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (selectedDead) router.push(`/outlets?search=${encodeURIComponent(selectedDead.ext_id)}`)
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("openOutlet")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Volume outlet modal */}
+      <Dialog open={!!selectedVolume} onOpenChange={(open) => { if (!open) setSelectedVolume(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">{selectedVolume?.name}</DialogTitle>
+            <DialogDescription className="font-mono text-xs">{selectedVolume?.ext_id}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--muted-foreground)]">{t("healthTotalSold")}</span>
+              <span className="tabular-nums font-medium">{selectedVolume?.total_sold.toLocaleString()}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--muted-foreground)]">{t("healthPctOfTotal")}</span>
+              <span className="tabular-nums">{selectedVolume?.pct_of_total}%</span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (selectedVolume) router.push(`/outlets?search=${encodeURIComponent(selectedVolume.ext_id)}`)
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("openOutlet")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate outlet modal */}
+      <Dialog open={!!selectedDupOutlet} onOpenChange={(open) => { if (!open) setSelectedDupOutlet(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">{selectedDupOutlet?.name}</DialogTitle>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (selectedDupOutlet) router.push(`/outlets?search=${encodeURIComponent(selectedDupOutlet.name)}`)
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("openOutlet")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </TooltipProvider>
   )

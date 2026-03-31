@@ -49,7 +49,7 @@ class KairosEngine(PredictionEngine):
     Ridge regression on residuals, identical to the Chronos/TimesFM approach.
     """
 
-    _VALID_PRECISIONS = {"float32", "bfloat16", "float16"}
+    _VALID_PRECISIONS = {"float32"}
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID):
         self._model_id = model_id
@@ -168,7 +168,15 @@ class KairosEngine(PredictionEngine):
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
             self._dtype = dtype_map[self._precision]
             if self._dtype != torch.float32:
-                self._model = self._model.to(self._dtype)
+                try:
+                    self._model = self._model.to(self._dtype)
+                except RuntimeError as exc:
+                    logger.warning(
+                        "Kairos model does not support %s (%s); falling back to float32",
+                        self._precision, exc,
+                    )
+                    self._dtype = torch.float32
+                    self._precision = "float32"
             self._model.to(self._device)
             self._model.eval()
             logger.info(
@@ -378,13 +386,33 @@ class KairosEngine(PredictionEngine):
         ).to(self._device)  # (batch_size, max_len)
 
         with torch.no_grad():
-            forecast = self._model(
-                past_target=context_tensor,
-                prediction_length=horizon,
-                generation=True,
-                preserve_positivity=True,
-                average_with_flipped_input=True,
-            )
+            try:
+                forecast = self._model(
+                    past_target=context_tensor,
+                    prediction_length=horizon,
+                    generation=True,
+                    preserve_positivity=True,
+                    average_with_flipped_input=True,
+                )
+            except RuntimeError as exc:
+                if self._dtype != torch.float32 and "half precision" in str(exc):
+                    logger.warning(
+                        "Kairos forward pass failed in %s (%s); retrying in float32",
+                        self._precision, exc,
+                    )
+                    self._dtype = torch.float32
+                    self._precision = "float32"
+                    self._model = self._model.float()
+                    context_tensor = context_tensor.float()
+                    forecast = self._model(
+                        past_target=context_tensor,
+                        prediction_length=horizon,
+                        generation=True,
+                        preserve_positivity=True,
+                        average_with_flipped_input=True,
+                    )
+                else:
+                    raise
         # prediction_outputs shape: (batch, num_quantiles, horizon)
         raw_output = forecast["prediction_outputs"].cpu().float().numpy()
 

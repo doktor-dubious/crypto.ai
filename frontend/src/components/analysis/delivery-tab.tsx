@@ -70,6 +70,7 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
   const [wdEffPage, setWdEffPage] = useState(1)
   const [selectedOutlet, setSelectedOutlet] = useState<HighReturnOutlet | null>(null)
   const [selectedSoldOut, setSelectedSoldOut] = useState<SoldOutOutlet | null>(null)
+  const [selectedFixed, setSelectedFixed] = useState<{ outlet_id: string; ext_id: string; outlet_name: string; cv: number; sold_eq_delivered_pct: number; avg_sold: number } | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ["analysis-delivery", customerId, outletIds, startDate, endDate],
@@ -179,7 +180,11 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                   {data.high_return
                     .slice((hrPage - 1) * ITEMS_PER_PAGE, hrPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedOutlet(row as HighReturnOutlet)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums text-red-500">
@@ -288,7 +293,11 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                   {data.sold_out
                     .slice((soPage - 1) * ITEMS_PER_PAGE, soPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedSoldOut(row as SoldOutOutlet)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums text-amber-600">
@@ -329,7 +338,11 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
                   {data.fixed_accounts
                     .slice((fixedPage - 1) * ITEMS_PER_PAGE, fixedPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedFixed(row)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums">{row.cv}</TableCell>
@@ -343,6 +356,43 @@ export function DeliveryTab({ customerId, outletIds, startDate, endDate, active 
               </Table>
             </div>
             <PaginationBar page={fixedPage} setPage={setFixedPage} totalItems={data.fixed_accounts.length} />
+
+            {/* Fixed account modal */}
+            <Dialog open={!!selectedFixed} onOpenChange={(open) => { if (!open) setSelectedFixed(null) }}>
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="text-base">{selectedFixed?.outlet_name}</DialogTitle>
+                  <DialogDescription className="font-mono text-xs">{selectedFixed?.ext_id}</DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2 py-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("cv")}</span>
+                    <span className="tabular-nums font-medium">{selectedFixed?.cv}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("soldEqDelivered")}</span>
+                    <span className="tabular-nums">{selectedFixed?.sold_eq_delivered_pct}%</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("avgSold")}</span>
+                    <span className="tabular-nums">{selectedFixed?.avg_sold}</span>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => {
+                      if (selectedFixed) router.push(`/outlets?search=${encodeURIComponent(selectedFixed.ext_id)}`)
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </section>
@@ -365,8 +415,10 @@ function WeekdayHeatmap(
     setPage: (p: number) => void
   },
 ) {
+  const router = useRouter()
   const [sortField, setSortField] = useState<WdSortField>("ext_id")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
+  const [selectedWdOutlet, setSelectedWdOutlet] = useState<{ ext_id: string; name: string } | null>(null)
 
   function handleSort(field: WdSortField) {
     if (sortField === field) {
@@ -471,7 +523,11 @@ function WeekdayHeatmap(
           </TableHeader>
           <TableBody>
             {outlets.map(([oid, info]) => (
-              <TableRow key={oid}>
+              <TableRow
+                key={oid}
+                className="cursor-pointer"
+                onClick={() => setSelectedWdOutlet({ ext_id: info.ext_id, name: info.name })}
+              >
                 <TableCell className="text-xs font-mono">{info.ext_id}</TableCell>
                 <TableCell className="text-xs">{info.name}</TableCell>
                 {[1, 2, 3, 4, 5, 6, 7].map((wd) => {
@@ -495,6 +551,29 @@ function WeekdayHeatmap(
       </div>
       <p className="text-[10px] text-[var(--muted-foreground)] mt-1">{t("returnPct")} / {t("soldOutPct")}</p>
       <PaginationBar page={page} setPage={setPage} totalItems={allOutlets.length} />
+
+      {/* Weekday efficiency outlet modal */}
+      <Dialog open={!!selectedWdOutlet} onOpenChange={(open) => { if (!open) setSelectedWdOutlet(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">{selectedWdOutlet?.name}</DialogTitle>
+            <DialogDescription className="font-mono text-xs">{selectedWdOutlet?.ext_id}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (selectedWdOutlet) router.push(`/outlets?search=${encodeURIComponent(selectedWdOutlet.ext_id)}`)
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("openOutlet")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

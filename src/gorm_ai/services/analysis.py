@@ -195,42 +195,51 @@ class AnalysisService:
                         discrepancies_net[oid].append(diff)
                     net_counts[oid] = net_counts.get(oid, 0) + 1
 
-            # Level shifts (CUSUM on weekly aggregates, exclude PAD dates)
+            # Level shifts per weekday (CUSUM, exclude PAD dates)
             non_pad_rows = [r for r in sales_rows if r[1] not in pad_date_set]
-            if len(non_pad_rows) >= 60:
-                sold_values = np.array([r[2] for r in non_pad_rows], dtype=float)
-                dates_list = [r[1] for r in non_pad_rows]
-                # Weekly aggregates
-                week_sums = []
-                week_dates = []
-                for i in range(0, len(sold_values) - 6, 7):
-                    week_sums.append(np.mean(sold_values[i:i + 7]))
-                    week_dates.append(dates_list[min(i + 3, len(dates_list) - 1)])
+            by_weekday: dict[int, list[tuple]] = defaultdict(list)
+            for r in non_pad_rows:
+                by_weekday[r[1].isoweekday()].append(r)
 
-                if len(week_sums) >= 8:
-                    arr = np.array(week_sums)
-                    mean = arr.mean()
-                    cusum = np.cumsum(arr - mean)
-                    std = max(cusum.std(), 1e-6)
-                    threshold = 2.5 * std
+            for wd, wd_rows in by_weekday.items():
+                if len(wd_rows) < 20:
+                    continue
+                wd_values = np.array([r[2] for r in wd_rows], dtype=float)
+                wd_dates = [r[1] for r in wd_rows]
 
-                    for i in range(2, len(cusum) - 2):
-                        if abs(cusum[i]) > threshold:
-                            before = float(arr[:i].mean())
-                            after = float(arr[i:].mean())
-                            change = after - before
-                            mag = abs(change)
-                            mag_pct = (change / before * 100) if before > 0 else 0
-                            if abs(mag_pct) > 20:
-                                level_shifts.append({
-                                    "outlet_id": oid, "outlet_name": name, "ext_id": ext_id,
-                                    "shift_date": week_dates[i],
-                                    "before_mean": round(before, 1),
-                                    "after_mean": round(after, 1),
-                                    "magnitude": round(mag, 1),
-                                    "magnitude_pct": round(mag_pct, 1),
-                                })
-                            break  # only report first significant shift per outlet
+                # Skip low-volume weekdays where shifts are noise
+                mean = float(wd_values.mean())
+                if mean < 3:
+                    continue
+
+                cusum = np.cumsum(wd_values - mean)
+                std = max(float(cusum.std()), 1e-6)
+                threshold = 2.5 * std
+
+                for i in range(3, len(cusum) - 3):
+                    if abs(cusum[i]) > threshold:
+                        before = float(wd_values[:i].mean())
+                        after = float(wd_values[i:].mean())
+                        change = after - before
+                        abs_change = abs(change)
+                        mag_pct = (
+                            change / before * 100
+                            if before > 0 else 0
+                        )
+                        # Require both meaningful % and absolute change
+                        if abs(mag_pct) > 20 and abs_change >= 2:
+                            level_shifts.append({
+                                "outlet_id": oid,
+                                "outlet_name": name,
+                                "ext_id": ext_id,
+                                "weekday": wd,
+                                "shift_date": wd_dates[i],
+                                "before_mean": round(before, 1),
+                                "after_mean": round(after, 1),
+                                "magnitude": round(abs_change, 1),
+                                "magnitude_pct": round(mag_pct, 1),
+                            })
+                        break  # one shift per outlet per weekday
 
         # Build discrepancy results
         disc_results = []

@@ -1,14 +1,18 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { Info } from "lucide-react"
+import { Info, Sparkles, Loader2 } from "lucide-react"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog"
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip"
@@ -85,7 +89,7 @@ export function OutlierTab({ customerId, outletIds, startDate, endDate, active }
 
         <TabsContent value="recurring-sales">
           <SectionHeader title={t("recurringSales")} desc={t("recurringSalesDesc")} />
-          <RecurringTable items={data.recurring_sales} t={t} />
+          <RecurringTable items={data.recurring_sales} t={t} customerId={customerId} outletIds={outletIds} />
         </TabsContent>
 
         <TabsContent value="non-recurring-sales">
@@ -96,7 +100,7 @@ export function OutlierTab({ customerId, outletIds, startDate, endDate, active }
 
         <TabsContent value="recurring-delivery">
           <SectionHeader title={t("recurringDelivery")} desc={t("recurringDeliveryDesc")} />
-          <RecurringTable items={data.recurring_delivery} t={t} />
+          <RecurringTable items={data.recurring_delivery} t={t} customerId={customerId} outletIds={outletIds} />
         </TabsContent>
 
         <TabsContent value="non-recurring-delivery">
@@ -131,56 +135,149 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
   )
 }
 
-function RecurringTable({ items, t }: { items: RecurringDateOutlier[]; t: (key: string) => string }) {
+function RecurringTable(
+  { items, t, customerId, outletIds }: {
+    items: RecurringDateOutlier[]
+    t: (key: string) => string
+    customerId: string
+    outletIds: string[]
+  },
+) {
+  const [investigating, setInvestigating] = useState<RecurringDateOutlier | null>(null)
+  const [aiResponse, setAiResponse] = useState("")
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const responseRef = useRef<HTMLDivElement>(null)
+
+  const doInvestigate = useCallback(async (row: RecurringDateOutlier) => {
+    setInvestigating(row)
+    setAiResponse("")
+    setAiError(null)
+    setAiLoading(true)
+    try {
+      await analysisApi.investigateOutlier(
+        {
+          customer_id: customerId,
+          outlet_ids: outletIds,
+          month: row.month,
+          day: row.day,
+          years: row.years,
+          direction: row.direction,
+        },
+        (chunk) => {
+          setAiResponse((prev) => prev + chunk)
+        },
+      )
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "Investigation failed")
+    } finally {
+      setAiLoading(false)
+    }
+  }, [customerId, outletIds])
+
+  // Auto-scroll as response streams in
+  useEffect(() => {
+    if (responseRef.current) {
+      responseRef.current.scrollTop = responseRef.current.scrollHeight
+    }
+  }, [aiResponse])
+
   if (items.length === 0) {
     return <div className="text-xs text-[var(--muted-foreground)] py-8 text-center">{t("noOutliers")}</div>
   }
   return (
-    <div className="border border-[var(--border)] rounded-lg overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="text-xs">{t("month")}</TableHead>
-            <TableHead className="text-xs">{t("day")}</TableHead>
-            <TableHead className="text-xs">{t("years")}</TableHead>
-            <TableHead className="text-xs text-right">
-              <span className="inline-flex items-center gap-1 justify-end">
-                {t("zScore")}
-                <InfoIcon text={t("zScoreTooltip")} />
-              </span>
-            </TableHead>
-            <TableHead className="text-xs">{t("direction")}</TableHead>
-            <TableHead className="text-xs">{t("padStatus")}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((row, i) => (
-            <TableRow key={i}>
-              <TableCell className="text-xs">{MONTH_NAMES[row.month]}</TableCell>
-              <TableCell className="text-xs tabular-nums">{row.day}</TableCell>
-              <TableCell className="text-xs tabular-nums">{row.years.join(", ")}</TableCell>
-              <TableCell className="text-xs text-right tabular-nums">{row.avg_z_score}</TableCell>
-              <TableCell className="text-xs">
-                <Badge variant={row.direction === "positive" ? "destructive" : "secondary"} className="text-[10px]">
-                  {t(row.direction)}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-xs">
-                {row.is_registered_pad ? (
-                  <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">
-                    {row.pad_name ?? t("registered")}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-600">
-                    {t("unregistered")}
-                  </Badge>
-                )}
-              </TableCell>
+    <>
+      <div className="border border-[var(--border)] rounded-lg overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-xs">{t("month")}</TableHead>
+              <TableHead className="text-xs">{t("day")}</TableHead>
+              <TableHead className="text-xs">{t("years")}</TableHead>
+              <TableHead className="text-xs text-right">
+                <span className="inline-flex items-center gap-1 justify-end">
+                  {t("zScore")}
+                  <InfoIcon text={t("zScoreTooltip")} />
+                </span>
+              </TableHead>
+              <TableHead className="text-xs">{t("direction")}</TableHead>
+              <TableHead className="text-xs">{t("padStatus")}</TableHead>
+              <TableHead className="text-xs w-10" />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+          </TableHeader>
+          <TableBody>
+            {items.map((row, i) => (
+              <TableRow key={i}>
+                <TableCell className="text-xs">{MONTH_NAMES[row.month]}</TableCell>
+                <TableCell className="text-xs tabular-nums">{row.day}</TableCell>
+                <TableCell className="text-xs tabular-nums">{row.years.join(", ")}</TableCell>
+                <TableCell className="text-xs text-right tabular-nums">{row.avg_z_score}</TableCell>
+                <TableCell className="text-xs">
+                  <Badge variant={row.direction === "positive" ? "destructive" : "secondary"} className="text-[10px]">
+                    {t(row.direction)}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-xs">
+                  {row.is_registered_pad ? (
+                    <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">
+                      {row.pad_name ?? t("registered")}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-600">
+                      {t("unregistered")}
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell className="text-xs px-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 cursor-pointer"
+                    title={t("investigate")}
+                    onClick={() => doInvestigate(row)}
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* AI Investigation modal */}
+      <Dialog open={!!investigating} onOpenChange={(open) => { if (!open) setInvestigating(null) }}>
+        <DialogContent className="sm:max-w-xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              {t("investigateTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {investigating && `${MONTH_NAMES[investigating.month]} ${investigating.day} (${investigating.years.join(", ")}) — ${t(investigating.direction)}`}
+            </DialogDescription>
+          </DialogHeader>
+          <div
+            ref={responseRef}
+            className="text-sm leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-[50vh] pr-2"
+          >
+            {aiLoading && !aiResponse && (
+              <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("investigateLoading")}
+              </div>
+            )}
+            {aiResponse}
+            {aiLoading && aiResponse && (
+              <span className="inline-block ml-1 w-2 h-4 bg-[var(--foreground)] animate-pulse" />
+            )}
+            {aiError && (
+              <div className="text-red-500 mt-2">{aiError}</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

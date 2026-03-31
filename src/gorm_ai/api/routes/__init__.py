@@ -15,6 +15,7 @@ from gorm_ai.api.routes import (
     logs,
     optimization,
     outlet_groups,
+    outlier_investigate,
     outlets,
     pads,
     predefined_pads,
@@ -34,6 +35,9 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
+api_router.include_router(
+    outlier_investigate.router, prefix="/analysis", tags=["analysis"],
+)
 api_router.include_router(health_check.router, prefix="/health-check", tags=["health-check"])
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
 api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-tunes"])

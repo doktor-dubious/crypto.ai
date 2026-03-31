@@ -938,6 +938,7 @@ export interface LevelShift {
   outlet_id: string
   outlet_name: string
   ext_id: string
+  weekday: number
   shift_date: string
   before_mean: number
   after_mean: number
@@ -1151,6 +1152,41 @@ export const analysisApi = {
       method: "POST",
       body: JSON.stringify(params),
     }),
+
+  investigateOutlier: async (
+    params: {
+      customer_id: string
+      outlet_ids: string[]
+      month: number
+      day: number
+      years: number[]
+      direction: string
+    },
+    onChunk: (text: string) => void,
+  ) => {
+    const base = typeof window === "undefined"
+      ? (process.env.BACKEND_INTERNAL_URL ?? "http://localhost:8000")
+      : ""
+    const prefix = base ? "" : "/backend"
+    const url = `${base}${prefix}/api/v1/analysis/investigate`
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API ${res.status}: ${text}`)
+    }
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("No response body")
+    const decoder = new TextDecoder()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      onChunk(decoder.decode(value, { stream: true }))
+    }
+  },
 }
 
 // ─── Health Check ────────────────────────────────────────────────────────────

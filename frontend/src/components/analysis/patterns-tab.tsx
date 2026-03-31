@@ -3,7 +3,8 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { TrendingUp, TrendingDown, Minus, Info } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { TrendingUp, TrendingDown, Minus, Info, ExternalLink } from "lucide-react"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
@@ -14,6 +15,10 @@ import {
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
   ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
@@ -21,7 +26,7 @@ import {
 import {
   LineChart, Line, BarChart, Bar, CartesianGrid, XAxis, YAxis, ReferenceLine,
 } from "recharts"
-import { analysisApi } from "@/lib/api"
+import { analysisApi, type WeekdayEffectOutlet } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 interface Props {
@@ -52,8 +57,11 @@ const ITEMS_PER_PAGE = 10
 
 export function PatternsTab({ customerId, outletIds, startDate, endDate, active }: Props) {
   const t = useTranslations("salesAnalysis")
+  const router = useRouter()
   const [wdPage, setWdPage] = useState(1)
   const [divPage, setDivPage] = useState(1)
+  const [selectedWdOutlet, setSelectedWdOutlet] = useState<WeekdayEffectOutlet | null>(null)
+  const [selectedDivOutlet, setSelectedDivOutlet] = useState<{ outlet_id: string; outlet_name: string; ext_id: string; outlet_slope: number; aggregate_slope: number; divergence: number } | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ["analysis-patterns", customerId, outletIds, startDate, endDate],
@@ -293,7 +301,11 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
                   {weekday_effects
                     .slice((wdPage - 1) * ITEMS_PER_PAGE, wdPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedWdOutlet(row)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums">{row.effect_strength}</TableCell>
@@ -306,6 +318,43 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
               </Table>
             </div>
             <PaginationBar page={wdPage} setPage={setWdPage} totalItems={weekday_effects.length} />
+
+            {/* Weekday effect outlet modal */}
+            <Dialog open={!!selectedWdOutlet} onOpenChange={(open) => { if (!open) setSelectedWdOutlet(null) }}>
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="text-base">{selectedWdOutlet?.outlet_name}</DialogTitle>
+                  <DialogDescription className="font-mono text-xs">{selectedWdOutlet?.ext_id}</DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2 py-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("effectStrength")}</span>
+                    <span className="tabular-nums font-medium">{selectedWdOutlet?.effect_strength}</span>
+                  </div>
+                  {selectedWdOutlet && WEEKDAY_LABELS.map((d, i) => (
+                    <div key={d} className="flex items-center justify-between">
+                      <span className="text-[var(--muted-foreground)]">{t(d.toLowerCase())}</span>
+                      <span className="tabular-nums">{selectedWdOutlet.weekday_means[i]}</span>
+                    </div>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => {
+                      if (selectedWdOutlet) {
+                        router.push(`/outlets?search=${encodeURIComponent(selectedWdOutlet.ext_id)}`)
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </section>
         </TooltipProvider>
       )}
@@ -333,7 +382,11 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
                   {divergent_outlets
                     .slice((divPage - 1) * ITEMS_PER_PAGE, divPage * ITEMS_PER_PAGE)
                     .map((row) => (
-                      <TableRow key={row.outlet_id}>
+                      <TableRow
+                        key={row.outlet_id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedDivOutlet(row)}
+                      >
                         <TableCell className="text-xs font-mono">{row.ext_id}</TableCell>
                         <TableCell className="text-xs">{row.outlet_name}</TableCell>
                         <TableCell className="text-xs text-right tabular-nums">{row.outlet_slope}</TableCell>
@@ -345,6 +398,45 @@ export function PatternsTab({ customerId, outletIds, startDate, endDate, active 
               </Table>
             </div>
             <PaginationBar page={divPage} setPage={setDivPage} totalItems={divergent_outlets.length} />
+
+            {/* Divergent outlet modal */}
+            <Dialog open={!!selectedDivOutlet} onOpenChange={(open) => { if (!open) setSelectedDivOutlet(null) }}>
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle className="text-base">{selectedDivOutlet?.outlet_name}</DialogTitle>
+                  <DialogDescription className="font-mono text-xs">{selectedDivOutlet?.ext_id}</DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2 py-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("outletSlope")}</span>
+                    <span className="tabular-nums font-medium">{selectedDivOutlet?.outlet_slope}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("aggSlope")}</span>
+                    <span className="tabular-nums">{selectedDivOutlet?.aggregate_slope}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--muted-foreground)]">{t("divergence")}</span>
+                    <span className="tabular-nums font-medium">{selectedDivOutlet?.divergence}x</span>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => {
+                      if (selectedDivOutlet) {
+                        router.push(`/outlets?search=${encodeURIComponent(selectedDivOutlet.ext_id)}`)
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t("openOutlet")}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </section>

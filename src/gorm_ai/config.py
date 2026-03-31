@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     hf_token: str | None = None
     hf_hub_cache: str | None = None
 
+    # Anthropic / Claude
+    claude_api: str | None = None
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 
