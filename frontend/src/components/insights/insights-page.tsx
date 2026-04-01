@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { chatApi, type ChatMessageResponse, type ChatOutletRef } from "@/lib/api"
 import { MarkdownContent } from "@/components/insights/markdown-content"
+import { useSession } from "@/lib/auth-client"
 import { useCustomer } from "@/components/providers/customer-provider"
 import { InsightsChart } from "@/components/insights/insights-chart"
 import { OutletDetailModal } from "@/components/insights/outlet-detail-modal"
@@ -98,6 +99,7 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
   const t = useTranslations("insights")
   const router = useRouter()
   const queryClient = useQueryClient()
+  const { data: authSession } = useSession()
   const { activeCustomer } = useCustomer()
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSessionId ?? null)
@@ -125,6 +127,7 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
     mutationFn: (msg: string) =>
       chatApi.send({
         customer_id: activeCustomer!.id,
+        user_id: authSession?.user?.id,
         session_id: activeSessionId,
         message: msg,
       }),

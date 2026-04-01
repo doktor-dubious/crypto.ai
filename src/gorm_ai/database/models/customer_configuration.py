@@ -101,7 +101,6 @@ class CustomerConfiguration(Base):
     )
     # Insights / Chat
     insights_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    insights_hidden_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     customer: Mapped["Customer"] = relationship(

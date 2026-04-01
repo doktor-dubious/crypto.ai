@@ -7,10 +7,11 @@ to the LLM so it can compose a natural-language answer.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import structlog
-from sqlalchemy import func, select, case, extract
+from sqlalchemy import text as sa_text, func, select, case, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.models.customer import Customer
@@ -18,6 +19,7 @@ from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
+from gorm_ai.database.models.outlet_info import OutletInfo
 from gorm_ai.database.models.prediction import Prediction
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.sales import Sales
@@ -193,6 +195,56 @@ TOOL_DEFINITIONS: list[dict] = [
             "required": ["outlet_ids"],
         },
     },
+    {
+        "name": "get_database_schema",
+        "description": (
+            "Returns the database schema (table names, column names and types, "
+            "foreign keys) and a summary of outlet_info keys for the customer. "
+            "Call this BEFORE run_query so you know which tables and columns "
+            "are available."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "Customer UUID — used to list outlet_info keys.",
+                },
+            },
+            "required": ["customer_id"],
+        },
+    },
+    {
+        "name": "run_query",
+        "description": (
+            "Execute a READ-ONLY SQL query against the database and return "
+            "up to 50 rows.  Use this for ad-hoc questions that the other "
+            "tools cannot answer.  You MUST call get_database_schema first "
+            "to know the available tables and columns.\n\n"
+            "Rules:\n"
+            "- Only SELECT statements are allowed.\n"
+            "- You MUST provide customer_id — it will be enforced server-side.\n"
+            "- Always filter by active = true unless explicitly asked about "
+            "inactive records.\n"
+            "- Prefer aggregated queries (GROUP BY, SUM, AVG, COUNT) over "
+            "returning raw rows.\n"
+            "- Maximum 50 rows returned."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "Customer UUID — query is scoped to this customer.",
+                },
+                "sql": {
+                    "type": "string",
+                    "description": "A read-only SELECT SQL query.",
+                },
+            },
+            "required": ["customer_id", "sql"],
+        },
+    },
 ]
 
 
@@ -201,8 +253,9 @@ TOOL_DEFINITIONS: list[dict] = [
 class ToolExecutor:
     """Execute chat tools against the database, returning aggregated data."""
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, allowed_customer_id: str | None = None) -> None:
         self.db = db
+        self.allowed_customer_id = allowed_customer_id
 
     async def execute(self, tool_name: str, params: dict) -> dict:
         """Dispatch to the right handler and return a JSON-serializable dict."""
@@ -618,3 +671,309 @@ class ToolExecutor:
                 for r in rows
             ],
         }
+
+    # ── get_database_schema ───────────────────────────────────────────────
+
+    async def _tool_get_database_schema(
+        self,
+        customer_id: str,
+    ) -> dict:
+        schema = _get_schema_description()
+
+        # Fetch outlet_info keys for this customer
+        stmt = (
+            select(OutletInfo.key, func.count().label("cnt"))
+            .join(Outlet, Outlet.id == OutletInfo.outlet_id)
+            .where(
+                Outlet.customer_id == customer_id,
+                Outlet.active.is_(True),
+                OutletInfo.active.is_(True),
+            )
+            .group_by(OutletInfo.key)
+            .order_by(func.count().desc())
+        )
+        rows = (await self.db.execute(stmt)).all()
+        info_keys = [
+            {"key": r.key, "outlet_count": r.cnt}
+            for r in rows
+        ]
+
+        # Fetch outlet_group names
+        grp_stmt = (
+            select(OutletGroup.id, OutletGroup.name)
+            .where(
+                OutletGroup.customer_id == customer_id,
+                OutletGroup.active.is_(True),
+            )
+        )
+        grp_rows = (await self.db.execute(grp_stmt)).all()
+
+        return {
+            "schema": schema,
+            "outlet_info_keys": info_keys,
+            "outlet_groups": [
+                {"id": r.id, "name": r.name} for r in grp_rows
+            ],
+            "note": (
+                "All tables have: id (UUID PK), active (bool), "
+                "created_at, updated_at. Always filter by active = true. "
+                "Always filter by customer_id to respect data boundaries."
+            ),
+        }
+
+    # ── run_query ─────────────────────────────────────────────────────────
+
+    async def _tool_run_query(self, customer_id: str, sql: str) -> dict:
+        # Enforce customer scope
+        if self.allowed_customer_id and customer_id != self.allowed_customer_id:
+            return {"error": "Access denied: wrong customer_id."}
+
+        # Validate: only SELECT allowed
+        cleaned = sql.strip().rstrip(";").strip()
+        if not re.match(r"(?i)^\s*SELECT\b", cleaned):
+            return {"error": "Only SELECT queries are allowed."}
+
+        # Block dangerous keywords
+        upper = cleaned.upper()
+        for forbidden in [
+            "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+            "CREATE", "GRANT", "REVOKE", "COPY", "EXECUTE", "DO ",
+        ]:
+            if re.search(rf"\b{forbidden}\b", upper):
+                return {"error": f"Forbidden keyword: {forbidden}"}
+
+        # Verify customer_id appears in the query (prevent cross-customer access)
+        if customer_id not in cleaned:
+            return {
+                "error": (
+                    "Query must filter by the provided customer_id. "
+                    "Include a WHERE clause with customer_id = "
+                    f"'{customer_id}' or join through a table that does."
+                ),
+            }
+
+        # Add LIMIT if not present
+        if "LIMIT" not in upper:
+            cleaned += " LIMIT 50"
+
+        try:
+            # Execute in a read-only transaction
+            await self.db.execute(sa_text("SET TRANSACTION READ ONLY"))
+            result = await self.db.execute(sa_text(cleaned))
+            columns = list(result.keys())
+            rows_raw = result.fetchall()
+
+            rows = []
+            for row in rows_raw[:50]:
+                row_dict = {}
+                for i, col in enumerate(columns):
+                    val = row[i]
+                    if hasattr(val, "isoformat"):
+                        val = val.isoformat()
+                    elif isinstance(val, (bytes, memoryview)):
+                        val = "<binary>"
+                    row_dict[col] = val
+                rows.append(row_dict)
+
+            return {
+                "columns": columns,
+                "row_count": len(rows),
+                "rows": rows,
+            }
+        except Exception as exc:
+            return {"error": f"Query failed: {exc}"}
+        finally:
+            # Reset transaction mode
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+
+
+# ── Auto-generated schema description ─────────────────────────────────────────
+
+_SCHEMA_TABLES = [
+    {
+        "table": "customers",
+        "description": "Customer records",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("name", "VARCHAR(255)", "Customer name"),
+            ("description", "TEXT", "Optional description"),
+            ("notes", "TEXT", "Optional notes"),
+            ("type", "SMALLINT", "Customer type"),
+        ],
+    },
+    {
+        "table": "outlets",
+        "description": "Sales outlets / accounts / points of sale",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("customer_id", "UUID", "FK → customers.id"),
+            ("ext_id", "VARCHAR(50)", "External ID used by customer"),
+            ("ext_id_2", "INT", "Secondary external ID"),
+            ("name", "VARCHAR(255)", "Outlet name"),
+            ("description", "TEXT", "Optional description"),
+            ("notes", "TEXT", "Optional notes"),
+            ("address", "VARCHAR(255)", "Street address"),
+            ("zip", "VARCHAR(20)", "Postal code"),
+            ("city", "VARCHAR(100)", "City"),
+            ("state", "VARCHAR(100)", "State / region"),
+            ("country", "VARCHAR(100)", "Country"),
+            ("start_date", "DATE", "When outlet started"),
+            ("end_date", "DATE", "When outlet was deactivated"),
+            ("scan", "BOOL", "Scan-based outlet"),
+            ("season", "BOOL", "Seasonal outlet"),
+            ("sublets", "BOOL", "Has sublets"),
+        ],
+    },
+    {
+        "table": "outlet_info",
+        "description": "Key-value metadata for outlets (type, region, chain, etc.)",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("key", "VARCHAR(100)", "Metadata key name"),
+            ("value", "TEXT", "Metadata value"),
+        ],
+    },
+    {
+        "table": "sales",
+        "description": "Daily sales data (TimescaleDB hypertable)",
+        "columns": [
+            ("id", "UUID", "Part of composite PK"),
+            ("date", "DATE", "Sale date (part of composite PK)"),
+            ("customer_id", "UUID", "FK → customers.id"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("sold", "INT", "Units sold (core field)"),
+            ("delivered", "INT", "Units delivered"),
+            ("scan_sold", "INT", "Units sold via scan"),
+            ("net_sold", "INT", "Net units sold"),
+        ],
+    },
+    {
+        "table": "outlet_financials",
+        "description": "Cost/profit per unit per weekday per outlet",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("weekday", "SMALLINT", "1=Monday, 7=Sunday"),
+            ("cost_per_unit", "FLOAT", "Cost per unit"),
+            ("profit_per_unit", "FLOAT", "Profit per unit"),
+        ],
+    },
+    {
+        "table": "outlet_deliveries",
+        "description": "Delivery config per weekday per outlet",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("weekday", "SMALLINT", "1=Monday, 7=Sunday"),
+            ("open", "BOOL", "Outlet open on this day"),
+            ("fixed", "FLOAT", "Fixed delivery quantity"),
+            ("minimum", "FLOAT", "Minimum delivery"),
+            ("maximum", "FLOAT", "Maximum delivery"),
+            ("add", "FLOAT", "Fixed amount to add"),
+            ("add_pct", "FLOAT", "Percentage to add"),
+        ],
+    },
+    {
+        "table": "outlet_group",
+        "description": "Named groups of outlets",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("customer_id", "UUID", "FK → customers.id"),
+            ("name", "VARCHAR(255)", "Group name"),
+            ("description", "TEXT", "Description"),
+        ],
+    },
+    {
+        "table": "outlet_group_members",
+        "description": "Association: which outlets belong to which groups",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("group_id", "UUID", "FK → outlet_group.id"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+        ],
+    },
+    {
+        "table": "predictions",
+        "description": "Prediction run metadata",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("customer_id", "UUID", "FK → customers.id"),
+            ("date", "DATE", "Prediction date"),
+            ("engine", "TEXT", "Engine used"),
+            ("requested_engine", "TEXT", "Engine requested"),
+            ("delay", "SMALLINT", "History cutoff days"),
+        ],
+    },
+    {
+        "table": "prediction_outlets",
+        "description": "Per-outlet prediction results",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("prediction_id", "UUID", "FK → predictions.id"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("predicted", "FLOAT", "P50 point forecast"),
+            ("lower_bound", "FLOAT", "P10"),
+            ("upper_bound", "FLOAT", "P90"),
+            ("eo", "FLOAT", "Economic optimal (Newsvendor)"),
+            ("cv", "FLOAT", "Coefficient of variation"),
+            ("actual_sale", "FLOAT", "Actual sale at prediction time"),
+            ("q20", "FLOAT", "P20 quantile"),
+            ("q30", "FLOAT", "P30"), ("q40", "FLOAT", "P40"),
+            ("q50", "FLOAT", "P50"), ("q60", "FLOAT", "P60"),
+            ("q70", "FLOAT", "P70"), ("q80", "FLOAT", "P80"),
+        ],
+    },
+    {
+        "table": "last_prediction",
+        "description": "Latest prediction per outlet per weekday (overwritten each run)",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("prediction_id", "UUID", "FK → predictions.id"),
+            ("weekday", "SMALLINT", "1=Mon, 7=Sun"),
+            ("predicted", "FLOAT", "P50"),
+            ("economic_optimal", "FLOAT", "EO"),
+            ("delivered", "FLOAT", "Delivered quantity"),
+            ("lower_bound", "FLOAT", "P10"),
+            ("upper_bound", "FLOAT", "P90"),
+            ("cv", "FLOAT", "Coefficient of variation"),
+        ],
+    },
+    {
+        "table": "pads",
+        "description": "Prediction Adjustment Dates — special event definitions",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("customer_id", "UUID", "FK → customers.id"),
+            ("name", "TEXT", "PAD name (e.g. 'Christmas')"),
+            ("historic_days", "INT", "0=all history"),
+            ("allow_negative", "BOOL", "Allow negative adjustment"),
+            ("boost", "FLOAT", "Fixed copy adjustment"),
+            ("boost_pct", "FLOAT", "Percentage adjustment"),
+        ],
+    },
+    {
+        "table": "pad_dates",
+        "description": "Specific dates belonging to a PAD",
+        "columns": [
+            ("id", "UUID", "Primary key"),
+            ("pad_id", "UUID", "FK → pads.id"),
+            ("date", "DATE", "The special date"),
+        ],
+    },
+]
+
+
+def _get_schema_description() -> str:
+    """Build a human-readable schema description from the table definitions."""
+    parts = []
+    for tbl in _SCHEMA_TABLES:
+        cols = "\n".join(
+            f"    {c[0]:30s} {c[1]:15s} — {c[2]}" for c in tbl["columns"]
+        )
+        parts.append(f"### {tbl['table']}\n{tbl['description']}\n{cols}")
+    return "\n\n".join(parts)

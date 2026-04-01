@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -76,6 +76,9 @@ class Configuration(Base):
         nullable=True,
         index=True,
     )
+
+    # Insights / Chat
+    insights_hidden_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     prediction_engine: Mapped["PredictionEngine | None"] = relationship("PredictionEngine")

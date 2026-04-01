@@ -178,6 +178,7 @@ class FlowStateEngine(PredictionEngine):
             import torch
             from tsfm_public import FlowStateForPrediction
 
+            logger.info("Downloading/resolving model from Hugging Face: %s", self._model_id)
             self._model = FlowStateForPrediction.from_pretrained(
                 self._model_id, revision=self._revision,
             )

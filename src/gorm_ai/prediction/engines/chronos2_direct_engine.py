@@ -183,6 +183,7 @@ class Chronos2DirectEngine(PredictionEngine):
                 "float16": torch.float16,
             }
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info("Downloading/resolving model from Hugging Face: %s", self._model_id)
             self._pipeline = BaseChronosPipeline.from_pretrained(
                 self._model_id,
                 device_map=device,

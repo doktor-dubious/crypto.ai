@@ -624,12 +624,13 @@ class TimesFMEngine(PredictionEngine):
             repo_id = "google/timesfm-2.5-200m-pytorch"
 
             # Download only if not already cached
+            logger.info("Downloading/resolving model from Hugging Face: %s", repo_id)
             model_path = hf_hub_download(
                 repo_id=repo_id,
                 filename="model.safetensors",
                 force_download=False,
             )
-            logger.info("Loading TimesFM from: %s", model_path)
+            logger.info("Model resolved at: %s", model_path)
 
             # Bypass from_pretrained() which hardcodes force_download=True
             # and re-downloads on every call. Instead, instantiate the wrapper

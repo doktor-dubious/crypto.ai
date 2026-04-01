@@ -180,6 +180,7 @@ class YingLongEngine(PredictionEngine):
                 "bfloat16": torch.bfloat16,
                 "float16": torch.float16,
             }
+            logger.info("Downloading/resolving model from Hugging Face: %s", self._model_id)
             self._model = AutoModelForCausalLM.from_pretrained(
                 self._model_id,
                 trust_remote_code=True,

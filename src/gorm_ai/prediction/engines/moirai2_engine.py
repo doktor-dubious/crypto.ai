@@ -128,6 +128,7 @@ class Moirai2Engine(PredictionEngine):
         try:
             from uni2ts.model.moirai2 import Moirai2Module
 
+            logger.info("Downloading/resolving model from Hugging Face: %s", self._model_id)
             self._module = Moirai2Module.from_pretrained(self._model_id)
             logger.info("MOIRAI-2 module loaded from '%s'", self._model_id)
         except Exception as e:

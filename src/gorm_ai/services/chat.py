@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gorm_ai.database.connection import get_session
 from gorm_ai.database.models.chat import ChatMessage, ChatSession
 from gorm_ai.database.models.customer import Customer
+from gorm_ai.database.models.configuration import Configuration
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.llm import Llm
 from gorm_ai.database.models.outlet import Outlet
@@ -109,7 +110,12 @@ class ChatService:
     def __init__(self, db: AsyncSession, api_key: str) -> None:
         self.db = db
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
-        self.tool_executor = ToolExecutor(db)
+        self._tool_executor: ToolExecutor | None = None
+
+    def _get_tool_executor(self, customer_id: str) -> ToolExecutor:
+        if not self._tool_executor or self._tool_executor.allowed_customer_id != customer_id:
+            self._tool_executor = ToolExecutor(self.db, allowed_customer_id=customer_id)
+        return self._tool_executor
 
     async def send_message(
         self,
@@ -147,7 +153,7 @@ class ChatService:
         # 5. Call Claude in a tool-use loop
         system = _build_system_prompt(customer_id, customer.name, outlet_groups, custom_prompt, hidden_prompt)
         assistant_text, chart, outlets, total_tokens = await self._run_conversation(
-            system, messages,
+            system, messages, customer_id,
         )
 
         # 6. Persist assistant message
@@ -197,6 +203,7 @@ class ChatService:
         self,
         system: str,
         messages: list[dict],
+        customer_id: str,
     ) -> tuple[str, ChartConfig | None, list[OutletRef] | None, dict]:
         """Run the Claude conversation loop with tool use."""
         total_input = 0
@@ -253,7 +260,8 @@ class ChatService:
                     tool=tool_use.name,
                     params=tool_use.input,
                 )
-                result = await self.tool_executor.execute(
+                tool_executor = self._get_tool_executor(customer_id)
+                result = await tool_executor.execute(
                     tool_use.name, tool_use.input,
                 )
                 log.info(
@@ -368,20 +376,29 @@ class ChatService:
     async def _get_insights_prompts(
         self, customer_id: str,
     ) -> tuple[str | None, str | None]:
-        """Return (system_prompt, hidden_prompt) from customer config."""
+        """Return (system_prompt, hidden_prompt).
+
+        system_prompt comes from customer_configuration (per-customer).
+        hidden_prompt comes from configuration (gorm-level, shared).
+        """
+        # Per-customer system prompt
         result = await self.db.execute(
-            select(
-                CustomerConfiguration.insights_system_prompt,
-                CustomerConfiguration.insights_hidden_prompt,
-            ).where(
+            select(CustomerConfiguration.insights_system_prompt).where(
                 CustomerConfiguration.customer_id == customer_id,
                 CustomerConfiguration.active.is_(True),
             )
         )
-        row = result.one_or_none()
-        if row:
-            return row[0], row[1]
-        return None, None
+        system_prompt = result.scalar_one_or_none()
+
+        # Gorm-level hidden prompt
+        result = await self.db.execute(
+            select(Configuration.insights_hidden_prompt).where(
+                Configuration.active.is_(True),
+            )
+        )
+        hidden_prompt = result.scalar_one_or_none()
+
+        return system_prompt, hidden_prompt
 
     async def _get_outlet_groups(self, customer_id: str) -> list[dict]:
         result = await self.db.execute(

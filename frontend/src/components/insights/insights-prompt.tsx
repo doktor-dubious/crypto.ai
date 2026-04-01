@@ -6,11 +6,13 @@ import { useTranslations } from "next-intl"
 import { useMutation } from "@tanstack/react-query"
 import { Sparkles, ArrowRight, Loader2 } from "lucide-react"
 import { chatApi } from "@/lib/api"
+import { useSession } from "@/lib/auth-client"
 import { useCustomer } from "@/components/providers/customer-provider"
 
 export function InsightsPrompt() {
   const t = useTranslations("insights")
   const router = useRouter()
+  const { data: authSession } = useSession()
   const { activeCustomer } = useCustomer()
   const [message, setMessage] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
@@ -19,6 +21,7 @@ export function InsightsPrompt() {
     mutationFn: (msg: string) =>
       chatApi.send({
         customer_id: activeCustomer!.id,
+        user_id: authSession?.user?.id,
         message: msg,
       }),
     onSuccess: (data) => {

@@ -683,16 +683,31 @@ function InsightsTab({
           value={(draft.insights_system_prompt as string) ?? ""}
           onChange={(e) => setDraft({ ...draft, insights_system_prompt: e.target.value || null })}
           placeholder={t("fieldInsightsSystemPromptPlaceholder")}
-          rows={8}
+          rows={12}
           className="font-mono text-xs"
         />
       </FieldRow>
+    </div>
+  )
+}
+
+function GormInsightsTab({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: Record<string, unknown>
+  setDraft: (d: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations<"configuration">>
+}) {
+  return (
+    <div className="space-y-6">
       <FieldRow label={t("fieldInsightsHiddenPrompt")} info={t("fieldInsightsHiddenPromptInfo")}>
         <Textarea
           value={(draft.insights_hidden_prompt as string) ?? ""}
           onChange={(e) => setDraft({ ...draft, insights_hidden_prompt: e.target.value || null })}
           placeholder={t("fieldInsightsHiddenPromptPlaceholder")}
-          rows={6}
+          rows={12}
           className="font-mono text-xs"
         />
       </FieldRow>
@@ -955,6 +970,7 @@ export default function ConfigurationPage() {
                 { value: "weekday", label: t("tabWeekday") },
                 { value: "workers", label: t("tabWorkers") },
                 { value: "finetuning", label: t("tabFineTuning") },
+                { value: "insights", label: t("tabInsights") },
               ],
               <>
                 <TabsContent value="core" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -976,6 +992,9 @@ export default function ConfigurationPage() {
                 </TabsContent>
                 <TabsContent value="finetuning" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <FineTuningTab draft={gormDraft} setDraft={setGormDraft} isGorm={true} t={t} />
+                </TabsContent>
+                <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <GormInsightsTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
               </>
             )

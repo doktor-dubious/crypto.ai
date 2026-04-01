@@ -13,6 +13,7 @@ class ChatSendRequest(BaseModel):
     """Send a message in a chat session (or start a new one)."""
 
     customer_id: str
+    user_id: str | None = None  # Used for permission checks
     session_id: str | None = None  # None = create new session
     message: str
 

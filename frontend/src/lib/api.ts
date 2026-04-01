@@ -2509,12 +2509,20 @@ export interface ChatSendResponse {
 }
 
 export const chatApi = {
-  send: (data: { customer_id: string; session_id?: string | null; message: string }) =>
-    apiFetch<ChatSendResponse>("/chat", {
+  send: async (data: { customer_id: string; user_id?: string | null; session_id?: string | null; message: string }) => {
+    // Use dedicated API route to avoid Next.js rewrite proxy timeout
+    const res = await fetch("/api/chat", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
       signal: AbortSignal.timeout(120_000),
-    }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API ${res.status}: ${text}`)
+    }
+    return res.json() as Promise<ChatSendResponse>
+  },
 
   listSessions: (customerId: string, params?: { limit?: number; offset?: number }) => {
     const qs = new URLSearchParams({ customer_id: customerId })

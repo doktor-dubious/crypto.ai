@@ -2,12 +2,13 @@
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from gorm_ai.api.deps import DbSession
 from gorm_ai.config import get_settings
 from gorm_ai.database.models.chat import ChatMessage, ChatSession
+from gorm_ai.database.models.user_customer import UserCustomer
 from gorm_ai.schemas.chat import (
     ChatMessageResponse,
     ChatSendRequest,
@@ -72,6 +73,22 @@ async def send_message(
             status_code=503,
             detail="Anthropic API key not configured",
         )
+
+    # Check user has insight access to this customer
+    if request.user_id:
+        result = await session.execute(
+            select(UserCustomer).where(
+                UserCustomer.user_id == request.user_id,
+                UserCustomer.customer_id == request.customer_id,
+                UserCustomer.active.is_(True),
+                UserCustomer.allow_insight.is_(True),
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=403,
+                detail="No insight access to this customer",
+            )
 
     chat_service = ChatService(session, settings.claude_api)
     try:

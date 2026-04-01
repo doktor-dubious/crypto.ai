@@ -50,6 +50,7 @@ class TimesFMFinetunedEngine(TimesFMEngine):
         try:
             import timesfm
 
+            logger.info("Loading fine-tuned TimesFM from local path: %s", path)
             self._model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(path)
             self._compile_for_context(1024)
             logger.info("Fine-tuned TimesFM loaded from '%s'", path)
