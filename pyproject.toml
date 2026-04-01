@@ -70,6 +70,7 @@ conflicts = [
     [
         { extra = "autogluon" },
         { extra = "moirai" },
+        { extra = "kairos" },
     ],
     [
         { extra = "flowstate" },

@@ -29,6 +29,7 @@ from gorm_ai.services.sales_filter import SalesFilterService
 from gorm_ai.services.simulation_filter import SimulationFilterService
 from gorm_ai.services.simulation_strategy import SimulationStrategyService
 from gorm_ai.services.task import TaskService
+from gorm_ai.services.user_customer import UserCustomerService
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -151,6 +152,11 @@ def get_simulation_strategy_service(session: DbSession) -> SimulationStrategySer
     return SimulationStrategyService(session)
 
 
+def get_user_customer_service(session: DbSession) -> UserCustomerService:
+    """Get user-customer service."""
+    return UserCustomerService(session)
+
+
 # Type aliases for service injection
 AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
 HealthCheckServiceDep = Annotated[HealthCheckService, Depends(get_health_check_service)]
@@ -183,3 +189,4 @@ SimulationFilterServiceDep = Annotated[
 ]
 SimulationStrategyServiceDep = Annotated[SimulationStrategyService, Depends(get_simulation_strategy_service)]
 SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]
+UserCustomerServiceDep = Annotated[UserCustomerService, Depends(get_user_customer_service)]
