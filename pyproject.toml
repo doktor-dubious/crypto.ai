@@ -75,7 +75,13 @@ conflicts = [
     [
         { extra = "flowstate" },
         { extra = "yinglong" },
+    ],
+    [
+        { extra = "flowstate" },
         { extra = "kairos" },
+    ],
+    [
+        { extra = "flowstate" },
         { extra = "autogluon" },
     ],
 ]
