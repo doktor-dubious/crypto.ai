@@ -217,7 +217,13 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                 )}
               </div>
               {sendMutation.isError && (
-                <p className="mt-1 text-xs text-[var(--destructive)]">{t("sendError")}</p>
+                <p className="mt-1 text-xs text-[var(--destructive)]">
+              {sendMutation.error?.message?.includes("429")
+                ? t("rateLimitError")
+                : sendMutation.error?.message?.includes("403")
+                  ? t("accessDeniedError")
+                  : t("sendError")}
+            </p>
               )}
             </form>
           </div>
@@ -254,7 +260,13 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
               )}
             </div>
             {sendMutation.isError && (
-              <p className="mt-1 text-xs text-[var(--destructive)]">{t("sendError")}</p>
+              <p className="mt-1 text-xs text-[var(--destructive)]">
+              {sendMutation.error?.message?.includes("429")
+                ? t("rateLimitError")
+                : sendMutation.error?.message?.includes("403")
+                  ? t("accessDeniedError")
+                  : t("sendError")}
+            </p>
             )}
           </form>
 

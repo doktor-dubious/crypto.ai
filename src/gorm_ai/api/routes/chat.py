@@ -98,7 +98,9 @@ async def send_message(
             session_id=request.session_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        detail = str(exc)
+        status = 429 if "busy" in detail or "rate" in detail.lower() else 400
+        raise HTTPException(status_code=status, detail=detail)
     except Exception as exc:
         log.error("chat_error", error=str(exc))
         raise HTTPException(status_code=500, detail="Failed to process message")

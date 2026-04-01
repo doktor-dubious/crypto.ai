@@ -797,11 +797,11 @@ class ToolExecutor:
             cleaned += " LIMIT 50"
 
         try:
-            # Execute in a read-only transaction
-            await self.db.execute(sa_text("SET TRANSACTION READ ONLY"))
-            result = await self.db.execute(sa_text(cleaned))
-            columns = list(result.keys())
-            rows_raw = result.fetchall()
+            # Use a savepoint so we don't corrupt the parent transaction
+            async with self.db.begin_nested():
+                result = await self.db.execute(sa_text(cleaned))
+                columns = list(result.keys())
+                rows_raw = result.fetchall()
 
             rows = []
             for row in rows_raw[:50]:
@@ -822,12 +822,6 @@ class ToolExecutor:
             }
         except Exception as exc:
             return {"error": f"Query failed: {exc}"}
-        finally:
-            # Reset transaction mode
-            try:
-                await self.db.rollback()
-            except Exception:
-                pass
 
     # ── run_prediction ────────────────────────────────────────────────────
 

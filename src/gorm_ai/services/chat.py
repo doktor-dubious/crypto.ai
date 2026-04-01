@@ -33,7 +33,7 @@ from gorm_ai.services.chat_tools import TOOL_DEFINITIONS, ToolExecutor
 
 log = structlog.get_logger("gorm_ai.chat")
 
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "claude-haiku-4-5-20251001"
 MAX_TOOL_ROUNDS = 8  # prevent runaway loops
 
 
@@ -138,14 +138,14 @@ class ChatService:
             customer_id, session_id, message,
         )
 
-        # 3. Persist user message
+        # 3. Persist user message and commit so session exists for sure
         user_msg = ChatMessage(
             session_id=session.id,
             role=1,
             content=message,
         )
         self.db.add(user_msg)
-        await self.db.flush()
+        await self.db.commit()
 
         # 4. Build conversation history for Claude
         messages = await self._build_messages(session, message)
@@ -174,10 +174,13 @@ class ChatService:
         self.db.add(assistant_msg)
 
         # 7. Update session title if this is the first exchange
-        # (messages list was refreshed earlier in _build_messages)
-        user_count = sum(1 for m in session.messages if m.role == 1)
-        if user_count <= 1:
-            session.title = message[:120]
+        try:
+            await self.db.refresh(session, ["messages"])
+            user_count = sum(1 for m in session.messages if m.role == 1)
+            if user_count <= 1:
+                session.title = message[:120]
+        except Exception:
+            pass
 
         await self.db.commit()
         await self.db.refresh(assistant_msg)
@@ -209,14 +212,29 @@ class ChatService:
         total_input = 0
         total_output = 0
 
-        for _ in range(MAX_TOOL_ROUNDS):
-            response = await self.client.messages.create(
-                model=MODEL,
-                max_tokens=4096,
-                system=system,
-                tools=TOOL_DEFINITIONS,
-                messages=messages,
-            )
+        for round_num in range(MAX_TOOL_ROUNDS):
+            try:
+                response = await self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=4096,
+                    system=system,
+                    tools=TOOL_DEFINITIONS,
+                    messages=messages,
+                )
+            except anthropic.RateLimitError as exc:
+                log.warning("rate_limited", round=round_num, error=str(exc))
+                # If we already have some results, return what we have
+                if round_num > 0:
+                    return (
+                        "I was rate-limited while processing your request. "
+                        "Please wait a moment and try again.",
+                        None, None,
+                        {"input": total_input, "output": total_output},
+                    )
+                raise ValueError(
+                    "The AI service is temporarily busy. "
+                    "Please wait a minute and try again."
+                )
 
             total_input += response.usage.input_tokens
             total_output += response.usage.output_tokens

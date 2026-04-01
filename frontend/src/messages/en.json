@@ -2075,6 +2075,8 @@
     "promptPlaceholder": "Ask a question about your sales data or predictions...",
     "followUpPlaceholder": "Ask a follow-up question...",
     "sendError": "Failed to send message. Please try again.",
+    "rateLimitError": "The AI service is temporarily busy. Please wait a minute and try again.",
+    "accessDeniedError": "You don't have insight access to this customer.",
     "thinking": "Thinking...",
     "sessionNotFound": "Conversation not found.",
     "noSessions": "No conversations yet.",
