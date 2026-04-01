@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from gorm_ai.database.models.customer import Customer
     from gorm_ai.database.models.outlet_group import OutletGroup
     from gorm_ai.database.models.prediction_engine import PredictionEngine
+    from gorm_ai.database.models.prediction_strategy import PredictionStrategy
 
 
 class CustomerConfiguration(Base):
@@ -101,13 +102,32 @@ class CustomerConfiguration(Base):
     )
     # Insights / Chat
     insights_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insights_prediction_engine_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("prediction_engine.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    insights_prediction_strategy_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("prediction_strategies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    insights_worker: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Relationships
     customer: Mapped["Customer"] = relationship(
         "Customer",
         back_populates="configuration",
     )
-    prediction_engine: Mapped["PredictionEngine | None"] = relationship("PredictionEngine")
+    prediction_engine: Mapped["PredictionEngine | None"] = relationship(
+        "PredictionEngine", foreign_keys=[prediction_engine_id],
+    )
+    insights_prediction_engine: Mapped["PredictionEngine | None"] = relationship(
+        "PredictionEngine", foreign_keys=[insights_prediction_engine_id],
+    )
+    insights_prediction_strategy: Mapped["PredictionStrategy | None"] = relationship(
+        "PredictionStrategy", foreign_keys=[insights_prediction_strategy_id],
+    )
     group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[group_id])
     production_group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[production_group_id])
     currency: Mapped["Currency | None"] = relationship("Currency", foreign_keys=[currency_id], lazy="selectin")

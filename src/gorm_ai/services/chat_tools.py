@@ -19,6 +19,7 @@ from gorm_ai.database.models.last_prediction import LastPrediction
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_financials import OutletFinancials
 from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
+from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.outlet_info import OutletInfo
 from gorm_ai.database.models.prediction import Prediction
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
@@ -243,6 +244,45 @@ TOOL_DEFINITIONS: list[dict] = [
                 },
             },
             "required": ["customer_id", "sql"],
+        },
+    },
+    {
+        "name": "run_prediction",
+        "description": (
+            "Trigger a new prediction for a date range.  Returns a summary "
+            "of the prediction results (total predicted demand, per-weekday "
+            "breakdown, top/bottom outlets).  Use this when the user asks "
+            "about future demand or forecasts for dates that haven't been "
+            "predicted yet.\n\n"
+            "The prediction engine, strategy, and worker are configured "
+            "per-customer — you don't need to choose them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "Customer UUID.",
+                },
+                "prediction_from": {
+                    "type": "string",
+                    "description": "Start date (YYYY-MM-DD).",
+                },
+                "prediction_to": {
+                    "type": "string",
+                    "description": "End date (YYYY-MM-DD).",
+                },
+                "outlet_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional outlet UUIDs. Omit for all outlets.",
+                },
+                "outlet_group_id": {
+                    "type": "string",
+                    "description": "Optional outlet group UUID.",
+                },
+            },
+            "required": ["customer_id", "prediction_from", "prediction_to"],
         },
     },
 ]
@@ -788,6 +828,124 @@ class ToolExecutor:
                 await self.db.rollback()
             except Exception:
                 pass
+
+    # ── run_prediction ────────────────────────────────────────────────────
+
+    async def _tool_run_prediction(
+        self,
+        customer_id: str,
+        prediction_from: str,
+        prediction_to: str,
+        outlet_ids: list[str] | None = None,
+        outlet_group_id: str | None = None,
+    ) -> dict:
+        if self.allowed_customer_id and customer_id != self.allowed_customer_id:
+            return {"error": "Access denied: wrong customer_id."}
+
+        from gorm_ai.schemas.prediction import PredictionRequest
+        from gorm_ai.services.prediction import PredictionService
+
+        # Load insights prediction settings from customer config
+        result = await self.db.execute(
+            select(
+                CustomerConfiguration.insights_prediction_engine_id,
+                CustomerConfiguration.insights_prediction_strategy_id,
+                CustomerConfiguration.insights_worker,
+            ).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        config_row = result.one_or_none()
+
+        engine_slug = None
+        strategy_id = None
+        worker = None
+        if config_row:
+            if config_row[0]:
+                # Resolve engine slug from ID
+                from gorm_ai.database.models.prediction_engine import (
+                    PredictionEngine as PEModel,
+                )
+                r = await self.db.execute(
+                    select(PEModel.slug).where(PEModel.id == config_row[0])
+                )
+                engine_slug = r.scalar_one_or_none()
+            strategy_id = config_row[1]
+            worker = config_row[2]
+
+        d_from = date.fromisoformat(prediction_from)
+        d_to = date.fromisoformat(prediction_to)
+
+        # Build prediction request
+        req = PredictionRequest(
+            customer_id=customer_id,
+            prediction_from=d_from,
+            prediction_to=d_to,
+            outlet_ids=outlet_ids,
+            outlet_group_id=outlet_group_id,
+            engine=engine_slug,
+            prediction_strategy_id=strategy_id,
+        )
+
+        try:
+            service = PredictionService(self.db)
+            response = await service.create_prediction(req)
+            await self.db.commit()
+
+            # Summarize results
+            total_predicted = 0.0
+            total_eo = 0.0
+            outlet_count = 0
+            outlet_summaries = []
+
+            for op in response.outlets:
+                outlet_count += 1
+                op_total = sum(r.predicted_value for r in op.results)
+                op_eo = sum(r.economic_optimal or 0 for r in op.results)
+                total_predicted += op_total
+                total_eo += op_eo
+                outlet_summaries.append({
+                    "outlet_id": op.outlet_id,
+                    "total_predicted": round(op_total, 1),
+                    "total_eo": round(op_eo, 1),
+                    "days": len(op.results),
+                })
+
+            # Sort and take top/bottom 5
+            outlet_summaries.sort(key=lambda x: x["total_predicted"], reverse=True)
+            top5 = outlet_summaries[:5]
+            bottom5 = outlet_summaries[-5:] if len(outlet_summaries) > 5 else []
+
+            # Resolve outlet names for top/bottom
+            all_ids = [o["outlet_id"] for o in top5 + bottom5]
+            if all_ids:
+                name_result = await self.db.execute(
+                    select(Outlet.id, Outlet.name).where(Outlet.id.in_(all_ids))
+                )
+                name_map = {r.id: r.name for r in name_result.all()}
+                for o in top5 + bottom5:
+                    o["name"] = name_map.get(o["outlet_id"], "")
+
+            horizon = (d_to - d_from).days + 1
+            return {
+                "prediction_id": response.id,
+                "engine": response.engine,
+                "date_from": prediction_from,
+                "date_to": prediction_to,
+                "horizon_days": horizon,
+                "outlet_count": outlet_count,
+                "total_predicted": round(total_predicted, 1),
+                "total_economic_optimal": round(total_eo, 1),
+                "avg_per_outlet_per_day": round(
+                    total_predicted / max(outlet_count * horizon, 1), 2,
+                ),
+                "top_5_outlets": top5,
+                "bottom_5_outlets": bottom5,
+            }
+        except Exception as exc:
+            log.error("prediction_error", error=str(exc))
+            return {"error": f"Prediction failed: {exc}"}
 
 
 # ── Auto-generated schema description ─────────────────────────────────────────

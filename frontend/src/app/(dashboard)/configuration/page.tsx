@@ -26,6 +26,10 @@ import {
   customersApi,
   currenciesApi,
   predictionEnginesApi,
+  predictionStrategiesApi,
+  tasksApi,
+  type PredictionStrategyResponse,
+  type WorkerInfo,
   outletGroupsApi,
   type CurrencyResponse,
   type CustomerResponse,
@@ -670,10 +674,16 @@ function FineTuningTab({
 function InsightsTab({
   draft,
   setDraft,
+  engines,
+  strategies,
+  workers,
   t,
 }: {
   draft: Record<string, unknown>
   setDraft: (d: Record<string, unknown>) => void
+  engines: PredictionEngineResponse[]
+  strategies: PredictionStrategyResponse[]
+  workers: WorkerInfo[]
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
   return (
@@ -683,9 +693,48 @@ function InsightsTab({
           value={(draft.insights_system_prompt as string) ?? ""}
           onChange={(e) => setDraft({ ...draft, insights_system_prompt: e.target.value || null })}
           placeholder={t("fieldInsightsSystemPromptPlaceholder")}
-          rows={12}
+          rows={8}
           className="font-mono text-xs"
         />
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightsPredictionEngine")} info={t("fieldInsightsPredictionEngineInfo")}>
+        <select
+          value={(draft.insights_prediction_engine_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insights_prediction_engine_id: e.target.value || null })}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">{t("fieldInsightsDefault")}</option>
+          {engines.map((e) => (
+            <option key={e.id} value={e.id}>{e.name} ({e.slug})</option>
+          ))}
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightsPredictionStrategy")} info={t("fieldInsightsPredictionStrategyInfo")}>
+        <select
+          value={(draft.insights_prediction_strategy_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insights_prediction_strategy_id: e.target.value || null })}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">{t("fieldInsightsDefault")}</option>
+          {strategies.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightsWorker")} info={t("fieldInsightsWorkerInfo")}>
+        <select
+          value={(draft.insights_worker as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insights_worker: e.target.value || null })}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="">{t("fieldInsightsDefault")}</option>
+          {workers.map((w) => (
+            <option key={w.name} value={w.name}>{w.name}</option>
+          ))}
+        </select>
       </FieldRow>
     </div>
   )
@@ -764,6 +813,18 @@ export default function ConfigurationPage() {
     queryKey: ["outletGroups", activeCustomer?.id],
     queryFn: () => outletGroupsApi.list(activeCustomer!.id),
     enabled: !!activeCustomer,
+  })
+
+  const { data: strategies = [] } = useQuery({
+    queryKey: ["predictionStrategies", activeCustomer?.id],
+    queryFn: () => predictionStrategiesApi.list(activeCustomer!.id),
+    enabled: !!activeCustomer,
+  })
+
+  const { data: workers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: tasksApi.listWorkers,
+    staleTime: 60_000,
   })
 
   const { data: currencies = [] } = useQuery({
@@ -1025,7 +1086,7 @@ export default function ConfigurationPage() {
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
                 <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
-                  <InsightsTab draft={configDraft} setDraft={setConfigDraft} t={t} />
+                  <InsightsTab draft={configDraft} setDraft={setConfigDraft} engines={engines} strategies={strategies} workers={workers} t={t} />
                 </TabsContent>
               </>
             )

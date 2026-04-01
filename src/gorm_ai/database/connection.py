@@ -14,6 +14,7 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.database_echo,
     pool_pre_ping=True,
+    pool_recycle=300,
 )
 
 async_session_factory = async_sessionmaker(
@@ -34,39 +35,25 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-# Lazily-created engine for Celery tasks.  Each asyncio.run() call (= each
-# Celery task) gets its own event loop, so connections from a previous task's
-# loop can't be reused.  NullPool avoids stale-connection errors across tasks
-# while pool_pre_ping=True lets SQLAlchemy transparently reconnect if the
-# connection drops during a long-running inference step within a single task.
-_task_engine = None
-_task_factory = None
-
-
-def _get_task_factory() -> async_sessionmaker:
-    """Return (and lazily create) the task-scoped session factory."""
-    global _task_engine, _task_factory
-    if _task_engine is None:
-        _task_engine = create_async_engine(
-            get_settings().database_url,
-            echo=get_settings().database_echo,
-            poolclass=NullPool,
-            pool_pre_ping=True,
-        )
-        _task_factory = async_sessionmaker(
-            _task_engine, class_=AsyncSession, expire_on_commit=False
-        )
-    return _task_factory
-
 
 @asynccontextmanager
 async def task_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a DB session safe for use inside Celery tasks.
 
-    Uses NullPool with pool_pre_ping so each session gets a fresh connection
-    that is validated before use.  The engine is shared across task_session()
-    calls within the same asyncio.run() to avoid repeated engine creation.
+    Creates a fresh NullPool engine per call to avoid stale connections across
+    asyncio.run() boundaries (each Celery task gets its own event loop).
     """
-    factory = _get_task_factory()
-    async with factory() as session:
-        yield session
+    task_engine = create_async_engine(
+        get_settings().database_url,
+        echo=get_settings().database_echo,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
+    factory = async_sessionmaker(
+        task_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with factory() as session:
+            yield session
+    finally:
+        await task_engine.dispose()
