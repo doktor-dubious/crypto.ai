@@ -187,8 +187,37 @@ function CustomerSwitcher() {
   const t = useTranslations("nav")
   const { customers, sortedCustomers, recentCustomers, activeCustomer, setActiveCustomer } = useCustomer()
   const [isOpen, setIsOpen] = useState(false)
-
   const blocksRef = useRef<BlocksIconHandle>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 })
+
+  // Position the dropdown below the trigger; flip above if it would overflow
+  useEffect(() => {
+    if (!isOpen || !triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    const dropdownHeight = 320 // max-h-[300px] + input + border
+    const spaceBelow = window.innerHeight - rect.bottom
+    const top = spaceBelow >= dropdownHeight ? rect.bottom : rect.top - dropdownHeight
+    setPos({ top: Math.max(0, top), left: rect.left, width: rect.width })
+  }, [isOpen])
+
+  // Close on outside click
+  const handleOutsideClick = useCallback((e: MouseEvent) => {
+    if (
+      dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+      triggerRef.current && !triggerRef.current.contains(e.target as Node)
+    ) {
+      setIsOpen(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen) {
+      document.addEventListener("mousedown", handleOutsideClick)
+      return () => document.removeEventListener("mousedown", handleOutsideClick)
+    }
+  }, [isOpen, handleOutsideClick])
 
   if (!activeCustomer) return (
     <div className="flex items-center gap-2 w-full px-3 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] border-b">
@@ -221,37 +250,6 @@ function CustomerSwitcher() {
       setIsOpen(false)
     }
   }
-
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 0 })
-
-  // Position the dropdown below the trigger; flip above if it would overflow
-  useEffect(() => {
-    if (!isOpen || !triggerRef.current) return
-    const rect = triggerRef.current.getBoundingClientRect()
-    const dropdownHeight = 320 // max-h-[300px] + input + border
-    const spaceBelow = window.innerHeight - rect.bottom
-    const top = spaceBelow >= dropdownHeight ? rect.bottom : rect.top - dropdownHeight
-    setPos({ top: Math.max(0, top), left: rect.left, width: rect.width })
-  }, [isOpen])
-
-  // Close on outside click
-  const handleOutsideClick = useCallback((e: MouseEvent) => {
-    if (
-      dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
-      triggerRef.current && !triggerRef.current.contains(e.target as Node)
-    ) {
-      setIsOpen(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (isOpen) {
-      document.addEventListener("mousedown", handleOutsideClick)
-      return () => document.removeEventListener("mousedown", handleOutsideClick)
-    }
-  }, [isOpen, handleOutsideClick])
 
   return (
     <>

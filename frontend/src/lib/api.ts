@@ -147,6 +147,11 @@ export interface CustomerUpdate {
   notes?: string | null
 }
 
+export const usersApi = {
+  customers: (userId: string) =>
+    apiFetch<CustomerResponse[]>(`/users/${userId}/customers`),
+}
+
 export const customersApi = {
   list: (params?: { limit?: number; offset?: number }) => {
     const qs = new URLSearchParams()

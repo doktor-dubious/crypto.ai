@@ -32,6 +32,7 @@ from gorm_ai.api.routes import (
     simulations,
     tasks,
     token,
+    users,
 )
 
 api_router = APIRouter()
@@ -77,5 +78,6 @@ api_router.include_router(simulations.router, prefix="/simulations", tags=["simu
 api_router.include_router(sales_filters.router, prefix="/sales-filters", tags=["sales-filters"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(token.router, prefix="/tokens", tags=["tokens"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
 
 __all__ = ["api_router"]

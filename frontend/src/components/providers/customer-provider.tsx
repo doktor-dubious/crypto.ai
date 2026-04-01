@@ -2,7 +2,8 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { customersApi, type CustomerResponse } from "@/lib/api"
+import { useSession } from "@/lib/auth-client"
+import { customersApi, usersApi, type CustomerResponse } from "@/lib/api"
 
 interface CustomerContextValue {
   customers: CustomerResponse[]
@@ -24,9 +25,13 @@ const STORAGE_KEY = "gorm:activeCustomerId"
 
 export function CustomerProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient()
+  const { data: session } = useSession()
+  const userId = session?.user?.id
+
   const { data: customers = [] } = useQuery({
-    queryKey: ["customers"],
-    queryFn: () => customersApi.list({ limit: 100 }),
+    queryKey: ["customers", userId],
+    queryFn: () => usersApi.customers(userId!),
+    enabled: !!userId,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -66,7 +71,7 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_KEY, customer.id)
     // Fire-and-forget: update last_opened_at on backend
     customersApi.opened(customer.id).then(() => {
-      queryClient.invalidateQueries({ queryKey: ["customers"] })
+      queryClient.invalidateQueries({ queryKey: ["customers", userId] })
     }).catch(() => {})
   }
 
