@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { useSidebar } from "@/components/ui/sidebar"
 import { TaskDetailModal } from "@/components/dashboard/task-detail-modal"
+import { SidebarChats } from "@/components/layout/sidebar-chats"
 import { cn } from "@/lib/utils"
 
 type BadgeVariant = "muted" | "info" | "success" | "destructive" | "warning"
@@ -273,6 +274,7 @@ export function SidebarTasks() {
           emptyLabel={t("noPendingTasks")}
           onTaskClick={handleTaskClick}
         />
+        <SidebarChats />
         <TaskGroup
           label={t("finished")}
           tasks={finishedSlice}

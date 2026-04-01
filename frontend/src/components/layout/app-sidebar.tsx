@@ -83,6 +83,7 @@ function getInitials(name: string): string {
 
 const NAV_ITEMS = [
   { href: "/", icon: Home, labelKey: "home" },
+  { href: "/insights", icon: Sparkles, labelKey: "insights" },
 ] as const
 
 const CUSTOMER_SUBNAV_ITEMS = [
@@ -367,11 +368,12 @@ export function AppSidebar() {
 
         {/* Task list */}
         <div
-          className="flex-1 min-h-0 overflow-hidden"
+          className="min-h-0 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           <SidebarTasks />
         </div>
+
       </SidebarContent>
 
       {/* Footer — user + nav dropdown */}

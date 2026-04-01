@@ -34,6 +34,7 @@ from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.prediction_strategy import PredictionStrategy
 from gorm_ai.database.models.sales import Sales
+from gorm_ai.database.models.token import Token, TokenModel
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.prediction.registry import EngineRegistry
 from gorm_ai.schemas.prediction import (
@@ -382,6 +383,15 @@ class PredictionService:
             default_profit=default_profit,
             weekday_corrections=weekday_corrections,
             engine_params=resolved_engine_params or None,
+        )
+
+        # Track patch/token usage
+        await self._update_model_token_usage(
+            customer_id=request.customer_id,
+            engine_slug=actual_engine,
+            batch_items=batch_items,
+            horizon=horizon,
+            patch_size=capabilities.patch_size,
         )
 
         if on_progress:
@@ -2236,6 +2246,84 @@ class PredictionService:
             if day_corrections:
                 result[outlet_id] = day_corrections
         return result
+
+    async def _update_model_token_usage(
+        self,
+        customer_id: str,
+        engine_slug: str,
+        batch_items: list[dict],
+        horizon: int,
+        patch_size: int,
+    ) -> None:
+        """Count patches used and update token/token_model tables."""
+        total_patches = 0
+        for item in batch_items:
+            hist_len = len(item.get("historical_data", []))
+            ctx = (hist_len + patch_size - 1) // patch_size
+            hrz = (horizon + patch_size - 1) // patch_size
+            total_patches += ctx + hrz
+
+        if total_patches == 0:
+            return
+
+        try:
+            # Find or create Token for customer
+            result = await self.session.execute(
+                select(Token).where(
+                    Token.customer_id == customer_id,
+                    Token.active.is_(True),
+                )
+            )
+            token = result.scalar_one_or_none()
+            if not token:
+                token = Token(
+                    customer_id=customer_id,
+                    used=0, available=0,
+                )
+                self.session.add(token)
+                await self.session.flush()
+
+            # Find prediction engine by slug
+            result = await self.session.execute(
+                select(PredictionEngineModel).where(
+                    PredictionEngineModel.slug == engine_slug,
+                )
+            )
+            engine_row = result.scalar_one_or_none()
+            if not engine_row:
+                return
+
+            # Find or create TokenModel
+            result = await self.session.execute(
+                select(TokenModel).where(
+                    TokenModel.token_id == token.id,
+                    TokenModel.prediction_engine_id == engine_row.id,
+                    TokenModel.active.is_(True),
+                )
+            )
+            token_model = result.scalar_one_or_none()
+            if not token_model:
+                token_model = TokenModel(
+                    token_id=token.id,
+                    prediction_engine_id=engine_row.id,
+                    used=0, available=0,
+                )
+                self.session.add(token_model)
+
+            token.used += total_patches
+            token_model.used += total_patches
+            await self.session.flush()
+            logger.info(
+                "prediction.token_usage: customer=%s engine=%s "
+                "outlets=%d patches=%d",
+                customer_id, engine_slug,
+                len(batch_items), total_patches,
+            )
+        except Exception:
+            logger.exception(
+                "prediction.token_usage_error: customer=%s",
+                customer_id,
+            )
 
     async def _persist_covariate_outlets(
         self,

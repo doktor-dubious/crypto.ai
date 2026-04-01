@@ -55,6 +55,7 @@ class TimesFMEngine(PredictionEngine):
             min_history_length=32,
             max_history_length=1024,
             max_horizon=128,
+            patch_size=32,
             supported_frequencies=["daily", "weekly", "monthly", "hourly"],
         )
 

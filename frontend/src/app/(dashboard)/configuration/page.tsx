@@ -667,7 +667,38 @@ function FineTuningTab({
   )
 }
 
-// ActionTab removed — replaced by AutomatizationTab component
+function InsightsTab({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: Record<string, unknown>
+  setDraft: (d: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations<"configuration">>
+}) {
+  return (
+    <div className="space-y-6">
+      <FieldRow label={t("fieldInsightsSystemPrompt")} info={t("fieldInsightsSystemPromptInfo")}>
+        <Textarea
+          value={(draft.insights_system_prompt as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insights_system_prompt: e.target.value || null })}
+          placeholder={t("fieldInsightsSystemPromptPlaceholder")}
+          rows={8}
+          className="font-mono text-xs"
+        />
+      </FieldRow>
+      <FieldRow label={t("fieldInsightsHiddenPrompt")} info={t("fieldInsightsHiddenPromptInfo")}>
+        <Textarea
+          value={(draft.insights_hidden_prompt as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insights_hidden_prompt: e.target.value || null })}
+          placeholder={t("fieldInsightsHiddenPromptPlaceholder")}
+          rows={6}
+          className="font-mono text-xs"
+        />
+      </FieldRow>
+    </div>
+  )
+}
 
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
@@ -954,6 +985,7 @@ export default function ConfigurationPage() {
                 { value: "details", label: t("tabDetails") },
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
+                { value: "insights", label: t("tabInsights") },
               ],
               <>
                 <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -972,6 +1004,9 @@ export default function ConfigurationPage() {
                 </TabsContent>
                 <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
+                </TabsContent>
+                <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <InsightsTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
               </>
             )

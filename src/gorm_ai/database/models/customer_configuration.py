@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -99,6 +99,10 @@ class CustomerConfiguration(Base):
         nullable=True,
         index=True,
     )
+    # Insights / Chat
+    insights_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insights_hidden_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Relationships
     customer: Mapped["Customer"] = relationship(
         "Customer",

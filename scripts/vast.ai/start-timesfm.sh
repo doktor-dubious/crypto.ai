@@ -32,7 +32,7 @@ export DATABASE_URL=postgresql+asyncpg://gorm:gorm@localhost:5432/gorm_ai
 export CELERY_BROKER_URL=redis://localhost:6379/1
 export CELERY_RESULT_BACKEND=redis://localhost:6379/2
 export REDIS_URL=redis://localhost:6379/0
-export WORKER_NAME="RunPod TimesFM"
+export WORKER_NAME="Vast TimesFM"
 export WORKER_MODELS=timesfm
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/timesfm/
 export SYNC_EVERY=10
@@ -41,6 +41,7 @@ export FINETUNED_MODEL_PATH=/models/finetune/timesfm
 
 cd /workspace/gormai
 git pull
-pip install -e ".[ml]"
+command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; }
+uv sync --extra ml --extra timesfm --extra yinglong
 
-PYTHONPATH=src python -m gorm_ai.tasks.worker_entrypoint
+PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint

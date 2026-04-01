@@ -47,6 +47,8 @@ class CustomerConfigurationBase(BaseModel):
     open_friday: bool | None = None
     open_saturday: bool | None = None
     open_sunday: bool | None = None
+    insights_system_prompt: str | None = None
+    insights_hidden_prompt: str | None = None
 
 
 class CustomerConfigurationCreate(CustomerConfigurationBase):
@@ -97,6 +99,7 @@ class CustomerConfigurationUpdate(BaseModel):
     open_friday: bool | None = None
     open_saturday: bool | None = None
     open_sunday: bool | None = None
+    insights_system_prompt: str | None = None
 
 
 class CustomerConfigurationResponse(CustomerConfigurationBase):

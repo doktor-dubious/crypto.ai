@@ -1,10 +1,9 @@
 """Abstract base class for prediction engines."""
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
-
-import math
 
 import numpy as np
 
@@ -86,6 +85,7 @@ class EngineCapabilities:
     min_history_length: int = 7
     max_history_length: int | None = None  # None = no limit
     max_horizon: int = 365
+    patch_size: int = 1  # time steps per patch (1 = no patching)
     supported_frequencies: list[str] | None = None
 
     def __post_init__(self):

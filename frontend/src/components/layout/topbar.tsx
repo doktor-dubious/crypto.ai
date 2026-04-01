@@ -52,6 +52,8 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/configuration": "configSettings",
   "/configuration/exploration/new": "configExplorationNew",
   "/configuration/exploration": "configExplorationCompleted",
+  "/insights": "insightsHistory",
+  "/insights/all": "insightsAllChats",
   "/system/logs": "systemLogs",
   "/system/workers": "systemWorkers",
   "/system/docker": "systemDocker",
@@ -63,7 +65,9 @@ export function Topbar() {
   const tTopbar = useTranslations("topbar")
   const { isLocked, toggleLock } = useLock()
 
-  const titleKey = ROUTE_TITLE_MAP[pathname] ?? "home"
+  let titleKey = ROUTE_TITLE_MAP[pathname]
+  if (!titleKey && pathname.startsWith("/insights/")) titleKey = "insightsConversation"
+  titleKey ??= "home"
   const title = tNav(titleKey as Parameters<typeof tNav>[0])
 
   return (

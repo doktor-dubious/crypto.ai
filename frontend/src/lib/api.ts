@@ -2445,3 +2445,88 @@ export const priceHistoryApi = {
   delete: (id: string) =>
     apiFetch<void>(`/price-history/${id}`, { method: "DELETE" }),
 }
+
+// ─── Chat / Insights ──────────────────────────────────────────────────────────
+
+export interface ChatChartSeries {
+  name: string
+  data_key: string
+  color?: string | null
+}
+
+export interface ChatChartConfig {
+  type: string
+  title?: string | null
+  x_key: string
+  series: ChatChartSeries[]
+  data: Record<string, unknown>[]
+}
+
+export interface ChatOutletRef {
+  outlet_id: string
+  name: string
+  city?: string | null
+  state?: string | null
+  value?: number | null
+  value_label?: string | null
+}
+
+export interface ChatMessageResponse {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  chart?: ChatChartConfig | null
+  outlets?: ChatOutletRef[] | null
+  created_at: string
+}
+
+export interface ChatSessionResponse {
+  id: string
+  customer_id: string
+  title: string
+  starred: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatSessionDetailResponse {
+  id: string
+  customer_id: string
+  title: string
+  messages: ChatMessageResponse[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatSendResponse {
+  session_id: string
+  message: ChatMessageResponse
+}
+
+export const chatApi = {
+  send: (data: { customer_id: string; session_id?: string | null; message: string }) =>
+    apiFetch<ChatSendResponse>("/chat", {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(120_000),
+    }),
+
+  listSessions: (customerId: string, params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams({ customer_id: customerId })
+    qs.set("limit", String(params?.limit ?? 50))
+    if (params?.offset) qs.set("offset", String(params.offset))
+    return apiFetch<ChatSessionResponse[]>(`/chat/sessions?${qs}`)
+  },
+
+  getSession: (sessionId: string) =>
+    apiFetch<ChatSessionDetailResponse>(`/chat/sessions/${sessionId}`),
+
+  updateSession: (sessionId: string, data: { title?: string; starred?: boolean }) =>
+    apiFetch<ChatSessionResponse>(`/chat/sessions/${sessionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteSession: (sessionId: string) =>
+    apiFetch<void>(`/chat/sessions/${sessionId}`, { method: "DELETE" }),
+}

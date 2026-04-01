@@ -38,9 +38,13 @@ from gorm_ai.database.models.simulation_date import SimulationDate
 from gorm_ai.database.models.simulation_filter import SimulationFilter
 from gorm_ai.database.models.simulation_strategy import SimulationStrategy
 from gorm_ai.database.models.task_record import TaskRecord
+from gorm_ai.database.models.chat import ChatMessage, ChatSession
 from gorm_ai.database.models.token import Token, TokenLlm, TokenModel
+from gorm_ai.database.models.user_customer import UserCustomer
 
 __all__ = [
+    "ChatMessage",
+    "ChatSession",
     "Configuration",
     "Covariate",
     "CovariateOutlet",
@@ -87,4 +91,5 @@ __all__ = [
     "Token",
     "TokenLlm",
     "TokenModel",
+    "UserCustomer",
 ]

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const PUBLIC_PATHS = ["/login"]
+const PUBLIC_PATHS = ["/login", "/share"]
 const SKIP_PREFIXES = ["/api/", "/backend/", "/_next/", "/favicon"]
 
 export async function middleware(request: NextRequest) {
@@ -28,7 +28,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url))
   }
 
-  if (session && isPublic) {
+  if (session && isPublic && !pathname.startsWith("/share")) {
     return NextResponse.redirect(new URL("/", request.url))
   }
 
