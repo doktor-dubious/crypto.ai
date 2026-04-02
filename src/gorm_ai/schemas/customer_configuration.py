@@ -106,6 +106,8 @@ class CustomerConfigurationUpdate(BaseModel):
     open_saturday: bool | None = None
     open_sunday: bool | None = None
     insights_system_prompt: str | None = None
+    insight_model_id: str | None = None
+    insight_submodel_id: str | None = None
 
 
 class CustomerConfigurationResponse(CustomerConfigurationBase):

@@ -251,8 +251,6 @@ function CoreTab({
   engines,
   groups,
   currencies,
-  llms,
-  llmSubmodels,
   isGorm,
   t,
 }: {
@@ -261,8 +259,6 @@ function CoreTab({
   engines: PredictionEngineResponse[]
   groups: OutletGroupResponse[]
   currencies: CurrencyResponse[]
-  llms: LlmResponse[]
-  llmSubmodels: LlmSubmodelResponse[]
   isGorm: boolean
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
@@ -284,32 +280,6 @@ function CoreTab({
           </select>
         </FieldRow>
       )}
-
-      <FieldRow label={t("fieldInsightProvider")} info={t("fieldInsightProviderInfo")}>
-        <select
-          value={(draft.insight_model_id as string) ?? ""}
-          onChange={(e) => set("insight_model_id", e.target.value || null)}
-          className={selectClassName}
-        >
-          <option value="">{t("fieldInsightProviderNone")}</option>
-          {llms.map((llm) => (
-            <option key={llm.id} value={llm.id}>{llm.name}</option>
-          ))}
-        </select>
-      </FieldRow>
-
-      <FieldRow label={t("fieldInsightModel")} info={t("fieldInsightModelInfo")}>
-        <select
-          value={(draft.insight_submodel_id as string) ?? ""}
-          onChange={(e) => set("insight_submodel_id", e.target.value || null)}
-          className={selectClassName}
-        >
-          <option value="">{t("fieldInsightModelNone")}</option>
-          {llmSubmodels.map((sub) => (
-            <option key={sub.id} value={sub.id}>{sub.name}</option>
-          ))}
-        </select>
-      </FieldRow>
 
       <FieldRow label={t("fieldPredictionEngine")} info={t("fieldPredictionEngineInfo")}>
         <select
@@ -723,6 +693,8 @@ function InsightsTab({
   engines,
   strategies,
   workers,
+  llms,
+  llmSubmodels,
   t,
 }: {
   draft: Record<string, unknown>
@@ -730,10 +702,38 @@ function InsightsTab({
   engines: PredictionEngineResponse[]
   strategies: PredictionStrategyResponse[]
   workers: WorkerInfo[]
+  llms: LlmResponse[]
+  llmSubmodels: LlmSubmodelResponse[]
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
   return (
     <div className="space-y-6">
+      <FieldRow label={t("fieldInsightProvider")} info={t("fieldInsightProviderInfo")}>
+        <select
+          value={(draft.insight_model_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insight_model_id: e.target.value || null })}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightProviderNone")}</option>
+          {llms.map((llm) => (
+            <option key={llm.id} value={llm.id}>{llm.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightModel")} info={t("fieldInsightModelInfo")}>
+        <select
+          value={(draft.insight_submodel_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insight_submodel_id: e.target.value || null })}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightModelNone")}</option>
+          {llmSubmodels.map((sub) => (
+            <option key={sub.id} value={sub.id}>{sub.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
       <FieldRow label={t("fieldInsightsSystemPrompt")} info={t("fieldInsightsSystemPromptInfo")}>
         <Textarea
           value={(draft.insights_system_prompt as string) ?? ""}
@@ -789,14 +789,44 @@ function InsightsTab({
 function GormInsightsTab({
   draft,
   setDraft,
+  llms,
+  llmSubmodels,
   t,
 }: {
   draft: Record<string, unknown>
   setDraft: (d: Record<string, unknown>) => void
+  llms: LlmResponse[]
+  llmSubmodels: LlmSubmodelResponse[]
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
   return (
     <div className="space-y-6">
+      <FieldRow label={t("fieldInsightProvider")} info={t("fieldInsightProviderInfo")}>
+        <select
+          value={(draft.insight_model_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insight_model_id: e.target.value || null })}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightProviderNone")}</option>
+          {llms.map((llm) => (
+            <option key={llm.id} value={llm.id}>{llm.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightModel")} info={t("fieldInsightModelInfo")}>
+        <select
+          value={(draft.insight_submodel_id as string) ?? ""}
+          onChange={(e) => setDraft({ ...draft, insight_submodel_id: e.target.value || null })}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightModelNone")}</option>
+          {llmSubmodels.map((sub) => (
+            <option key={sub.id} value={sub.id}>{sub.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
       <FieldRow label={t("fieldInsightsHiddenPrompt")} info={t("fieldInsightsHiddenPromptInfo")}>
         <Textarea
           value={(draft.insights_hidden_prompt as string) ?? ""}
@@ -1097,8 +1127,6 @@ export default function ConfigurationPage() {
                     engines={engines}
                     groups={[]}
                     currencies={[]}
-                    llms={llms}
-                    llmSubmodels={llmSubmodels}
                     isGorm={true}
                     t={t}
                   />
@@ -1113,7 +1141,7 @@ export default function ConfigurationPage() {
                   <FineTuningTab draft={gormDraft} setDraft={setGormDraft} isGorm={true} t={t} />
                 </TabsContent>
                 <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
-                  <GormInsightsTab draft={gormDraft} setDraft={setGormDraft} t={t} />
+                  <GormInsightsTab draft={gormDraft} setDraft={setGormDraft} llms={llms} llmSubmodels={llmSubmodels} t={t} />
                 </TabsContent>
               </>
             )
@@ -1136,8 +1164,6 @@ export default function ConfigurationPage() {
                     engines={engines}
                     groups={groups}
                     currencies={currencies}
-                    llms={llms}
-                    llmSubmodels={llmSubmodels}
                     isGorm={false}
                     t={t}
                   />
@@ -1146,7 +1172,7 @@ export default function ConfigurationPage() {
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
                 <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
-                  <InsightsTab draft={configDraft} setDraft={setConfigDraft} engines={engines} strategies={strategies} workers={workers} t={t} />
+                  <InsightsTab draft={configDraft} setDraft={setConfigDraft} engines={engines} strategies={strategies} workers={workers} llms={llms} llmSubmodels={llmSubmodels} t={t} />
                 </TabsContent>
               </>
             )

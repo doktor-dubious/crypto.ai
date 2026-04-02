@@ -27,22 +27,26 @@ const DEFAULT_COLORS = [
   "hsl(30 90% 55%)",
 ]
 
+function sanitizeKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_-]/g, "_")
+}
+
 function buildChartConfig(config: ChatChartConfig): ChartConfig {
   const cc: ChartConfig = {}
   config.series.forEach((s, i) => {
-    cc[s.data_key] = {
+    cc[sanitizeKey(s.data_key)] = {
       label: s.name,
       color: s.color ?? DEFAULT_COLORS[i % DEFAULT_COLORS.length],
     }
   })
-  // For pie charts, also map each data item name as a key
+  // For pie charts, map each data item name as a config key
   if (config.type === "pie" && config.data.length > 0) {
     const nameKey = config.x_key || Object.keys(config.data[0]).find(
       k => typeof config.data[0][k] === "string"
     ) || "name"
     config.data.forEach((d, i) => {
       const name = String(d[nameKey] ?? `Item ${i}`)
-      cc[name] = {
+      cc[sanitizeKey(name)] = {
         label: name,
         color: DEFAULT_COLORS[i % DEFAULT_COLORS.length],
       }
@@ -68,11 +72,14 @@ export function InsightsChart({ config }: { config: ChatChartConfig }) {
     k => typeof data[0]?.[k] === "number"
   ) || "value"
 
-  // Add fill color to pie data
-  const pieData = data.map((d, i) => ({
-    ...d,
-    fill: DEFAULT_COLORS[i % DEFAULT_COLORS.length],
-  }))
+  // Add fill color to pie data using CSS variable names for Shadcn theming
+  const pieData = data.map((d, i) => {
+    const name = String(d[pieNameKey] ?? `Item ${i}`)
+    return {
+      ...d,
+      fill: `var(--color-${sanitizeKey(name)})`,
+    }
+  })
 
   const formatNumber = (value: number | string | null | undefined) => {
     if (value == null) return ""
@@ -89,19 +96,16 @@ export function InsightsChart({ config }: { config: ChatChartConfig }) {
       <ChartContainer config={chartConfig} className="h-64 w-full aspect-auto">
         {type === "pie" ? (
           <PieChart>
-            <ChartTooltip content={<ChartTooltipContent hideLabel formatter={formatNumber} />} />
+            <ChartTooltip content={<ChartTooltipContent nameKey={pieNameKey} formatter={formatNumber} />} />
             <Pie
               data={pieData}
               dataKey={pieDataKey}
               nameKey={pieNameKey}
-              label={({ name, percent }: { name: string; percent?: number }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-              labelLine={{ strokeWidth: 1 }}
-              fontSize={11}
-            >
-              {pieData.map((entry, i) => (
-                <Cell key={i} fill={entry.fill} />
-              ))}
-            </Pie>
+              innerRadius="40%"
+              outerRadius="70%"
+              strokeWidth={2}
+              stroke="var(--background)"
+            />
             <ChartLegend content={<ChartLegendContent nameKey={pieNameKey} />} />
           </PieChart>
         ) : type === "area" ? (
@@ -140,19 +144,23 @@ export function InsightsChart({ config }: { config: ChatChartConfig }) {
             ))}
           </BarChart>
         ) : type === "radar" ? (
-          <RadarChart data={data}>
-            <PolarGrid stroke="var(--border)" />
-            <PolarAngleAxis dataKey={x_key} tick={{ fontSize: 11 }} />
-            <PolarRadiusAxis tick={{ fontSize: 10 }} />
+          <RadarChart data={data} cx="50%" cy="50%" outerRadius="70%">
+            <PolarGrid stroke="var(--border)" opacity={0.5} />
+            <PolarAngleAxis
+              dataKey={x_key}
+              tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            />
+            <PolarRadiusAxis tick={false} axisLine={false} />
             <ChartTooltip content={<ChartTooltipContent formatter={formatNumber} />} />
             <ChartLegend content={<ChartLegendContent />} />
-            {resolvedSeries.map((s) => (
+            {resolvedSeries.map((s, i) => (
               <Radar
                 key={s.data_key}
                 dataKey={s.data_key}
                 stroke={`var(--color-${s.data_key})`}
                 fill={`var(--color-${s.data_key})`}
-                fillOpacity={0.3}
+                fillOpacity={0.15}
+                strokeWidth={2}
               />
             ))}
           </RadarChart>

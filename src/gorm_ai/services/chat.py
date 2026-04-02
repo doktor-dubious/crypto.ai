@@ -107,6 +107,15 @@ IMPORTANT: "radar" and "radial" are DIFFERENT charts. \
 "radar" is a spider web shape. "radial" is a semi-circle gauge. \
 Use the one the user asks for.
 
+Chart best practices:
+- Radar charts only work when ALL series use similar scales. \
+Do NOT use radar if one metric is e.g. 5 and another is 1,400,000. \
+Use a grouped bar chart instead, or normalize values to percentages.
+- For comparing categories across multiple metrics with different \
+scales, prefer a grouped bar chart or multiple separate charts.
+- Pie charts should have no more than ~8 slices.
+- Use area charts sparingly — they work best with 1-2 series.
+
 6. When returning outlet-specific results (rankings, lookups), include \
 an OUTLETS_JSON block:
 
