@@ -21,6 +21,26 @@ const components: Components = {
   ),
   hr: () => <hr className="my-2 border-[var(--border)]" />,
   a: ({ children }) => <span className="underline">{children}</span>,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-[var(--border)]">
+      <table className="w-full text-xs">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="bg-[var(--muted)]">{children}</thead>
+  ),
+  tbody: ({ children }) => (
+    <tbody className="divide-y divide-[var(--border)]">{children}</tbody>
+  ),
+  tr: ({ children }) => (
+    <tr className="transition-colors hover:bg-[var(--muted)]/50">{children}</tr>
+  ),
+  th: ({ children }) => (
+    <th className="px-3 py-2 text-left font-medium text-[var(--muted-foreground)] whitespace-nowrap">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="px-3 py-2 whitespace-nowrap">{children}</td>
+  ),
 }
 
 export function MarkdownContent({

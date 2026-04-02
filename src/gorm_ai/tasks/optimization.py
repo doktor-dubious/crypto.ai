@@ -318,6 +318,7 @@ async def _run_optimization(
             name=f"Optimization combo {i + 1}/{total_simulations}",
             use_financials=True,
             engine=engine_slug,
+            outlet_group_id=request.outlet_group_id,
         )
 
         try:

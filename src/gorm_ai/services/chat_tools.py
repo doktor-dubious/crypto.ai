@@ -821,6 +821,7 @@ class ToolExecutor:
                 "rows": rows,
             }
         except Exception as exc:
+            log.error("run_query_error", error=str(exc), sql=cleaned[:200])
             return {"error": f"Query failed: {exc}"}
 
     # ── run_prediction ────────────────────────────────────────────────────
@@ -991,12 +992,18 @@ _SCHEMA_TABLES = [
     },
     {
         "table": "sales",
-        "description": "Daily sales data (TimescaleDB hypertable)",
+        "description": (
+            "Daily sales data (TimescaleDB hypertable). "
+            "IMPORTANT: The date column is called 'date', NOT 'sale_date'. "
+            "Always JOIN with outlets table to get outlet name. "
+            "If you need outlet names in results, include the JOIN in every "
+            "subquery level that needs it, or join at the outermost level."
+        ),
         "columns": [
             ("id", "UUID", "Part of composite PK"),
-            ("date", "DATE", "Sale date (part of composite PK)"),
+            ("date", "DATE", "Sale date — column name is 'date' (NOT sale_date)"),
             ("customer_id", "UUID", "FK → customers.id"),
-            ("outlet_id", "UUID", "FK → outlets.id"),
+            ("outlet_id", "UUID", "FK → outlets.id — JOIN outlets ON outlets.id = sales.outlet_id for name"),
             ("sold", "INT", "Units sold (core field)"),
             ("delivered", "INT", "Units delivered"),
             ("scan_sold", "INT", "Units sold via scan"),

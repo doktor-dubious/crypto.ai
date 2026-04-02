@@ -1,13 +1,16 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useRef, useEffect, useCallback } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  Sparkles, ArrowRight, Loader2, User, Bot, MapPin,
+  Sparkles, ArrowRight, Loader2, User, Bot, MapPin, Check,
 } from "lucide-react"
-import { chatApi, type ChatMessageResponse, type ChatOutletRef } from "@/lib/api"
+import { toast } from "sonner"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
+import { chatApi, type ChatMessageResponse, type ChatOutletRef, type ChatChartConfig } from "@/lib/api"
 import { MarkdownContent } from "@/components/insights/markdown-content"
 import { useSession } from "@/lib/auth-client"
 import { useCustomer } from "@/components/providers/customer-provider"
@@ -15,6 +18,46 @@ import { InsightsChart } from "@/components/insights/insights-chart"
 import { OutletDetailModal } from "@/components/insights/outlet-detail-modal"
 
 // ── Message bubble ───────────────────────────────────────────────────────────
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const t = useTranslations("insights")
+
+  function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true)
+        toast.success(t("copied"))
+        setTimeout(() => setCopied(false), 2000)
+      })
+    } else {
+      const ta = document.createElement("textarea")
+      ta.value = text
+      ta.style.position = "fixed"
+      ta.style.opacity = "0"
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand("copy")
+      document.body.removeChild(ta)
+      setCopied(true)
+      toast.success(t("copied"))
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  return copied ? (
+    <Check className="h-3.5 w-3.5 text-green-500" />
+  ) : (
+    <AnimateIcon animateOnHover>
+      <CopyIcon
+        size={14}
+        className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors cursor-pointer"
+        onClick={handleCopy}
+      />
+    </AnimateIcon>
+  )
+}
 
 function MessageBubble({
   msg,
@@ -26,7 +69,7 @@ function MessageBubble({
   const isUser = msg.role === "user"
 
   return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
+    <div className={`group/msg flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div
         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
           isUser
@@ -50,6 +93,11 @@ function MessageBubble({
           ) : (
             <MarkdownContent>{msg.content}</MarkdownContent>
           )}
+        </div>
+
+        {/* Copy button — appears on hover */}
+        <div className={`opacity-0 group-hover/msg:opacity-100 transition-opacity ${isUser ? "flex justify-end" : ""}`}>
+          <CopyButton text={msg.content} />
         </div>
 
         {msg.chart && (
@@ -98,15 +146,25 @@ function MessageBubble({
 export function InsightsPage({ initialSessionId }: { initialSessionId?: string }) {
   const t = useTranslations("insights")
   const router = useRouter()
+  const searchParams = useSearchParams()
   const queryClient = useQueryClient()
   const { data: authSession } = useSession()
   const { activeCustomer } = useCustomer()
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSessionId ?? null)
   const [message, setMessage] = useState("")
+  const autoSubmittedRef = useRef(false)
   const [selectedOutlet, setSelectedOutlet] = useState<ChatOutletRef | null>(null)
   const [outletModalOpen, setOutletModalOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Streaming state
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [streamStatus, setStreamStatus] = useState<string | null>(null)
+  const [streamText, setStreamText] = useState("")
+  const [streamChart, setStreamChart] = useState<ChatChartConfig | null>(null)
+  const [streamOutlets, setStreamOutlets] = useState<ChatOutletRef[] | null>(null)
+  const [streamError, setStreamError] = useState<string | null>(null)
 
   // Update active session when route changes
   useEffect(() => {
@@ -122,38 +180,71 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
     enabled: !!activeSessionId,
   })
 
-  // Send message mutation
-  const sendMutation = useMutation({
-    mutationFn: (msg: string) =>
-      chatApi.send({
-        customer_id: activeCustomer!.id,
-        user_id: authSession?.user?.id,
-        session_id: activeSessionId,
-        message: msg,
-      }),
-    onSuccess: (data) => {
-      setActiveSessionId(data.session_id)
-      setMessage("")
-      queryClient.invalidateQueries({ queryKey: ["chat-session", data.session_id] })
-      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] })
-      // Update URL without full navigation
-      if (!initialSessionId || initialSessionId !== data.session_id) {
-        router.replace(`/insights/${data.session_id}`, { scroll: false })
-      }
-    },
-  })
-
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new content
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [session?.messages?.length, sendMutation.isPending])
+  }, [session?.messages?.length, isStreaming, streamText])
+
+  const submitMessage = useCallback(async (text: string) => {
+    if (!text.trim() || !activeCustomer || isStreaming) return
+
+    setMessage("")
+    setIsStreaming(true)
+    setStreamStatus(null)
+    setStreamText("")
+    setStreamChart(null)
+    setStreamOutlets(null)
+    setStreamError(null)
+
+    try {
+      await chatApi.sendStream(
+        {
+          customer_id: activeCustomer.id,
+          user_id: authSession?.user?.id,
+          session_id: activeSessionId,
+          message: text.trim(),
+        },
+        {
+          onStatus: (status) => setStreamStatus(status),
+          onText: (text) => {
+            setStreamStatus(null)
+            setStreamText((prev) => prev + text)
+          },
+          onChart: (chart) => setStreamChart(chart),
+          onOutlets: (outlets) => setStreamOutlets(outlets),
+          onDone: (data) => {
+            setActiveSessionId(data.session_id)
+            queryClient.invalidateQueries({ queryKey: ["chat-session", data.session_id] })
+            queryClient.invalidateQueries({ queryKey: ["chat-sessions"] })
+            if (!initialSessionId || initialSessionId !== data.session_id) {
+              router.replace(`/insights/${data.session_id}`, { scroll: false })
+            }
+          },
+          onError: (detail) => setStreamError(detail),
+        },
+      )
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : "Failed to send message")
+    } finally {
+      setIsStreaming(false)
+      setStreamStatus(null)
+    }
+  }, [activeCustomer, authSession, activeSessionId, isStreaming, initialSessionId, queryClient, router])
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const trimmed = message.trim()
-    if (!trimmed || !activeCustomer || sendMutation.isPending) return
-    sendMutation.mutate(trimmed)
+    submitMessage(message)
   }
+
+  // Auto-submit from dashboard prompt (?q=...)
+  useEffect(() => {
+    const q = searchParams.get("q")
+    if (q && activeCustomer && !autoSubmittedRef.current && !isStreaming) {
+      autoSubmittedRef.current = true
+      router.replace("/insights", { scroll: false })
+      submitMessage(q)
+    }
+  }, [searchParams, activeCustomer, isStreaming, submitMessage, router])
 
   const hasActiveSession = !!activeSessionId && !!session
 
@@ -175,14 +266,58 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                 />
               ))}
 
-              {sendMutation.isPending && (
+              {/* Streaming response */}
+              {isStreaming && (
                 <div className="flex gap-3">
                   <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--muted)] text-[var(--muted-foreground)]">
                     <Bot className="h-3.5 w-3.5" />
                   </div>
-                  <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-4 py-2.5">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span className="text-sm text-[var(--muted-foreground)]">{t("thinking")}</span>
+                  <div className="max-w-[80%] space-y-3">
+                    {streamText ? (
+                      <div className="inline-block rounded-lg bg-[var(--muted)] text-[var(--foreground)] px-4 py-2.5 text-sm leading-relaxed">
+                        <MarkdownContent>{streamText}</MarkdownContent>
+                        {streamStatus && (
+                          <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            {streamStatus}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-lg bg-[var(--muted)] px-4 py-2.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span className="text-sm text-[var(--muted-foreground)]">
+                          {streamStatus ?? t("thinking")}
+                        </span>
+                      </div>
+                    )}
+                    {streamChart && (
+                      <InsightsChart config={streamChart} />
+                    )}
+                    {streamOutlets && streamOutlets.length > 0 && (
+                      <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] divide-y divide-[var(--border)]">
+                        {streamOutlets.map((outlet) => (
+                          <button
+                            key={outlet.outlet_id}
+                            onClick={() => { setSelectedOutlet(outlet); setOutletModalOpen(true) }}
+                            className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-[var(--muted)] cursor-pointer"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-[var(--foreground)]">{outlet.name}</span>
+                              {(outlet.city || outlet.state) && (
+                                <span className="flex items-center gap-0.5 text-xs text-[var(--muted-foreground)]">
+                                  <MapPin className="h-3 w-3" />
+                                  {[outlet.city, outlet.state].filter(Boolean).join(", ")}
+                                </span>
+                              )}
+                            </div>
+                            {outlet.value != null && (
+                              <span className="text-sm font-medium text-[var(--foreground)]">{outlet.value.toLocaleString()}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -201,10 +336,10 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   placeholder={t("followUpPlaceholder")}
-                  disabled={sendMutation.isPending}
+                  disabled={isStreaming}
                   className="flex-1 bg-transparent text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none disabled:opacity-50"
                 />
-                {sendMutation.isPending ? (
+                {isStreaming ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--muted-foreground)]" />
                 ) : (
                   <button
@@ -216,14 +351,12 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                   </button>
                 )}
               </div>
-              {sendMutation.isError && (
+              {streamError && (
                 <p className="mt-1 text-xs text-[var(--destructive)]">
-              {sendMutation.error?.message?.includes("429")
-                ? t("rateLimitError")
-                : sendMutation.error?.message?.includes("403")
-                  ? t("accessDeniedError")
-                  : t("sendError")}
-            </p>
+                  {streamError.includes("429") ? t("rateLimitError")
+                    : streamError.includes("403") ? t("accessDeniedError")
+                    : t("sendError")}
+                </p>
               )}
             </form>
           </div>
@@ -244,10 +377,10 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder={t("promptPlaceholder")}
-                disabled={sendMutation.isPending || !activeCustomer}
+                disabled={isStreaming || !activeCustomer}
                 className="flex-1 bg-transparent text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none disabled:opacity-50"
               />
-              {sendMutation.isPending ? (
+              {isStreaming ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--muted-foreground)]" />
               ) : (
                 <button
@@ -259,14 +392,12 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
                 </button>
               )}
             </div>
-            {sendMutation.isError && (
+            {streamError && (
               <p className="mt-1 text-xs text-[var(--destructive)]">
-              {sendMutation.error?.message?.includes("429")
-                ? t("rateLimitError")
-                : sendMutation.error?.message?.includes("403")
-                  ? t("accessDeniedError")
+                {streamError.includes("429") ? t("rateLimitError")
+                  : streamError.includes("403") ? t("accessDeniedError")
                   : t("sendError")}
-            </p>
+              </p>
             )}
           </form>
 

@@ -31,6 +31,8 @@ class OptimizeSettingsRequest(BaseModel):
     delay: int = 1
     # Optional: override the prediction engine used in simulations
     prediction_engine_id: str | None = None
+    # Optional: restrict simulation to outlets in a specific group
+    outlet_group_id: str | None = None
     # Optional: route to a specific worker queue
     worker: str | None = None
 
@@ -69,6 +71,7 @@ class OptimizationRunResponse(BaseModel):
     simulation_days: int
     delay: int
     prediction_engine_id: str | None = None
+    outlet_group_id: str | None = None
     simulation_from: str | None = None
     simulation_to: str | None = None
     total_combinations: int

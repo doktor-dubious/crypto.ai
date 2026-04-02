@@ -34,7 +34,7 @@ from gorm_ai.services.chat_tools import TOOL_DEFINITIONS, ToolExecutor
 log = structlog.get_logger("gorm_ai.chat")
 
 MODEL = "claude-haiku-4-5-20251001"
-MAX_TOOL_ROUNDS = 8  # prevent runaway loops
+MAX_TOOL_ROUNDS = 6  # keep token usage manageable
 
 
 DEFAULT_INSIGHTS_PROMPT = """\
@@ -57,10 +57,17 @@ def _build_system_prompt(
         f"  - {g['name']} (id: {g['id']})" for g in outlet_groups
     ) or "  (none)"
 
+    from datetime import datetime, UTC
+    now = datetime.now(UTC)
+
     persona = custom_prompt.strip() if custom_prompt else DEFAULT_INSIGHTS_PROMPT
 
     return f"""\
 {persona}
+
+## Current date and time
+Today is {now.strftime("%A, %B %d, %Y")}. The current year is {now.year}. \
+Current time is {now.strftime("%H:%M")} UTC.
 
 ## Current customer
 ID: {customer_id}
@@ -87,6 +94,18 @@ a JSON block with chart configuration in your response using this \
 exact format on its own line:
 
 CHART_JSON::{{"type":"line","title":"...","x_key":"period","series":[{{"name":"Sold","data_key":"total"}}],"data":[{{"period":"2025-01","total":1234}}]}}
+
+Available chart types (use the exact string):
+- "line" — time series, trends
+- "area" — like line but with filled area below
+- "bar" — comparisons between categories
+- "pie" — proportions of a whole
+- "radar" — spider/web chart comparing multiple metrics across categories
+- "radial" — semi-circle gauge chart showing progress/proportion
+
+IMPORTANT: "radar" and "radial" are DIFFERENT charts. \
+"radar" is a spider web shape. "radial" is a semi-circle gauge. \
+Use the one the user asks for.
 
 6. When returning outlet-specific results (rankings, lookups), include \
 an OUTLETS_JSON block:
@@ -202,6 +221,212 @@ class ChatService:
             ),
         )
 
+    async def send_message_stream(
+        self,
+        customer_id: str,
+        message: str,
+        session_id: str | None = None,
+    ):
+        """Process a user message and yield SSE events as the response streams.
+
+        Yields strings in SSE format:
+          event: status\ndata: {...}\n\n
+          event: text\ndata: {...}\n\n
+          event: chart\ndata: {...}\n\n
+          event: outlets\ndata: {...}\n\n
+          event: done\ndata: {...}\n\n
+        """
+        # 1-4: Same setup as send_message
+        customer = await self._get_customer(customer_id)
+        if not customer:
+            yield f"event: error\ndata: {json.dumps({'detail': 'Customer not found'})}\n\n"
+            return
+
+        outlet_groups = await self._get_outlet_groups(customer_id)
+        custom_prompt, hidden_prompt = await self._get_insights_prompts(customer_id)
+
+        session = await self._get_or_create_session(
+            customer_id, session_id, message,
+        )
+
+        user_msg = ChatMessage(
+            session_id=session.id, role=1, content=message,
+        )
+        self.db.add(user_msg)
+        await self.db.commit()
+
+        messages = await self._build_messages(session, message)
+        system_prompt = _build_system_prompt(
+            customer_id, customer.name, outlet_groups, custom_prompt, hidden_prompt,
+        )
+
+        # 5. Run conversation with streaming
+        total_input = 0
+        total_output = 0
+        full_text_parts: list[str] = []
+
+        for round_num in range(MAX_TOOL_ROUNDS):
+            # Non-final rounds: use non-streaming to detect tool use
+            try:
+                response = await self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=4096,
+                    system=system_prompt,
+                    tools=TOOL_DEFINITIONS,
+                    messages=messages,
+                )
+            except anthropic.RateLimitError:
+                yield f"event: error\ndata: {json.dumps({'detail': 'Rate limited. Please wait a minute.'})}\n\n"
+                return
+
+            total_input += response.usage.input_tokens
+            total_output += response.usage.output_tokens
+
+            tool_uses = [b for b in response.content if b.type == "tool_use"]
+
+            if not tool_uses:
+                # Final response — stream it
+                # First, collect the full text from this non-streamed response
+                full_text = "\n".join(
+                    b.text for b in response.content if b.type == "text"
+                )
+                chart, clean_text = self._extract_chart(full_text)
+                outlets, clean_text = self._extract_outlets(clean_text)
+
+                # Stream the text in chunks (simulate streaming from cached response)
+                for i in range(0, len(clean_text), 20):
+                    chunk = clean_text[i:i + 20]
+                    yield f"event: text\ndata: {json.dumps({'text': chunk})}\n\n"
+
+                if chart:
+                    yield f"event: chart\ndata: {json.dumps(chart.model_dump())}\n\n"
+                if outlets:
+                    yield f"event: outlets\ndata: {json.dumps([o.model_dump() for o in outlets])}\n\n"
+
+                full_text_parts.append(clean_text.strip())
+                break
+            else:
+                # Tool use round — send status, execute tools
+                tool_names = [t.name for t in tool_uses]
+                status_map = {
+                    "get_database_schema": "Reading database schema...",
+                    "run_query": "Querying database...",
+                    "query_sales_summary": "Analyzing sales data...",
+                    "compare_periods": "Comparing periods...",
+                    "get_top_outlets": "Ranking outlets...",
+                    "get_prediction_summary": "Loading predictions...",
+                    "lookup_entities": "Looking up entities...",
+                    "get_outlet_details": "Loading outlet details...",
+                    "run_prediction": "Running prediction...",
+                }
+                for tn in tool_names:
+                    status = status_map.get(tn, f"Using {tn}...")
+                    yield f"event: status\ndata: {json.dumps({'status': status})}\n\n"
+
+                # Build assistant content and execute tools
+                assistant_content = []
+                for block in response.content:
+                    if block.type == "text":
+                        assistant_content.append({"type": "text", "text": block.text})
+                    elif block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                tool_results = []
+                for tool_use in tool_uses:
+                    log.info("tool_call", tool=tool_use.name, params=tool_use.input)
+                    tool_executor = self._get_tool_executor(customer_id)
+                    result = await tool_executor.execute(
+                        tool_use.name, tool_use.input,
+                    )
+                    log.info("tool_result", tool=tool_use.name,
+                             result_keys=list(result.keys()) if isinstance(result, dict) else None)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use.id,
+                        "content": json.dumps(result, default=str),
+                    })
+                messages.append({"role": "user", "content": tool_results})
+        else:
+            # Exhausted rounds — get a final summary
+            yield f"event: status\ndata: {json.dumps({'status': 'Summarizing findings...'})}\n\n"
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You've used all available tool calls. Based on the data "
+                    "you've gathered so far, please provide your best answer now."
+                ),
+            })
+            try:
+                final = await self.client.messages.create(
+                    model=MODEL, max_tokens=4096,
+                    system=system_prompt, messages=messages,
+                )
+                total_input += final.usage.input_tokens
+                total_output += final.usage.output_tokens
+                full_text = "\n".join(
+                    b.text for b in final.content if b.type == "text"
+                )
+                chart, clean_text = self._extract_chart(full_text)
+                outlets, clean_text = self._extract_outlets(clean_text)
+
+                for i in range(0, len(clean_text), 20):
+                    chunk = clean_text[i:i + 20]
+                    yield f"event: text\ndata: {json.dumps({'text': chunk})}\n\n"
+
+                if chart:
+                    yield f"event: chart\ndata: {json.dumps(chart.model_dump())}\n\n"
+                if outlets:
+                    yield f"event: outlets\ndata: {json.dumps([o.model_dump() for o in outlets])}\n\n"
+
+                full_text_parts.append(clean_text.strip())
+            except Exception:
+                full_text_parts.append(
+                    "I wasn't able to fully answer your question. "
+                    "Please try a more specific question."
+                )
+                yield f"event: text\ndata: {json.dumps({'text': full_text_parts[-1]})}\n\n"
+
+        # 6. Persist assistant message
+        assistant_text = "\n".join(full_text_parts)
+        data_dict: dict = {}
+        if chart:
+            data_dict["chart"] = chart.model_dump()
+        if outlets:
+            data_dict["outlets"] = [o.model_dump() for o in outlets]
+
+        assistant_msg = ChatMessage(
+            session_id=session.id,
+            role=2,
+            content=assistant_text,
+            data=data_dict or None,
+            input_tokens=total_input,
+            output_tokens=total_output,
+        )
+        self.db.add(assistant_msg)
+
+        try:
+            await self.db.refresh(session, ["messages"])
+            user_count = sum(1 for m in session.messages if m.role == 1)
+            if user_count <= 1:
+                session.title = message[:120]
+        except Exception:
+            pass
+
+        await self.db.commit()
+        await self.db.refresh(assistant_msg)
+
+        if total_input or total_output:
+            await self._update_token_usage(customer_id, total_input + total_output)
+
+        # Send done event with metadata
+        yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'message_id': assistant_msg.id})}\n\n"
+
     async def _run_conversation(
         self,
         system: str,
@@ -295,28 +520,70 @@ class ChatService:
 
             messages.append({"role": "user", "content": tool_results})
 
-        # If we exhaust rounds, return whatever text we have
-        return (
-            "I wasn't able to fully answer your question — too many tool "
-            "calls were needed. Please try a more specific question.",
-            None,
-            None,
-            {"input": total_input, "output": total_output},
-        )
+        # Exhausted tool rounds — ask Claude for a final summary
+        messages.append({
+            "role": "user",
+            "content": (
+                "You've used all available tool calls. Based on the data "
+                "you've gathered so far, please provide your best answer "
+                "now. If the answer is incomplete, explain what you found "
+                "and what additional data would be needed."
+            ),
+        })
+        try:
+            final = await self.client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=system,
+                messages=messages,
+            )
+            total_input += final.usage.input_tokens
+            total_output += final.usage.output_tokens
+            full_text = "\n".join(
+                b.text for b in final.content if b.type == "text"
+            )
+            chart, clean_text = self._extract_chart(full_text)
+            outlets, clean_text = self._extract_outlets(clean_text)
+            return (
+                clean_text.strip(),
+                chart,
+                outlets,
+                {"input": total_input, "output": total_output},
+            )
+        except Exception:
+            return (
+                "I wasn't able to fully answer your question — too many "
+                "tool calls were needed. Please try a more specific question.",
+                None,
+                None,
+                {"input": total_input, "output": total_output},
+            )
 
     async def _build_messages(
         self, session: ChatSession, new_message: str,
     ) -> list[dict]:
-        """Build Claude message history from persisted messages."""
-        # Eagerly load messages to avoid sync lazy-load in async context
+        """Build Claude message history from persisted messages.
+
+        Keeps only the last MAX_HISTORY messages to limit token usage.
+        """
+        MAX_HISTORY = 10  # last N messages from conversation history
         await self.db.refresh(session, ["messages"])
         messages: list[dict] = []
 
-        for msg in session.messages:
+        # Only include user/assistant messages, skip tool_call/tool_result
+        history = [m for m in session.messages if m.role in (1, 2) and m.active]
+        # Take last MAX_HISTORY to cap token usage
+        history = history[-MAX_HISTORY:]
+
+        for msg in history:
             if msg.role == 1:  # user
                 messages.append({"role": "user", "content": msg.content})
             elif msg.role == 2:  # assistant
-                messages.append({"role": "assistant", "content": msg.content})
+                # Truncate very long assistant messages in history
+                content = msg.content
+                if len(content) > 1000:
+                    content = content[:1000] + "\n[...truncated]"
+                messages.append({"role": "assistant", "content": content})
 
         # Add the new user message
         messages.append({"role": "user", "content": new_message})
@@ -339,15 +606,54 @@ class ChatService:
             if stripped.startswith(marker):
                 try:
                     raw = stripped[len(marker):]
-                    data = json.loads(raw)
+                    parsed = json.loads(raw)
+
+                    chart_data = parsed.get("data", [])
+                    raw_series = parsed.get("series", [])
+                    categories = parsed.get("categories", [])
+
+                    # Format A: {categories: [...], series: [{name, data: [...]}]}
+                    # Convert to flat rows: [{category: "Mon", series1: 100}, ...]
+                    if categories and raw_series and isinstance(raw_series[0].get("data"), list):
+                        cat_key = parsed.get("x_key", "category")
+                        chart_data = []
+                        for i, cat in enumerate(categories):
+                            row: dict = {cat_key: cat}
+                            for s in raw_series:
+                                data_key = s.get("data_key", s.get("name", f"s{i}"))
+                                vals = s.get("data", [])
+                                row[data_key] = vals[i] if i < len(vals) else 0
+                            chart_data.append(row)
+                        # Fix series to have data_key instead of data array
+                        fixed_series = []
+                        for s in raw_series:
+                            dk = s.get("data_key", s.get("name", "value"))
+                            fixed_series.append({
+                                "name": s.get("name", dk),
+                                "data_key": dk,
+                                "color": s.get("color"),
+                            })
+                        raw_series = fixed_series
+                        if not parsed.get("x_key"):
+                            parsed["x_key"] = cat_key
+
+                    # Format B: data is flat list of numbers
+                    elif chart_data and not isinstance(chart_data[0], dict):
+                        x_key_fb = parsed.get("x_key", "label")
+                        val_key = (raw_series[0] if raw_series else {}).get("data_key", "value")
+                        chart_data = [
+                            {x_key_fb: f"Item {i+1}", val_key: v}
+                            for i, v in enumerate(chart_data)
+                        ]
+
                     chart = ChartConfig(
-                        type=data["type"],
-                        title=data.get("title"),
-                        x_key=data["x_key"],
-                        series=[ChartSeries(**s) for s in data["series"]],
-                        data=data["data"],
+                        type=parsed["type"],
+                        title=parsed.get("title"),
+                        x_key=parsed.get("x_key", ""),
+                        series=[ChartSeries(**s) for s in raw_series],
+                        data=chart_data,
                     )
-                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                except Exception as exc:
                     log.warning("chart_parse_error", error=str(exc))
                     clean_lines.append(line)
             else:
@@ -374,7 +680,7 @@ class ChatService:
                     raw = stripped[len(marker):]
                     data = json.loads(raw)
                     outlets = [OutletRef(**o) for o in data]
-                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                except Exception as exc:
                     log.warning("outlets_parse_error", error=str(exc))
                     clean_lines.append(line)
             else:

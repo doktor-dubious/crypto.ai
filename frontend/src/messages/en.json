@@ -1224,6 +1224,8 @@
     "optimizeAiModel": "AI Model",
     "optimizeAiModelPlaceholder": "Select model...",
     "optimizeAiModelAll": "Customer default",
+    "optimizeOutletGroup": "Outlet Group",
+    "optimizeOutletGroupAll": "All outlets",
     "optimizeWorker": "Worker",
     "optimizeWorkerAny": "Any available",
     "optimizeStart": "Start Estimation",
@@ -2095,6 +2097,7 @@
     "linkCopied": "Link copied to clipboard",
     "star": "Star",
     "delete": "Delete",
-    "save": "Save"
+    "save": "Save",
+    "copied": "Copied to clipboard"
   }
 }

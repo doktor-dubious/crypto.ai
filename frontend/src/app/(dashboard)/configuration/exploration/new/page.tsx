@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { optimizationApi, tasksApi, predictionEnginesApi, type OptimizeSettingsRequest } from "@/lib/api"
+import { optimizationApi, tasksApi, predictionEnginesApi, outletGroupsApi, type OptimizeSettingsRequest } from "@/lib/api"
 import { useCustomer } from "@/components/providers/customer-provider"
 import { ChevronDown, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -69,6 +69,7 @@ export default function ExplorationNewPage() {
 
   const [name, setName] = useState("")
   const [selectedEngineId, setSelectedEngineId] = useState<string | null>(null)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [enabled, setEnabled] = useState<Record<string, boolean>>({})
   const [rangeParams, setRangeParams] = useState<Record<string, number>>({})
   const [simulationDays, setSimulationDays] = useState(180)
@@ -80,6 +81,14 @@ export default function ExplorationNewPage() {
   })
 
   const selectedEngine = engines.find((e) => e.id === selectedEngineId) ?? null
+
+  const { data: outletGroups = [] } = useQuery({
+    queryKey: ["outlet-groups", activeCustomer?.id],
+    queryFn: () => outletGroupsApi.list(activeCustomer!.id),
+    enabled: !!activeCustomer,
+  })
+
+  const selectedGroup = outletGroups.find((g) => g.id === selectedGroupId) ?? null
 
   const { data: workers = [] } = useQuery({
     queryKey: ["workers"],
@@ -126,6 +135,7 @@ export default function ExplorationNewPage() {
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_days: simulationDays,
       prediction_engine_id: selectedEngineId || undefined,
+      outlet_group_id: selectedGroupId || undefined,
       worker: worker || undefined,
     }
     for (const s of SETTINGS) {
@@ -141,6 +151,7 @@ export default function ExplorationNewPage() {
   function handleClear() {
     setName("")
     setSelectedEngineId(null)
+    setSelectedGroupId(null)
     setEnabled({})
     setRangeParams({})
     setSimulationDays(180)
@@ -201,6 +212,42 @@ export default function ExplorationNewPage() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Outlet Group */}
+      {outletGroups.length > 0 && (
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeOutletGroup" as Parameters<typeof t>[0])}</label>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
+                <span className={cn(!selectedGroup && "text-[var(--muted-foreground)]")}>
+                  {selectedGroup?.name ?? t("optimizeOutletGroupAll" as Parameters<typeof t>[0])}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
+              <DropdownMenuItem
+                onClick={() => setSelectedGroupId(null)}
+                className="flex items-center justify-between"
+              >
+                <span className="text-[var(--muted-foreground)]">{t("optimizeOutletGroupAll" as Parameters<typeof t>[0])}</span>
+                {selectedGroupId === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+              </DropdownMenuItem>
+              {outletGroups.map((g) => (
+                <DropdownMenuItem
+                  key={g.id}
+                  onClick={() => setSelectedGroupId(g.id)}
+                  className="flex items-center justify-between"
+                >
+                  <span className="truncate">{g.name}</span>
+                  {selectedGroupId === g.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       {/* Settings toggles */}
       <div className="space-y-2">

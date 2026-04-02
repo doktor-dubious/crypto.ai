@@ -2235,6 +2235,7 @@ export interface OptimizeSettingsRequest {
   simulation_days?: number
   delay?: number
   prediction_engine_id?: string | null
+  outlet_group_id?: string | null
   worker?: string | null
 }
 
@@ -2508,20 +2509,67 @@ export interface ChatSendResponse {
   message: ChatMessageResponse
 }
 
+export interface ChatStreamCallbacks {
+  onStatus?: (status: string) => void
+  onText?: (text: string) => void
+  onChart?: (chart: ChatChartConfig) => void
+  onOutlets?: (outlets: ChatOutletRef[]) => void
+  onDone?: (data: { session_id: string; message_id: string }) => void
+  onError?: (detail: string) => void
+}
+
 export const chatApi = {
-  send: async (data: { customer_id: string; user_id?: string | null; session_id?: string | null; message: string }) => {
-    // Use dedicated API route to avoid Next.js rewrite proxy timeout
+  sendStream: async (
+    data: { customer_id: string; user_id?: string | null; session_id?: string | null; message: string },
+    callbacks: ChatStreamCallbacks,
+  ) => {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
-      signal: AbortSignal.timeout(120_000),
     })
+
     if (!res.ok) {
       const text = await res.text()
+      callbacks.onError?.(text)
       throw new Error(`API ${res.status}: ${text}`)
     }
-    return res.json() as Promise<ChatSendResponse>
+
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("No response body")
+
+    const decoder = new TextDecoder()
+    let buffer = ""
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+
+      let currentEvent = ""
+      for (const line of lines) {
+        if (line.startsWith("event: ")) {
+          currentEvent = line.slice(7)
+        } else if (line.startsWith("data: ")) {
+          const rawData = line.slice(6)
+          try {
+            const parsed = JSON.parse(rawData)
+            switch (currentEvent) {
+              case "status": callbacks.onStatus?.(parsed.status); break
+              case "text": callbacks.onText?.(parsed.text); break
+              case "chart": callbacks.onChart?.(parsed as ChatChartConfig); break
+              case "outlets": callbacks.onOutlets?.(parsed as ChatOutletRef[]); break
+              case "done": callbacks.onDone?.(parsed); break
+              case "error": callbacks.onError?.(parsed.detail); break
+            }
+          } catch { /* ignore parse errors */ }
+          currentEvent = ""
+        }
+      }
+    }
   },
 
   listSessions: (customerId: string, params?: { limit?: number; offset?: number }) => {

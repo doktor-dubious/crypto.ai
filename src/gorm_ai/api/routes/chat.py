@@ -2,6 +2,7 @@
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -104,6 +105,55 @@ async def send_message(
     except Exception as exc:
         log.error("chat_error", error=str(exc))
         raise HTTPException(status_code=500, detail="Failed to process message")
+
+
+@router.post("/stream")
+async def send_message_stream(
+    request: ChatSendRequest,
+    session: DbSession,
+) -> StreamingResponse:
+    """Send a message and stream the AI response via SSE."""
+    settings = get_settings()
+    if not settings.claude_api:
+        raise HTTPException(status_code=503, detail="Anthropic API key not configured")
+
+    # Permission check
+    if request.user_id:
+        result = await session.execute(
+            select(UserCustomer).where(
+                UserCustomer.user_id == request.user_id,
+                UserCustomer.customer_id == request.customer_id,
+                UserCustomer.active.is_(True),
+                UserCustomer.allow_insight.is_(True),
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="No insight access")
+
+    chat_service = ChatService(session, settings.claude_api)
+
+    async def generate():
+        try:
+            async for event in chat_service.send_message_stream(
+                customer_id=request.customer_id,
+                message=request.message,
+                session_id=request.session_id,
+            ):
+                yield event
+        except Exception as exc:
+            log.error("stream_error", error=str(exc))
+            import json
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/sessions", response_model=list[ChatSessionResponse])

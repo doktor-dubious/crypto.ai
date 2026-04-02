@@ -38,6 +38,11 @@ class OptimizationRun(Base):
         ForeignKey("prediction_engine.id", ondelete="SET NULL"),
         nullable=True,
     )
+    outlet_group_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("outlet_group.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     simulation_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     simulation_to: Mapped[date | None] = mapped_column(Date, nullable=True)
 
