@@ -9,6 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from gorm_ai.database.base import Base
 
 if TYPE_CHECKING:
+    from gorm_ai.database.models.llm import Llm
+    from gorm_ai.database.models.llm_submodel import LlmSubmodel
     from gorm_ai.database.models.prediction_engine import PredictionEngine
 
 
@@ -43,6 +45,9 @@ class Configuration(Base):
     weekday_profile_correction_method: Mapped[int] = mapped_column(
         Integer, default=1, nullable=False,
     )
+    covariate_handling: Mapped[str] = mapped_column(
+        String(20), default="external", nullable=False,
+    )  # none, native, external
     variation_adjustment: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False,
     )
@@ -79,6 +84,20 @@ class Configuration(Base):
 
     # Insights / Chat
     insights_hidden_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insight_model_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("llm.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    insight_submodel_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("llm_submodel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     prediction_engine: Mapped["PredictionEngine | None"] = relationship("PredictionEngine")
+    insight_model: Mapped["Llm | None"] = relationship("Llm")
+    insight_submodel: Mapped["LlmSubmodel | None"] = relationship("LlmSubmodel")

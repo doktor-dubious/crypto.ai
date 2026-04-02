@@ -74,6 +74,18 @@ def interpolate_quantile(
 
 
 @dataclass
+class MemoryEstimate:
+    """Estimated memory requirements for a task."""
+
+    model_mb: float          # base model footprint in MB
+    inference_mb: float      # per-batch inference overhead in MB
+    total_mb: float          # total estimated peak memory in MB
+    gpu_required: bool       # whether GPU VRAM is needed
+    task_type: str           # "prediction", "simulation", or "finetune"
+    breakdown: dict[str, float] | None = None  # optional detailed breakdown
+
+
+@dataclass
 class EngineCapabilities:
     """Describes the capabilities of a prediction engine."""
 
@@ -175,6 +187,47 @@ class PredictionEngine(ABC):
         (e.g. TimesFM falling back to exponential smoothing when the model isn't loaded).
         """
         return None
+
+    def estimate_memory(
+        self,
+        *,
+        task_type: str = "prediction",
+        num_outlets: int = 1,
+        batch_size: int = 32,
+        horizon: int = 30,
+        context_length: int = 512,
+        num_covariates: int = 0,
+        precision: str = "bfloat16",
+        epochs: int = 0,
+    ) -> MemoryEstimate:
+        """Estimate peak memory usage for this engine.
+
+        Override in subclasses with engine-specific knowledge.  The default
+        implementation returns a conservative estimate for CPU-only statistical
+        methods.
+
+        Args:
+            task_type: "prediction", "simulation", or "finetune"
+            num_outlets: total number of outlets in the task
+            batch_size: outlets per forward pass
+            horizon: prediction horizon in days
+            context_length: history window in days
+            num_covariates: number of covariate features
+            precision: model dtype (float32, bfloat16, float16)
+            epochs: training epochs (finetune only)
+        """
+        # Base implementation: lightweight statistical methods
+        per_outlet_mb = (context_length + horizon) * (1 + num_covariates) * 8 / (1024 * 1024)
+        batch_mb = per_outlet_mb * min(batch_size, num_outlets)
+        if task_type == "simulation":
+            batch_mb *= 1.5  # simulation holds more intermediate state
+        return MemoryEstimate(
+            model_mb=0,
+            inference_mb=round(batch_mb + 50, 1),  # 50 MB baseline for Python/numpy
+            total_mb=round(batch_mb + 50, 1),
+            gpu_required=False,
+            task_type=task_type,
+        )
 
     def validate_input(self, historical_data: list[dict], horizon: int) -> None:
         """

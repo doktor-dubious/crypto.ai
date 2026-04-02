@@ -11,6 +11,8 @@ from gorm_ai.database.base import Base
 if TYPE_CHECKING:
     from gorm_ai.database.models.currency import Currency
     from gorm_ai.database.models.customer import Customer
+    from gorm_ai.database.models.llm import Llm
+    from gorm_ai.database.models.llm_submodel import LlmSubmodel
     from gorm_ai.database.models.outlet_group import OutletGroup
     from gorm_ai.database.models.prediction_engine import PredictionEngine
     from gorm_ai.database.models.prediction_strategy import PredictionStrategy
@@ -56,6 +58,9 @@ class CustomerConfiguration(Base):
     weekday_profile_correction_method: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )
+    covariate_handling: Mapped[str | None] = mapped_column(
+        String(20), nullable=True,
+    )  # none, native, external; None = inherit
     variation_adjustment: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True,
     )
@@ -113,6 +118,18 @@ class CustomerConfiguration(Base):
         nullable=True,
     )
     insights_worker: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    insight_model_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("llm.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    insight_submodel_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("llm_submodel.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     customer: Mapped["Customer"] = relationship(
@@ -131,6 +148,8 @@ class CustomerConfiguration(Base):
     group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[group_id])
     production_group: Mapped["OutletGroup | None"] = relationship("OutletGroup", foreign_keys=[production_group_id])
     currency: Mapped["Currency | None"] = relationship("Currency", foreign_keys=[currency_id], lazy="selectin")
+    insight_model: Mapped["Llm | None"] = relationship("Llm", foreign_keys=[insight_model_id])
+    insight_submodel: Mapped["LlmSubmodel | None"] = relationship("LlmSubmodel", foreign_keys=[insight_submodel_id])
 
     @property
     def currency_symbol(self) -> str | None:

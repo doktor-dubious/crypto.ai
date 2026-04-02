@@ -237,6 +237,8 @@ async def _run_optimization(
         param_axes["eo_methodology"] = [1, 2]
     if request.optimize_eo_extrapolation:
         param_axes["eo_extrapolation"] = [1, 2, 3, 4]
+    if request.optimize_covariate_handling:
+        param_axes["covariate_handling"] = ["none", "native", "external"]
     if request.optimize_weekday_profile_correction:
         param_axes["weekday_profile_correction"] = [False, True]
     if request.optimize_history_window:

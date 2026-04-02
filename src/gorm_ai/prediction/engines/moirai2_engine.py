@@ -7,7 +7,12 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
+from gorm_ai.prediction.engine import (
+    EngineCapabilities,
+    MemoryEstimate,
+    PredictionEngine,
+    interpolate_quantile,
+)
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -64,6 +69,29 @@ class Moirai2Engine(PredictionEngine):
             max_history_length=8192,
             max_horizon=64,
             supported_frequencies=["daily", "weekly", "monthly"],
+        )
+
+    _MODEL_PARAMS: dict[str, float] = {
+        "Salesforce/moirai-2.0-R-small": 14e6,
+    }
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 32, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "float32",
+                        epochs: int = 0) -> MemoryEstimate:
+        params = self._MODEL_PARAMS.get(self._model_id, 14e6)
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = params * bytes_per_param / (1024 * 1024)
+        effective_batch = min(batch_size or self._batch_size, num_outlets)
+        context_mb = effective_batch * min(context_length, MAX_CONTEXT) * 4 / (1024 * 1024)
+        output_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)
+        inference_mb = context_mb + output_mb + 300  # GluonTS + uni2ts overhead
+
+        multiplier = {"simulation": 1.3, "finetune": 4.0}.get(task_type, 1.0)
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1), inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1), gpu_required=False, task_type=task_type,
         )
 
     def _resolve_model_id(self, value: str) -> str:

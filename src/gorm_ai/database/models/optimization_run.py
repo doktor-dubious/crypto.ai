@@ -28,6 +28,7 @@ class OptimizationRun(Base):
     optimize_variation_adjustment: Mapped[bool] = mapped_column(Boolean, default=False)
     optimize_eo_methodology: Mapped[bool] = mapped_column(Boolean, default=False)
     optimize_eo_extrapolation: Mapped[bool] = mapped_column(Boolean, default=False)
+    optimize_covariate_handling: Mapped[bool] = mapped_column(Boolean, default=False)
     optimize_weekday_profile_correction: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Simulation parameters

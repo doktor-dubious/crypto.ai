@@ -377,3 +377,50 @@ class PredictionDataDumpResponse(BaseModel):
 
     rows: list[PredictionDataDumpRow]
     total_count: int
+
+
+# ── Resource Estimation schemas ──────────────────────────────────────────────
+
+class ResourceEstimateRequest(BaseModel):
+    """Request to estimate memory requirements for a task."""
+
+    engine: str
+    task_type: str = "prediction"          # prediction, simulation, finetune
+    num_outlets: int = 1
+    batch_size: int = 32
+    horizon: int = 30
+    context_length: int = 512
+    num_covariates: int = 0
+    precision: str = "bfloat16"
+    epochs: int = 0                        # finetune only
+
+
+class MemoryEstimateResponse(BaseModel):
+    """Estimated memory requirements."""
+
+    model_mb: float
+    inference_mb: float
+    total_mb: float
+    gpu_required: bool
+    task_type: str
+    breakdown: dict[str, float] | None = None
+
+
+class SystemCapacityResponse(BaseModel):
+    """Current system resource availability."""
+
+    ram_total_mb: float
+    ram_available_mb: float
+    gpu_vram_total_mb: float | None = None
+    gpu_vram_available_mb: float | None = None
+    gpu_name: str | None = None
+
+
+class CapacityCheckResponse(BaseModel):
+    """Result of a capacity check."""
+
+    can_run: bool
+    estimate: MemoryEstimateResponse
+    capacity: SystemCapacityResponse
+    warnings: list[str]
+    recommendation: str | None = None

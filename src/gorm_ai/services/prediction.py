@@ -173,6 +173,7 @@ class PredictionService:
         # Resolve weekday correction flags once for all outlets in this prediction run.
         weekday_correction = await self._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._resolve_weekday_profile_correction(request.customer_id)
+        covariate_handling = await self._resolve_covariate_handling(request.customer_id)
         variation_params = await self._resolve_variation_adjustment(request.customer_id)
         eo_params = await self._resolve_eo_params(request.customer_id)
 
@@ -237,10 +238,11 @@ class PredictionService:
             covariates_by_outlet[outlet_id] = covariates
             batch_items.append({
                 "historical_data": historical_data,
-                "covariates": covariates,
-                "pad_dates": pad_covariates,
+                "covariates": None if covariate_handling == "none" else covariates,
+                "pad_dates": None if covariate_handling == "none" else pad_covariates,
                 "weekday_correction": weekday_correction,
                 "weekday_profile_correction": weekday_profile_params,
+                "covariate_handling": covariate_handling,
                 "variation_adjustment": variation_params,
                 "eo_params": eo_params,
                 **(request.engine_params or {}),
@@ -1318,6 +1320,31 @@ class PredictionService:
             "enabled": _resolve("variation_adjustment", False),
             "history_days": _resolve("variation_history_days", 365),
         }
+
+    async def _resolve_covariate_handling(self, customer_id: str) -> str:
+        """Resolve covariate handling mode.
+
+        Returns one of: "none", "native", "external" (default).
+        """
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+        if cc and cc.covariate_handling is not None:
+            return cc.covariate_handling
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+        if gc is not None:
+            return gc.covariate_handling
+        return "external"
 
     async def _resolve_eo_params(self, customer_id: str) -> dict:
         """Resolve EO methodology and extrapolation settings.

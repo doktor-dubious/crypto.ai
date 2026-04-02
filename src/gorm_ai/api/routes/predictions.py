@@ -6,10 +6,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from gorm_ai.api.deps import PredictionServiceDep, TaskServiceDep
 from gorm_ai.schemas.prediction import (
+    CapacityCheckResponse,
     CompletedPredictionListResponse,
     CompletedPredictionResponse,
     MarginalValueRequest,
     MarginalValueResponse,
+    MemoryEstimateResponse,
     PadEffectResponse,
     PredictionAnalyticsSummary,
     PredictionComparisonItem,
@@ -19,6 +21,8 @@ from gorm_ai.schemas.prediction import (
     PredictionRequest,
     PredictionResponse,
     PredictionTaskStatus,
+    ResourceEstimateRequest,
+    SystemCapacityResponse,
     TaskStatus,
 )
 from gorm_ai.tasks.predictions import run_prediction_task
@@ -39,6 +43,52 @@ async def list_predictions(
     return CompletedPredictionListResponse(
         items=[CompletedPredictionResponse(**item) for item in items],
         total=total,
+    )
+
+
+@router.post("/estimate", response_model=CapacityCheckResponse)
+async def estimate_task_resources(
+    data: ResourceEstimateRequest,
+) -> CapacityCheckResponse:
+    """Estimate memory requirements and check capacity before submitting a task.
+
+    Returns estimated memory usage, current system capacity, and whether the
+    server can handle the workload.
+    """
+    from gorm_ai.services.resource_estimator import check_capacity, estimate_task
+
+    estimate = estimate_task(
+        engine_slug=data.engine,
+        task_type=data.task_type,
+        num_outlets=data.num_outlets,
+        batch_size=data.batch_size,
+        horizon=data.horizon,
+        context_length=data.context_length,
+        num_covariates=data.num_covariates,
+        precision=data.precision,
+        epochs=data.epochs,
+    )
+    result = check_capacity(estimate)
+
+    return CapacityCheckResponse(
+        can_run=result.can_run,
+        estimate=MemoryEstimateResponse(
+            model_mb=result.estimate.model_mb,
+            inference_mb=result.estimate.inference_mb,
+            total_mb=result.estimate.total_mb,
+            gpu_required=result.estimate.gpu_required,
+            task_type=result.estimate.task_type,
+            breakdown=result.estimate.breakdown,
+        ),
+        capacity=SystemCapacityResponse(
+            ram_total_mb=result.capacity.ram_total_mb,
+            ram_available_mb=result.capacity.ram_available_mb,
+            gpu_vram_total_mb=result.capacity.gpu_vram_total_mb,
+            gpu_vram_available_mb=result.capacity.gpu_vram_available_mb,
+            gpu_name=result.capacity.gpu_name,
+        ),
+        warnings=result.warnings,
+        recommendation=result.recommendation,
     )
 
 
@@ -121,6 +171,25 @@ async def create_prediction_async(
 ) -> PredictionTaskStatus:
     """Create a prediction asynchronously using Celery."""
     from datetime import UTC, datetime
+
+    # Pre-flight capacity check
+    from gorm_ai.services.resource_estimator import check_capacity, estimate_task
+
+    engine_slug = data.engine.value if data.engine else "statistical"
+    horizon = (data.prediction_to - data.prediction_from).days + 1
+    estimate = estimate_task(
+        engine_slug=engine_slug, task_type="prediction",
+        num_outlets=len(data.outlet_ids) if data.outlet_ids else 100,
+        batch_size=data.batch_size, horizon=horizon,
+        num_covariates=7 + (3 if data.use_financials else 0) + (2 if data.use_pad else 0),
+    )
+    cap_check = check_capacity(estimate)
+    if not cap_check.can_run:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Insufficient resources: {'; '.join(cap_check.warnings)}. "
+                   f"{cap_check.recommendation or ''}",
+        )
 
     dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
     if data.worker:

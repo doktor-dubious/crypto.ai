@@ -13,6 +13,7 @@ from gorm_ai.api.routes import (
     finetune_examinations,
     health_check,
     import_templates,
+    llms,
     logs,
     optimization,
     outlet_groups,
@@ -48,6 +49,7 @@ api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-t
 api_router.include_router(
     finetune_examinations.router, prefix="/finetune-examinations", tags=["finetune-examinations"]
 )
+api_router.include_router(llms.router, prefix="/llms", tags=["llms"])
 api_router.include_router(logs.router, prefix="/logs", tags=["logs"])
 api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])

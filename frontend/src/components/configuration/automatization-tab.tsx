@@ -93,6 +93,10 @@ function formatSettingValue(
       const map: Record<number, string> = { 1: "E99", 2: "E95", 3: "E90", 4: "Dampened" }
       return `EO Extrap: ${map[Number(value)] ?? String(value)}`
     }
+    case "covariate_handling": {
+      const chMap: Record<string, string> = { none: "None", native: "Native", external: "External" }
+      return `Covariates: ${chMap[String(value)] ?? String(value)}`
+    }
     case "weekday_profile_correction":
       return `WPC: ${value ? "On" : "Off"}`
     case "variation_history_days":
@@ -120,6 +124,9 @@ function describeCombination(
   if (run.optimize_eo_extrapolation && "eo_extrapolation" in combo) {
     parts.push(formatSettingValue("eo_extrapolation", combo.eo_extrapolation))
   }
+  if (run.optimize_covariate_handling && "covariate_handling" in combo) {
+    parts.push(formatSettingValue("covariate_handling", combo.covariate_handling))
+  }
   if (run.optimize_weekday_profile_correction && "weekday_profile_correction" in combo) {
     parts.push(formatSettingValue("weekday_profile_correction", combo.weekday_profile_correction))
   }
@@ -135,6 +142,7 @@ function comboToApplyRequest(combo: Record<string, unknown>): ApplySettingsReque
   if ("variation_adjustment" in combo) req.variation_adjustment = combo.variation_adjustment as boolean
   if ("eo_methodology" in combo) req.eo_methodology = combo.eo_methodology as number
   if ("eo_extrapolation" in combo) req.eo_extrapolation = combo.eo_extrapolation as number
+  if ("covariate_handling" in combo) req.covariate_handling = combo.covariate_handling as string
   if ("weekday_profile_correction" in combo) req.weekday_profile_correction = combo.weekday_profile_correction as boolean
   if ("variation_history_days" in combo) req.variation_history_days = combo.variation_history_days as number
   if ("weekday_profile_correction_strength" in combo) req.weekday_profile_correction_strength = combo.weekday_profile_correction_strength as number

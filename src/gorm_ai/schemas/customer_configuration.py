@@ -35,6 +35,7 @@ class CustomerConfigurationBase(BaseModel):
     weekday_profile_correction_strength: float | None = None
     weekday_profile_correction_threshold: float | None = None
     weekday_profile_correction_method: int | None = None
+    covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
     eo_methodology: int | None = None
@@ -51,6 +52,8 @@ class CustomerConfigurationBase(BaseModel):
     insights_prediction_engine_id: str | None = None
     insights_prediction_strategy_id: str | None = None
     insights_worker: str | None = None
+    insight_model_id: str | None = None
+    insight_submodel_id: str | None = None
 
 
 class CustomerConfigurationCreate(CustomerConfigurationBase):
@@ -89,6 +92,7 @@ class CustomerConfigurationUpdate(BaseModel):
     weekday_profile_correction_strength: float | None = None
     weekday_profile_correction_threshold: float | None = None
     weekday_profile_correction_method: int | None = None
+    covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
     eo_methodology: int | None = None

@@ -7,14 +7,30 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { optimizationApi, tasksApi, predictionEnginesApi, outletGroupsApi, type OptimizeSettingsRequest } from "@/lib/api"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { ChevronDown, Check } from "lucide-react"
+import { ChevronDown, Check, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+
+function InfoIcon({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0 mt-px" />
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 // ─── Settings definition ──────────────────────────────────────────────────────
 
@@ -22,6 +38,7 @@ interface ToggleSetting {
   type: "toggle"
   key: string
   labelKey: string
+  infoKey: string
   optionCount: number
 }
 
@@ -29,6 +46,7 @@ interface RangeSetting {
   type: "range"
   key: string
   labelKey: string
+  infoKey: string
   fromKey: string
   toKey: string
   iterKey: string
@@ -41,13 +59,14 @@ interface RangeSetting {
 type Setting = ToggleSetting | RangeSetting
 
 const SETTINGS: Setting[] = [
-  { type: "toggle", key: "optimize_variation_adjustment", labelKey: "optimizeVariationAdjustment", optionCount: 2 },
-  { type: "toggle", key: "optimize_eo_methodology", labelKey: "optimizeEoMethodology", optionCount: 2 },
-  { type: "toggle", key: "optimize_eo_extrapolation", labelKey: "optimizeEoExtrapolation", optionCount: 4 },
-  { type: "toggle", key: "optimize_weekday_profile_correction", labelKey: "optimizeWeekdayProfileCorrection", optionCount: 2 },
-  { type: "range", key: "optimize_history_window", labelKey: "optimizeHistoryWindow", fromKey: "history_window_from", toKey: "history_window_to", iterKey: "history_window_iterations", fromDefault: 365, toDefault: 730, iterDefault: 4 },
-  { type: "range", key: "optimize_correction_strength", labelKey: "optimizeCorrectionStrength", fromKey: "correction_strength_from", toKey: "correction_strength_to", iterKey: "correction_strength_iterations", fromDefault: 1.0, toDefault: 0.0, iterDefault: 4, step: 0.1 },
-  { type: "range", key: "optimize_correction_threshold", labelKey: "optimizeCorrectionThreshold", fromKey: "correction_threshold_from", toKey: "correction_threshold_to", iterKey: "correction_threshold_iterations", fromDefault: 0.0, toDefault: 1.0, iterDefault: 4, step: 0.1 },
+  { type: "toggle", key: "optimize_variation_adjustment", labelKey: "optimizeVariationAdjustment", infoKey: "optimizeVariationAdjustmentInfo", optionCount: 2 },
+  { type: "toggle", key: "optimize_eo_methodology", labelKey: "optimizeEoMethodology", infoKey: "optimizeEoMethodologyInfo", optionCount: 2 },
+  { type: "toggle", key: "optimize_eo_extrapolation", labelKey: "optimizeEoExtrapolation", infoKey: "optimizeEoExtrapolationInfo", optionCount: 4 },
+  { type: "toggle", key: "optimize_covariate_handling", labelKey: "optimizeCovariateHandling", infoKey: "optimizeCovariateHandlingInfo", optionCount: 3 },
+  { type: "toggle", key: "optimize_weekday_profile_correction", labelKey: "optimizeWeekdayProfileCorrection", infoKey: "optimizeWeekdayProfileCorrectionInfo", optionCount: 2 },
+  { type: "range", key: "optimize_history_window", labelKey: "optimizeHistoryWindow", infoKey: "optimizeHistoryWindowInfo", fromKey: "history_window_from", toKey: "history_window_to", iterKey: "history_window_iterations", fromDefault: 365, toDefault: 730, iterDefault: 4 },
+  { type: "range", key: "optimize_correction_strength", labelKey: "optimizeCorrectionStrength", infoKey: "optimizeCorrectionStrengthInfo", fromKey: "correction_strength_from", toKey: "correction_strength_to", iterKey: "correction_strength_iterations", fromDefault: 1.0, toDefault: 0.0, iterDefault: 4, step: 0.1 },
+  { type: "range", key: "optimize_correction_threshold", labelKey: "optimizeCorrectionThreshold", infoKey: "optimizeCorrectionThresholdInfo", fromKey: "correction_threshold_from", toKey: "correction_threshold_to", iterKey: "correction_threshold_iterations", fromDefault: 0.0, toDefault: 1.0, iterDefault: 4, step: 0.1 },
 ]
 
 function formatEstimatedTime(minutes: number): string {
@@ -132,6 +151,7 @@ export default function ExplorationNewPage() {
       optimize_variation_adjustment: !!enabled.optimize_variation_adjustment,
       optimize_eo_methodology: !!enabled.optimize_eo_methodology,
       optimize_eo_extrapolation: !!enabled.optimize_eo_extrapolation,
+      optimize_covariate_handling: !!enabled.optimize_covariate_handling,
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_days: simulationDays,
       prediction_engine_id: selectedEngineId || undefined,
@@ -167,10 +187,14 @@ export default function ExplorationNewPage() {
   }
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="max-w-2xl px-6 py-6 flex flex-col gap-6">
       {/* Name */}
       <div className="space-y-1">
-        <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeName" as Parameters<typeof t>[0])}</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeName" as Parameters<typeof t>[0])}</label>
+          <InfoIcon text={t("optimizeNameInfo" as Parameters<typeof t>[0])} />
+        </div>
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -181,7 +205,10 @@ export default function ExplorationNewPage() {
 
       {/* AI Model */}
       <div className="space-y-1">
-        <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeAiModel" as Parameters<typeof t>[0])}</label>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeAiModel" as Parameters<typeof t>[0])}</label>
+          <InfoIcon text={t("optimizeAiModelInfo" as Parameters<typeof t>[0])} />
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
@@ -216,7 +243,10 @@ export default function ExplorationNewPage() {
       {/* Outlet Group */}
       {outletGroups.length > 0 && (
         <div className="space-y-1">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeOutletGroup" as Parameters<typeof t>[0])}</label>
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeOutletGroup" as Parameters<typeof t>[0])}</label>
+            <InfoIcon text={t("optimizeOutletGroupInfo" as Parameters<typeof t>[0])} />
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
@@ -260,6 +290,7 @@ export default function ExplorationNewPage() {
                   onCheckedChange={(v) => setEnabled((prev) => ({ ...prev, [setting.key]: v }))}
                 />
                 <span className="text-sm">{t(setting.labelKey as Parameters<typeof t>[0])}</span>
+                <InfoIcon text={t(setting.infoKey as Parameters<typeof t>[0])} />
               </label>
               <span className="text-xs text-muted-foreground">
                 {enabled[setting.key]
@@ -305,7 +336,10 @@ export default function ExplorationNewPage() {
       {/* Worker */}
       {workers.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeWorker" as Parameters<typeof t>[0])}</label>
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeWorker" as Parameters<typeof t>[0])}</label>
+            <InfoIcon text={t("optimizeWorkerInfo" as Parameters<typeof t>[0])} />
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
@@ -340,7 +374,10 @@ export default function ExplorationNewPage() {
 
       {/* Simulation days */}
       <div className="flex items-center justify-between py-1.5 border-t pt-4">
-        <span className="text-sm">{t("optimizeSimulationDays")}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm">{t("optimizeSimulationDays")}</span>
+          <InfoIcon text={t("optimizeSimulationDaysInfo" as Parameters<typeof t>[0])} />
+        </div>
         <Input
           type="number"
           min={1}
@@ -382,5 +419,6 @@ export default function ExplorationNewPage() {
         </Button>
       </div>
     </div>
+    </TooltipProvider>
   )
 }

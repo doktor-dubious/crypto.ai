@@ -13,7 +13,12 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
+from gorm_ai.prediction.engine import (
+    EngineCapabilities,
+    MemoryEstimate,
+    PredictionEngine,
+    interpolate_quantile,
+)
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -119,6 +124,20 @@ class Chronos2DirectEngine(PredictionEngine):
         if "batch_size" in params:
             self._batch_size = int(params["batch_size"])
 
+    # Model parameter counts for memory estimation (HuggingFace model ID → params)
+    _MODEL_PARAMS: dict[str, float] = {
+        "amazon/chronos-t5-tiny": 8e6,
+        "amazon/chronos-t5-mini": 20e6,
+        "amazon/chronos-t5-small": 46e6,
+        "amazon/chronos-t5-base": 200e6,
+        "amazon/chronos-t5-large": 710e6,
+        "amazon/chronos-bolt-tiny": 8e6,
+        "amazon/chronos-bolt-mini": 20e6,
+        "amazon/chronos-bolt-small": 46e6,
+        "amazon/chronos-bolt-base": 200e6,
+        "Datadog/Toto-Open-Base-1.0": 151e6,
+    }
+
     # -- capabilities --------------------------------------------------------
 
     def get_capabilities(self) -> EngineCapabilities:
@@ -132,6 +151,48 @@ class Chronos2DirectEngine(PredictionEngine):
             max_history_length=2048,
             max_horizon=64,
             supported_frequencies=["daily", "weekly", "monthly"],
+        )
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 8, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "bfloat16",
+                        epochs: int = 0) -> MemoryEstimate:
+        params = self._MODEL_PARAMS.get(self._model_id, 46e6)  # default to small
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = params * bytes_per_param / (1024 * 1024)
+
+        effective_batch = min(batch_size or self._batch_size, num_outlets)
+        is_bolt = "bolt" in self._model_id.lower()
+        num_samples = 1 if is_bolt else self._num_samples
+
+        # T5 autoregressive: KV-cache per sample per layer
+        # Bolt: single forward pass, much less memory
+        context_mb = effective_batch * context_length * 4 / (1024 * 1024)
+        if is_bolt:
+            kv_cache_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)
+        else:
+            # T5 KV-cache: ~2 bytes per key+value per layer per head per sample
+            kv_cache_mb = effective_batch * num_samples * horizon * 512 * 2 / (1024 * 1024)
+
+        ridge_mb = effective_batch * context_length * max(num_covariates, 1) * 8 / (1024 * 1024)
+        inference_mb = context_mb + kv_cache_mb + ridge_mb + 150  # PyTorch overhead
+
+        multiplier = 1.0
+        if task_type == "simulation":
+            multiplier = 1.3
+        elif task_type == "finetune":
+            multiplier = 4.0
+
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1),
+            inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1),
+            gpu_required=not is_bolt,  # T5 models strongly prefer GPU
+            task_type=task_type,
+            breakdown={"model": round(model_mb, 1), "context": round(context_mb, 1),
+                       "kv_cache": round(kv_cache_mb, 1), "ridge": round(ridge_mb, 1),
+                       "pytorch_overhead": 150},
         )
 
     def get_actual_slug(self) -> str | None:

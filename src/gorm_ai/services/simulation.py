@@ -370,6 +370,7 @@ class SimulationService:
         weekday_correction = await self._prediction_service._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
         variation_params = await self._prediction_service._resolve_variation_adjustment(request.customer_id)
+        covariate_handling = await self._prediction_service._resolve_covariate_handling(request.customer_id)
         eo_params = await self._prediction_service._resolve_eo_params(request.customer_id)
         weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
         open_days_flags = await self._prediction_service._resolve_open_days(request.customer_id)
@@ -390,6 +391,8 @@ class SimulationService:
                 weekday_profile_params["strength"] = config_overrides["weekday_profile_correction_strength"]
             if "weekday_profile_correction_threshold" in config_overrides:
                 weekday_profile_params["threshold"] = config_overrides["weekday_profile_correction_threshold"]
+            if "covariate_handling" in config_overrides:
+                covariate_handling = config_overrides["covariate_handling"]
 
         # --- Per-outlet closed days (same logic as in PredictionService) ---
         # Build a set of python weekdays (0-6) that are closed for each outlet,
@@ -528,10 +531,11 @@ class SimulationService:
                 outlet_historical[outlet_id] = historical_data
                 batch_items.append({
                     "historical_data": historical_data,
-                    "covariates": covariates_cache[outlet_id],
-                    "pad_dates": pad_covariates,
+                    "covariates": None if covariate_handling == "none" else covariates_cache[outlet_id],
+                    "pad_dates": None if covariate_handling == "none" else pad_covariates,
                     "weekday_correction": weekday_correction,
                     "weekday_profile_correction": weekday_profile_params,
+                    "covariate_handling": covariate_handling,
                     "variation_adjustment": variation_params,
                     "eo_params": eo_params,
                 })
@@ -562,9 +566,10 @@ class SimulationService:
                             continue
                         wo_items.append({
                             "historical_data": filtered,
-                            "covariates": covariates_cache[outlet_id],
-                            "pad_dates": pad_covariates,
+                            "covariates": None if covariate_handling == "none" else covariates_cache[outlet_id],
+                            "pad_dates": None if covariate_handling == "none" else pad_covariates,
                             "weekday_correction": [False] * 7,
+                            "covariate_handling": covariate_handling,
                             "eo_params": eo_params,
                         })
                         wo_ids.append(outlet_id)

@@ -10,7 +10,12 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
+from gorm_ai.prediction.engine import (
+    EngineCapabilities,
+    MemoryEstimate,
+    PredictionEngine,
+    interpolate_quantile,
+)
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -43,6 +48,26 @@ class AutoGluonEngine(PredictionEngine):
             max_history_length=2048,
             max_horizon=64,
             supported_frequencies=["daily", "weekly", "monthly"],
+        )
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 32, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "bfloat16",
+                        epochs: int = 0) -> MemoryEstimate:
+        # AutoGluon Chronos-Bolt wrapper: fresh predictor per batch + GC overhead
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = 200e6 * bytes_per_param / (1024 * 1024)  # bolt-base default
+        effective_batch = min(batch_size, num_outlets)
+        context_mb = effective_batch * context_length * 4 / (1024 * 1024)
+        output_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)
+        # AutoGluon adds ~500 MB overhead for predictor setup + temp files
+        inference_mb = context_mb + output_mb + 500
+
+        multiplier = {"simulation": 1.3, "finetune": 4.0}.get(task_type, 1.0)
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1), inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1), gpu_required=False, task_type=task_type,
         )
 
     def _check_autogluon(self) -> bool:

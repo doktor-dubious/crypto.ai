@@ -262,7 +262,25 @@ async def run_simulation_async(
     """
     from datetime import UTC, datetime
 
+    from gorm_ai.services.resource_estimator import check_capacity, estimate_task
     from gorm_ai.tasks.simulations import run_simulation_task
+
+    # Pre-flight capacity check
+    engine_slug = data.engine or "statistical"
+    sim_days = (data.simulation_to - data.simulation_from).days + 1
+    estimate = estimate_task(
+        engine_slug=engine_slug, task_type="simulation",
+        num_outlets=len(data.outlet_ids) if data.outlet_ids else 100,
+        batch_size=data.batch_size, horizon=sim_days,
+        num_covariates=7 + (3 if data.use_financials else 0) + (2 if data.use_pad else 0),
+    )
+    cap_check = check_capacity(estimate)
+    if not cap_check.can_run:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Insufficient resources: {'; '.join(cap_check.warnings)}. "
+                   f"{cap_check.recommendation or ''}",
+        )
 
     dispatch_kwargs: dict = {"args": [data.model_dump(mode="json")]}
     if data.worker:

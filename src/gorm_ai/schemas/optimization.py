@@ -12,6 +12,7 @@ class OptimizeSettingsRequest(BaseModel):
     optimize_variation_adjustment: bool = False      # True/False -> 2 options
     optimize_eo_methodology: bool = False            # 1,2 -> 2 options
     optimize_eo_extrapolation: bool = False          # 1,2,3,4 -> 4 options
+    optimize_covariate_handling: bool = False         # none,native,external -> 3 options
     optimize_weekday_profile_correction: bool = False  # True/False -> 2 options
     # Range parameters — generate evenly spaced values between from/to
     optimize_history_window: bool = False
@@ -67,6 +68,7 @@ class OptimizationRunResponse(BaseModel):
     optimize_variation_adjustment: bool
     optimize_eo_methodology: bool
     optimize_eo_extrapolation: bool
+    optimize_covariate_handling: bool
     optimize_weekday_profile_correction: bool
     simulation_days: int
     delay: int
@@ -90,6 +92,7 @@ class ApplySettingsRequest(BaseModel):
     variation_adjustment: bool | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
+    covariate_handling: str | None = None
     weekday_profile_correction: bool | None = None
     variation_history_days: int | None = None
     weekday_profile_correction_strength: float | None = None

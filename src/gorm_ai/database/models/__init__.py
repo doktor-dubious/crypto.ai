@@ -15,6 +15,7 @@ from gorm_ai.database.models.finetune_log import FinetuneLog
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
 from gorm_ai.database.models.llm import Llm
+from gorm_ai.database.models.llm_submodel import LlmSubmodel
 from gorm_ai.database.models.prediction_adjustment import PredictionAdjustment
 from gorm_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
 from gorm_ai.database.models.optimization_run import OptimizationRun
@@ -88,6 +89,7 @@ __all__ = [
     "SimulationStrategy",
     "TaskRecord",
     "Llm",
+    "LlmSubmodel",
     "Token",
     "TokenLlm",
     "TokenModel",

@@ -658,6 +658,8 @@ export interface ConfigurationResponse {
   profit_per_unit: number | null
   eo_to_delivery_rounding: number
   prediction_engine_id: string | null
+  insight_model_id: string | null
+  insight_submodel_id: string | null
   weekday_correction_mon: boolean
   weekday_correction_tue: boolean
   weekday_correction_wed: boolean
@@ -676,6 +678,7 @@ export interface ConfigurationResponse {
   weekday_profile_correction_strength: number
   weekday_profile_correction_threshold: number
   weekday_profile_correction_method: number
+  covariate_handling: string
   variation_adjustment: boolean
   variation_history_days: number
   eo_methodology: number
@@ -701,6 +704,8 @@ export interface CustomerConfigurationResponse {
   profit_per_unit: number | null
   eo_to_delivery_rounding: number | null
   prediction_engine_id: string | null
+  insight_model_id: string | null
+  insight_submodel_id: string | null
   group_id: string | null
   production_group_id: string | null
   currency_id: string | null
@@ -723,6 +728,7 @@ export interface CustomerConfigurationResponse {
   weekday_profile_correction_strength: number | null
   weekday_profile_correction_threshold: number | null
   weekday_profile_correction_method: number | null
+  covariate_handling: string | null
   variation_adjustment: boolean | null
   variation_history_days: number | null
   eo_methodology: number | null
@@ -1320,6 +1326,8 @@ export interface ConfigurationUpdate {
   profit_per_unit?: number | null
   eo_to_delivery_rounding?: number | null
   prediction_engine_id?: string | null
+  insight_model_id?: string | null
+  insight_submodel_id?: string | null
   weekday_correction_mon?: boolean | null
   weekday_correction_tue?: boolean | null
   weekday_correction_wed?: boolean | null
@@ -1338,6 +1346,7 @@ export interface ConfigurationUpdate {
   weekday_profile_correction_strength?: number | null
   weekday_profile_correction_threshold?: number | null
   weekday_profile_correction_method?: number | null
+  covariate_handling?: string | null
   variation_adjustment?: boolean | null
   variation_history_days?: number | null
   open_monday?: boolean | null
@@ -1370,6 +1379,24 @@ export interface CurrencyResponse {
 
 export const currenciesApi = {
   list: () => apiFetch<CurrencyResponse[]>("/currencies"),
+}
+
+export interface LlmResponse {
+  id: string
+  name: string
+  description: string | null
+}
+
+export interface LlmSubmodelResponse {
+  id: string
+  name: string
+  description: string | null
+  llm_id: string | null
+}
+
+export const llmsApi = {
+  list: () => apiFetch<LlmResponse[]>("/llms"),
+  listSubmodels: () => apiFetch<LlmSubmodelResponse[]>("/llms/submodels"),
 }
 
 export const customerConfigurationApi = {
@@ -2219,6 +2246,7 @@ export interface OptimizeSettingsRequest {
   optimize_variation_adjustment: boolean
   optimize_eo_methodology: boolean
   optimize_eo_extrapolation: boolean
+  optimize_covariate_handling: boolean
   optimize_weekday_profile_correction: boolean
   optimize_history_window?: boolean
   history_window_from?: number
@@ -2260,6 +2288,7 @@ export interface OptimizationRunResponse {
   optimize_variation_adjustment: boolean
   optimize_eo_methodology: boolean
   optimize_eo_extrapolation: boolean
+  optimize_covariate_handling: boolean
   optimize_weekday_profile_correction: boolean
   simulation_days: number
   delay: number
@@ -2301,6 +2330,7 @@ export interface ApplySettingsRequest {
   variation_adjustment?: boolean | null
   eo_methodology?: number | null
   eo_extrapolation?: number | null
+  covariate_handling?: string | null
   weekday_profile_correction?: boolean | null
   variation_history_days?: number | null
   weekday_profile_correction_strength?: number | null

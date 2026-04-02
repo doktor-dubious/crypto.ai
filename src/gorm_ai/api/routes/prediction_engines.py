@@ -276,6 +276,30 @@ async def start_finetune(
     )
     request_data["fine_tune_id"] = ft_row.id
 
+    # Pre-flight capacity check
+    try:
+        from gorm_ai.services.resource_estimator import check_capacity, estimate_task
+
+        estimate = estimate_task(
+            engine_slug="timesfm",  # finetune currently supports TimesFM and MOIRAI-2
+            task_type="finetune",
+            num_outlets=100,
+            batch_size=data.batch_size,
+            context_length=data.context_length,
+            epochs=data.epochs,
+        )
+        cap_check = check_capacity(estimate)
+        if not cap_check.can_run:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Insufficient resources: {'; '.join(cap_check.warnings)}. "
+                       f"{cap_check.recommendation or ''}",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Don't block finetune if capacity check itself fails
+
     dispatch_kwargs: dict = {"args": [request_data]}
     if data.worker:
         dispatch_kwargs["queue"] = data.worker

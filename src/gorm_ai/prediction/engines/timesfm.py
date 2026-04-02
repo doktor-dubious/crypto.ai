@@ -7,7 +7,12 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from gorm_ai.prediction.engine import EngineCapabilities, PredictionEngine, interpolate_quantile
+from gorm_ai.prediction.engine import (
+    EngineCapabilities,
+    MemoryEstimate,
+    PredictionEngine,
+    interpolate_quantile,
+)
 from gorm_ai.prediction.preprocessor import DataPreprocessor
 from gorm_ai.schemas.prediction import PredictionResult
 
@@ -57,6 +62,40 @@ class TimesFMEngine(PredictionEngine):
             max_horizon=128,
             patch_size=32,
             supported_frequencies=["daily", "weekly", "monthly", "hourly"],
+        )
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 32, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "bfloat16",
+                        epochs: int = 0) -> MemoryEstimate:
+        # TimesFM 2.5: 200M params
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = 200e6 * bytes_per_param / (1024 * 1024)
+        # Per-batch: context tensor + quantile output + Ridge regression
+        effective_batch = min(batch_size, num_outlets)
+        batch_tensor_mb = effective_batch * context_length * 4 / (1024 * 1024)
+        output_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)  # 9 quantiles
+        cov_bytes = (context_length + horizon) * num_covariates * 8
+        ridge_mb = effective_batch * cov_bytes / (1024 * 1024)
+        inference_mb = batch_tensor_mb + output_mb + ridge_mb + 200  # 200 MB PyTorch overhead
+
+        multiplier = 1.0
+        if task_type == "finetune":
+            multiplier = 4.0  # optimizer states + gradients + activations
+            inference_mb += epochs * 0.5  # small per-epoch overhead
+        elif task_type == "simulation":
+            multiplier = 1.3  # extra intermediate state
+
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1),
+            inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1),
+            gpu_required=False,
+            task_type=task_type,
+            breakdown={"model": round(model_mb, 1), "batch_tensor": round(batch_tensor_mb, 1),
+                       "output": round(output_mb, 1), "ridge": round(ridge_mb, 1),
+                       "pytorch_overhead": 200},
         )
 
     async def predict(
@@ -109,8 +148,9 @@ class TimesFMEngine(PredictionEngine):
             cov_arrays = self._build_covariate_arrays(
                 df, prediction_from, horizon, covariates, pad_dates, weekday_correction
             )
+            covariate_handling = kwargs.get("covariate_handling", "external")
             predictions, lower, upper, all_quantiles = await self._run_inference_with_covariates(
-                values, horizon, cov_arrays
+                values, horizon, cov_arrays, covariate_handling
             )
         else:
             # Stub: return simple forecast when model not available
@@ -220,7 +260,9 @@ class TimesFMEngine(PredictionEngine):
                 "values": values,
                 "hist_X": hist_X,
                 "fut_X": fut_X,
+                "cov_arrays": cov_arrays,
                 "feature_names": feature_names,
+                "covariate_handling": item.get("covariate_handling", "external"),
                 "preprocessor": pp,
                 "covariates": item.get("covariates"),
             })
@@ -304,27 +346,149 @@ class TimesFMEngine(PredictionEngine):
 
         return output
 
+    @staticmethod
+    def _format_covariates_for_native(
+        batch: list[dict],
+    ) -> dict[str, list[list[float]]]:
+        """Build native forecast_with_covariates format from per-outlet cov_arrays.
+
+        Native API expects: {feature_name: [[outlet_0_values], [outlet_1_values], ...]}
+        Each outlet's cov_arrays is: {feature_name: [values_covering_hist+horizon]}
+        """
+        all_features: set[str] = set()
+        for item in batch:
+            all_features.update(item.get("cov_arrays", {}).keys())
+        if not all_features:
+            return {}
+
+        sorted_features = sorted(all_features)
+        result: dict[str, list[list[float]]] = {f: [] for f in sorted_features}
+        for item in batch:
+            cov = item.get("cov_arrays", {})
+            n_total = len(item["values"]) + item["fut_X"].shape[0]
+            for f in sorted_features:
+                if f in cov:
+                    result[f].append(cov[f])
+                else:
+                    result[f].append([0.0] * n_total)
+        return result
+
+    @staticmethod
+    def _fit_ridge_for_persistence(
+        values: np.ndarray,
+        backcast: np.ndarray,
+        hist_X: np.ndarray,
+        fut_X: np.ndarray,
+        feature_names: list[str],
+        horizon: int,
+    ) -> tuple[np.ndarray, dict]:
+        """Fit sklearn Ridge on residuals to extract coefficients for persistence.
+
+        Returns (adjustment_array, ridge_info_dict).
+        """
+        from sklearn.linear_model import Ridge
+
+        n_backcast = len(backcast)
+        align_len = min(len(values), n_backcast)
+        ridge = Ridge(alpha=1.0, fit_intercept=True)
+
+        if align_len == 0 or not feature_names:
+            adj = np.zeros(horizon)
+        else:
+            residuals = values[-align_len:] - backcast[-align_len:]
+            hist_X_aligned = hist_X[-align_len:]
+            valid = ~np.isnan(residuals)
+            if hist_X_aligned.ndim == 2:
+                valid &= ~np.isnan(hist_X_aligned).any(axis=1)
+            else:
+                valid &= ~np.isnan(hist_X_aligned)
+
+            if valid.sum() >= 2:
+                ridge.fit(hist_X_aligned[valid], residuals[valid])
+                adj = ridge.predict(fut_X)
+            else:
+                adj = np.zeros(horizon)
+
+        ridge_info = {
+            "feature_names": feature_names,
+            "coefficients": list(ridge.coef_) if hasattr(ridge, "coef_") else [],
+            "intercept": float(ridge.intercept_) if hasattr(ridge, "intercept_") else 0.0,
+        }
+        return adj, ridge_info
+
     def _run_batch_inference(
         self,
         batch: list[dict],
         horizon: int,
     ) -> tuple[list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]], list[dict]]:
-        """Sync: single TimesFM forward pass for a batch + per-outlet Ridge.
+        """Sync: single TimesFM forward pass for a batch + covariate handling.
 
         Returns a tuple of:
           - list of (predictions, lower, upper, all_quantiles) tuples (normalised scale)
           - list of ridge_info dicts with keys: feature_names, coefficients, intercept
         """
-        from sklearn.linear_model import Ridge
-
         inputs = [item["values"] for item in batch]
+        covariate_handling = batch[0].get("covariate_handling", "external")
+
         # Recompile with context matching the SHORTEST input in this batch.
         # TimesFM's attention produces NaN for any zero-padded positions, so
         # we size the context so that every input fills it completely.
-        # Longer inputs lose some old history (truncated by forecast()) but
-        # no input gets padded.
         min_len = min(len(v) for v in inputs)
         self._compile_for_context(min_len)
+
+        # --- Native covariate mode: use forecast_with_covariates() ---
+        if covariate_handling == "native" and any(item.get("cov_arrays") for item in batch):
+            dyn_num_covs = self._format_covariates_for_native(batch)
+            if dyn_num_covs:
+                try:
+                    point_forecast, quantile_forecast = self._model.forecast_with_covariates(
+                        inputs=inputs,
+                        dynamic_numerical_covariates=dyn_num_covs,
+                        xreg_mode="xreg + timesfm",
+                        ridge=1.0,
+                        normalize_xreg_target_per_input=True,
+                    )
+                except Exception:
+                    logger.warning(
+                        "timesfm: forecast_with_covariates failed, falling back to external Ridge",
+                        exc_info=True,
+                    )
+                    covariate_handling = "external"
+                else:
+                    forecast_nan = np.isnan(point_forecast[:, -horizon:])
+                    if forecast_nan.any():
+                        n_outlets_nan = int(forecast_nan.any(axis=1).sum())
+                        logger.warning(
+                            "timesfm: native covariate forecast returned NaN for %d/%d outlets",
+                            n_outlets_nan, len(batch),
+                        )
+                    n_backcast = point_forecast.shape[1] - horizon
+
+                    results = []
+                    ridge_infos = []
+                    for i, item in enumerate(batch):
+                        base_pred = point_forecast[i, -horizon:]
+                        base_lower = quantile_forecast[i, -horizon:, 1]
+                        base_upper = quantile_forecast[i, -horizon:, -1]
+                        base_all_q = quantile_forecast[i, -horizon:, 1:]
+
+                        backcast = point_forecast[i, :n_backcast]
+                        feature_names = sorted(item.get("feature_names", []))
+                        _, ridge_info = self._fit_ridge_for_persistence(
+                            item["values"], backcast, item["hist_X"], item["fut_X"],
+                            feature_names, horizon,
+                        )
+                        ridge_infos.append(ridge_info)
+
+                        results.append((
+                            _sanitize_nan(base_pred),
+                            _sanitize_nan(base_lower),
+                            _sanitize_nan(base_upper),
+                            _sanitize_nan(base_all_q),
+                        ))
+                    return results, ridge_infos
+
+        # --- External or none mode: plain forecast() + optional manual Ridge ---
         point_forecast, quantile_forecast = self._model.forecast(
             horizon=horizon, inputs=inputs
         )
@@ -342,47 +506,25 @@ class TimesFMEngine(PredictionEngine):
         results = []
         ridge_infos = []
         for i, item in enumerate(batch):
-            values = item["values"]
-            hist_X = item["hist_X"]
-            fut_X = item["fut_X"]
-
             base_pred = point_forecast[i, -horizon:]
             base_lower = quantile_forecast[i, -horizon:, 1]
             base_upper = quantile_forecast[i, -horizon:, -1]
             base_all_q = quantile_forecast[i, -horizon:, 1:]
 
             backcast = point_forecast[i, :n_backcast]
-            align_len = min(len(values), n_backcast)
-
             feature_names = sorted(item.get("feature_names", []))
-            ridge = Ridge(alpha=1.0, fit_intercept=True)
 
-            if align_len == 0 or not feature_names:
-                # No backcast available (context ≤ 1 patch) or no covariates
-                # — skip Ridge adjustment entirely.
-                adj = np.zeros(horizon)
+            if covariate_handling == "external":
+                adj, ridge_info = self._fit_ridge_for_persistence(
+                    item["values"], backcast, item["hist_X"], item["fut_X"],
+                    feature_names, horizon,
+                )
             else:
-                residuals = values[-align_len:] - backcast[-align_len:]
-                hist_X_aligned = hist_X[-align_len:]
-                # Drop rows where residuals or features contain NaN
-                valid = ~np.isnan(residuals)
-                if hist_X_aligned.ndim == 2:
-                    valid &= ~np.isnan(hist_X_aligned).any(axis=1)
-                else:
-                    valid &= ~np.isnan(hist_X_aligned)
+                # covariate_handling == "none"
+                adj = np.zeros(horizon)
+                ridge_info = {"feature_names": [], "coefficients": [], "intercept": 0.0}
 
-                if valid.sum() >= 2:
-                    ridge.fit(hist_X_aligned[valid], residuals[valid])
-                    adj = ridge.predict(fut_X)
-                else:
-                    adj = np.zeros(horizon)
-
-            ridge_infos.append({
-                "feature_names": feature_names,
-                "coefficients": list(ridge.coef_) if hasattr(ridge, "coef_") else [],
-                "intercept": float(ridge.intercept_) if hasattr(ridge, "intercept_") else 0.0,
-            })
-
+            ridge_infos.append(ridge_info)
             results.append((
                 _sanitize_nan(base_pred + adj),
                 _sanitize_nan(base_lower + adj),
@@ -764,17 +906,14 @@ class TimesFMEngine(PredictionEngine):
         values: np.ndarray,
         horizon: int,
         cov_arrays: dict[str, list[float]],
+        covariate_handling: str = "external",
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Run inference with dynamic numerical covariates. Offloaded to thread pool.
 
-        Uses a Ridge regression (xreg) on top of the base TimesFM forecast:
-        1. Run base forecast — with return_backcast=True the output contains both
-           the historical reconstruction (backcast) and the future forecast.
-        2. Compute residuals = actual_values - backcast (what TimesFM missed)
-        3. Fit Ridge on residuals: residuals ~ historical_covariates
-           Ridge's intercept absorbs any systematic bias (e.g. consistent underestimation).
-        4. xreg_adjustment = ridge.predict(future_covariates)
-        5. Add adjustment to base forecast, confidence intervals, and all quantiles.
+        Supports three modes via covariate_handling:
+        - "native": delegates to TimesFM's forecast_with_covariates() API
+        - "external": manual Ridge regression on residuals (original behavior)
+        - "none": plain forecast with no covariate adjustment
 
         Returns:
             Tuple of (predictions, lower, upper, all_quantiles) where all_quantiles has
@@ -783,8 +922,6 @@ class TimesFMEngine(PredictionEngine):
         loop = asyncio.get_event_loop()
 
         def _infer():
-            from sklearn.linear_model import Ridge
-
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
             if feature_names:
@@ -794,41 +931,58 @@ class TimesFMEngine(PredictionEngine):
                 hist_X = np.empty((n_hist, 0))
                 fut_X = np.empty((horizon, 0))
 
-            # Recompile with context matching the data length to avoid
-            # zero-padding which causes NaN in TimesFM's attention.
             self._compile_for_context(n_hist)
-            # Get base TimesFM forecast (includes backcast due to return_backcast=True)
+
+            mode = covariate_handling
+
+            # --- Native mode ---
+            if mode == "native" and feature_names:
+                dyn_num_covs = {name: [cov_arrays[name]] for name in feature_names}
+                try:
+                    point_forecast, quantile_forecast = self._model.forecast_with_covariates(
+                        inputs=[values],
+                        dynamic_numerical_covariates=dyn_num_covs,
+                        xreg_mode="xreg + timesfm",
+                        ridge=1.0,
+                        normalize_xreg_target_per_input=True,
+                    )
+                except Exception:
+                    logger.warning(
+                        "timesfm: forecast_with_covariates failed, falling back to external Ridge",
+                        exc_info=True,
+                    )
+                    mode = "external"
+                else:
+                    return (
+                        _sanitize_nan(point_forecast[0, -horizon:]),
+                        _sanitize_nan(quantile_forecast[0, -horizon:, 1]),
+                        _sanitize_nan(quantile_forecast[0, -horizon:, -1]),
+                        _sanitize_nan(quantile_forecast[0, -horizon:, 1:]),
+                    )
+
+            # --- External or none mode ---
             point_forecast, quantile_forecast = self._model.forecast(
                 horizon=horizon, inputs=[values]
             )
             base_pred = point_forecast[0, -horizon:]
-            # Index 0 in quantile_forecast is the mean/point head; P10–P90 start at index 1.
-            base_lower = quantile_forecast[0, -horizon:, 1]   # P10
-            base_upper = quantile_forecast[0, -horizon:, -1]  # P90
-            base_all_quantiles = quantile_forecast[0, -horizon:, 1:]  # (horizon, 9) P10–P90
+            base_lower = quantile_forecast[0, -horizon:, 1]
+            base_upper = quantile_forecast[0, -horizon:, -1]
+            base_all_quantiles = quantile_forecast[0, -horizon:, 1:]
 
-            # Extract backcast and align with actual values.
-            # The backcast covers up to the model's context length (may differ from n_hist).
-            n_backcast = point_forecast.shape[1] - horizon
-            backcast = point_forecast[0, :n_backcast]
-            align_len = min(n_hist, n_backcast)
-            residuals = values[-align_len:] - backcast[-align_len:]
-            hist_X_aligned = hist_X[-align_len:]
-
-            # Fit Ridge on residuals — learns only what TimesFM couldn't explain.
-            # The intercept captures systematic bias (consistent over/underestimation).
-            if feature_names:
-                ridge = Ridge(alpha=1.0, fit_intercept=True)
-                ridge.fit(hist_X_aligned, residuals)
-                xreg_adjustment = ridge.predict(fut_X)
+            if mode == "external" and feature_names:
+                n_backcast = point_forecast.shape[1] - horizon
+                backcast = point_forecast[0, :n_backcast]
+                adj, _ = self._fit_ridge_for_persistence(
+                    values, backcast, hist_X, fut_X, feature_names, horizon,
+                )
             else:
-                xreg_adjustment = np.zeros(horizon)
+                adj = np.zeros(horizon)
 
             return (
-                _sanitize_nan(base_pred + xreg_adjustment),
-                _sanitize_nan(base_lower + xreg_adjustment),
-                _sanitize_nan(base_upper + xreg_adjustment),
-                _sanitize_nan(base_all_quantiles + xreg_adjustment[:, np.newaxis]),
+                _sanitize_nan(base_pred + adj),
+                _sanitize_nan(base_lower + adj),
+                _sanitize_nan(base_upper + adj),
+                _sanitize_nan(base_all_quantiles + adj[:, np.newaxis]),
             )
 
         return await loop.run_in_executor(None, _infer)

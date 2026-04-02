@@ -28,6 +28,7 @@ import {
   predictionEnginesApi,
   predictionStrategiesApi,
   tasksApi,
+  llmsApi,
   type PredictionStrategyResponse,
   type WorkerInfo,
   outletGroupsApi,
@@ -35,6 +36,8 @@ import {
   type CustomerResponse,
   type PredictionEngineResponse,
   type OutletGroupResponse,
+  type LlmResponse,
+  type LlmSubmodelResponse,
 } from "@/lib/api"
 
 // ─── Sub-components (matching prediction→strategies patterns) ────────────────
@@ -248,6 +251,8 @@ function CoreTab({
   engines,
   groups,
   currencies,
+  llms,
+  llmSubmodels,
   isGorm,
   t,
 }: {
@@ -256,6 +261,8 @@ function CoreTab({
   engines: PredictionEngineResponse[]
   groups: OutletGroupResponse[]
   currencies: CurrencyResponse[]
+  llms: LlmResponse[]
+  llmSubmodels: LlmSubmodelResponse[]
   isGorm: boolean
   t: ReturnType<typeof useTranslations<"configuration">>
 }) {
@@ -277,6 +284,32 @@ function CoreTab({
           </select>
         </FieldRow>
       )}
+
+      <FieldRow label={t("fieldInsightProvider")} info={t("fieldInsightProviderInfo")}>
+        <select
+          value={(draft.insight_model_id as string) ?? ""}
+          onChange={(e) => set("insight_model_id", e.target.value || null)}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightProviderNone")}</option>
+          {llms.map((llm) => (
+            <option key={llm.id} value={llm.id}>{llm.name}</option>
+          ))}
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("fieldInsightModel")} info={t("fieldInsightModelInfo")}>
+        <select
+          value={(draft.insight_submodel_id as string) ?? ""}
+          onChange={(e) => set("insight_submodel_id", e.target.value || null)}
+          className={selectClassName}
+        >
+          <option value="">{t("fieldInsightModelNone")}</option>
+          {llmSubmodels.map((sub) => (
+            <option key={sub.id} value={sub.id}>{sub.name}</option>
+          ))}
+        </select>
+      </FieldRow>
 
       <FieldRow label={t("fieldPredictionEngine")} info={t("fieldPredictionEngineInfo")}>
         <select
@@ -355,6 +388,19 @@ function CoreTab({
           <option value="1">{t("roundingRound")}</option>
           <option value="2">{t("roundingCeil")}</option>
           <option value="3">{t("roundingFloor")}</option>
+        </select>
+      </FieldRow>
+
+      <FieldRow label={t("covariateHandling")} info={t("covariateHandlingInfo")}>
+        <select
+          value={String(draft.covariate_handling ?? (isGorm ? "external" : ""))}
+          onChange={(e) => set("covariate_handling", e.target.value === "" ? null : e.target.value)}
+          className={selectClassName}
+        >
+          {!isGorm && <option value="">{t("covariateExternal")}</option>}
+          <option value="none">{t("covariateNone")}</option>
+          <option value="native">{t("covariateNative")}</option>
+          <option value="external">{t("covariateExternal")}</option>
         </select>
       </FieldRow>
 
@@ -832,6 +878,16 @@ export default function ConfigurationPage() {
     queryFn: currenciesApi.list,
   })
 
+  const { data: llms = [] } = useQuery({
+    queryKey: ["llms"],
+    queryFn: llmsApi.list,
+  })
+
+  const { data: llmSubmodels = [] } = useQuery({
+    queryKey: ["llmSubmodels"],
+    queryFn: llmsApi.listSubmodels,
+  })
+
   // ── Draft State ──
   const [customerDraft, setCustomerDraft] = useState<Partial<CustomerResponse>>({})
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>({})
@@ -1041,6 +1097,8 @@ export default function ConfigurationPage() {
                     engines={engines}
                     groups={[]}
                     currencies={[]}
+                    llms={llms}
+                    llmSubmodels={llmSubmodels}
                     isGorm={true}
                     t={t}
                   />
@@ -1078,6 +1136,8 @@ export default function ConfigurationPage() {
                     engines={engines}
                     groups={groups}
                     currencies={currencies}
+                    llms={llms}
+                    llmSubmodels={llmSubmodels}
                     isGorm={false}
                     t={t}
                   />

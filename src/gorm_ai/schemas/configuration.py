@@ -32,6 +32,7 @@ class ConfigurationUpdate(BaseModel):
     weekday_profile_correction_strength: float | None = None
     weekday_profile_correction_threshold: float | None = None
     weekday_profile_correction_method: int | None = None
+    covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
     eo_methodology: int | None = None
@@ -50,6 +51,8 @@ class ConfigurationUpdate(BaseModel):
     finetuned_model_path: str | None = None
     finetune_sync_every: int | None = None
     insights_hidden_prompt: str | None = None
+    insight_model_id: str | None = None
+    insight_submodel_id: str | None = None
 
 
 class ConfigurationResponse(BaseModel):
@@ -85,6 +88,7 @@ class ConfigurationResponse(BaseModel):
     weekday_profile_correction_strength: float = 1.0
     weekday_profile_correction_threshold: float = 0.0
     weekday_profile_correction_method: int = 1
+    covariate_handling: str = "external"
     variation_adjustment: bool = False
     variation_history_days: int = 365
     eo_methodology: int = 1
@@ -103,3 +107,5 @@ class ConfigurationResponse(BaseModel):
     finetuned_model_path: str = "models/timesfm_finetuned"
     finetune_sync_every: int = 5
     insights_hidden_prompt: str | None = None
+    insight_model_id: str | None = None
+    insight_submodel_id: str | None = None
