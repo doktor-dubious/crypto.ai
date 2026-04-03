@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon, RotateCcw, Globe,
+  Search, Star, Trash2, Focus, ArrowUpDown, ChevronDown, ChevronUp, Info, CalendarIcon, RotateCcw, Globe, CheckCircle,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -1723,6 +1723,15 @@ export default function SimulationsCompletedPage() {
     onError: () => toast.error(t("resumeError")),
   })
 
+  const wrapUpMutation = useMutation({
+    mutationFn: (recordId: string) => simulationsApi.wrapUp(recordId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["simulations-completed"] })
+      toast.success(t("wrapUpSuccess"))
+    },
+    onError: () => toast.error(t("wrapUpError")),
+  })
+
   // ── Tab indicator ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -2435,6 +2444,23 @@ export default function SimulationsCompletedPage() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </ButtonGroup>
+                  </div>
+                )}
+                {(selected.status === "failure" || selected.status === "revoked" || selected.status === "continued") && selected.simulation_id && (
+                  <div className="rounded-md border border-[var(--border)] p-4 flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-semibold">{t("wrapUpButton")}</p>
+                      <p className="text-xs text-[var(--muted-foreground)]">{t("wrapUpDescription")}</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="shrink-0 cursor-pointer"
+                      disabled={wrapUpMutation.isPending}
+                      onClick={() => wrapUpMutation.mutate(selected.id)}
+                    >
+                      <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
+                      {t("wrapUpButton")}
+                    </Button>
                   </div>
                 )}
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">

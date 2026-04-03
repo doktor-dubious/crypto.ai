@@ -1705,7 +1705,7 @@ export interface CompletedSimulationResponse {
   id: string
   task_id: string | null
   simulation_id: string | null
-  status: "success" | "failure" | "revoked"
+  status: "success" | "failure" | "revoked" | "continued"
   customer_id: string
   name: string | null
   description: string | null
@@ -1889,6 +1889,11 @@ export const simulationsApi = {
 
   deleteByRecordId: (recordId: string) =>
     apiFetch<void>(`/simulations/records/${recordId}`, { method: "DELETE" }),
+
+  wrapUp: (recordId: string) =>
+    apiFetch<{ ok: boolean; simulation_id: string }>(`/simulations/records/${recordId}/wrap-up`, {
+      method: "POST",
+    }),
 
   resume: (recordId: string, worker?: string) => {
     const qs = worker !== undefined ? `?worker=${encodeURIComponent(worker)}` : ""
@@ -2260,9 +2265,12 @@ export interface OptimizeSettingsRequest {
   correction_threshold_from?: number
   correction_threshold_to?: number
   correction_threshold_iterations?: number
+  simulation_from?: string | null
+  simulation_to?: string | null
   simulation_days?: number
   delay?: number
   prediction_engine_id?: string | null
+  prediction_strategy_id?: string | null
   outlet_group_id?: string | null
   worker?: string | null
 }
@@ -2274,6 +2282,13 @@ export interface OptimizationCombinationResult {
     eo_total_sold?: number | null
     eo_total_delivered?: number | null
     eo_total_returned?: number | null
+    eo_diff_delivered?: number | null
+    eo_diff_return?: number | null
+    eo_lost_sale?: number | null
+    eo_more_sale?: number | null
+    actual_total_delivered?: number | null
+    actual_total_sale?: number | null
+    actual_total_returned?: number | null
     sold_out_pct?: number | null
   }
   simulation_id: string | null

@@ -156,6 +156,56 @@ async def delete_simulation_by_record(
         raise HTTPException(status_code=404, detail="Simulation record not found")
 
 
+@router.post("/records/{record_id}/wrap-up")
+async def wrap_up_simulation(
+    record_id: str,
+    service: SimulationService = Depends(get_simulation_service),
+) -> dict:
+    """Finalize a failed/cancelled simulation using whatever data was collected.
+
+    Runs the aggregate calculations (d_/p_/eo_ totals, g1-g4 profit groups)
+    on existing prediction_outlet rows and marks the simulation as completed.
+    """
+    from datetime import UTC, datetime
+
+    from gorm_ai.database.models.task_record import TaskRecord
+
+    record = await service.session.get(TaskRecord, record_id)
+    if not record or not record.active:
+        raise HTTPException(status_code=404, detail="Task record not found")
+    if record.status not in ("failure", "revoked", "stopped", "continued"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed, cancelled, or stopped simulations can be wrapped up",
+        )
+
+    from gorm_ai.database.models.simulation import Simulation as SimulationModel
+    sim_result = await service.session.execute(
+        select(SimulationModel).where(
+            SimulationModel.task_id == record.task_id,
+            SimulationModel.active.is_(True),
+        )
+    )
+    sim = sim_result.scalar_one_or_none()
+    if not sim:
+        raise HTTPException(
+            status_code=404,
+            detail="No simulation record found — task may have failed before starting",
+        )
+
+    await service._recalculate_full_aggregates(sim.id)
+
+    if not sim.ended_at:
+        sim.ended_at = datetime.now(UTC)
+
+    record.status = "success"
+    if not record.completed_at:
+        record.completed_at = datetime.now(UTC)
+
+    await service.session.commit()
+    return {"ok": True, "simulation_id": sim.id}
+
+
 @router.post("/records/{record_id}/resume", response_model=SimulationTaskStatus, status_code=202)
 async def resume_simulation(
     record_id: str,

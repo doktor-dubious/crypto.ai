@@ -69,6 +69,7 @@ services:
 
   db:
     image: timescale/timescaledb:latest-pg16
+    shm_size: '1g'
     environment:
       - POSTGRES_USER=gorm
       - POSTGRES_PASSWORD=gorm
