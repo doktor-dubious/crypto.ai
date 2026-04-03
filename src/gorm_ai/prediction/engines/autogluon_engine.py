@@ -482,7 +482,7 @@ class AutoGluonEngine(PredictionEngine):
 
         # Financial covariates keyed by date — profit_per_unit is excluded because
         # it reflects margin, not end-user price, and does not influence demand.
-        _EXCLUDED_COVARIATES = {"profit_per_unit"}
+        _EXCLUDED_COVARIATES = {"cost_per_unit", "profit_per_unit"}
         if covariates:
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED_COVARIATES:

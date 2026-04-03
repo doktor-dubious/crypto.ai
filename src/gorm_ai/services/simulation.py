@@ -1811,7 +1811,7 @@ class SimulationService:
         # Level C/D: customer/global defaults
         default_cost, default_profit = await self._get_default_financials(sim.customer_id)
 
-        # Level PH: price history timeline
+        # Level PH: price history timeline (weekday-aware)
         ph_result = await self.session.execute(
             select(PriceHistory)
             .where(
@@ -1821,15 +1821,17 @@ class SimulationService:
             )
             .order_by(PriceHistory.effective_date)
         )
-        ph_dates: list[date] = []
-        ph_cost: dict[date, float] = {}
-        ph_profit: dict[date, float] = {}
+        ph_dates_by_wd: dict[int, list[date]] = {}
+        ph_cost: dict[tuple[int, date], float] = {}
+        ph_profit: dict[tuple[int, date], float] = {}
         for ph_row in ph_result.scalars():
-            ph_dates.append(ph_row.effective_date)
+            wd = ph_row.weekday
+            key = (wd, ph_row.effective_date)
+            ph_dates_by_wd.setdefault(wd, []).append(ph_row.effective_date)
             if ph_row.cost_per_unit is not None:
-                ph_cost[ph_row.effective_date] = ph_row.cost_per_unit
+                ph_cost[key] = ph_row.cost_per_unit
             if ph_row.profit_per_unit is not None:
-                ph_profit[ph_row.effective_date] = ph_row.profit_per_unit
+                ph_profit[key] = ph_row.profit_per_unit
 
         # Level A: FinancialDate + OutletFinancialDate overrides
         fd_filters = [
@@ -1932,10 +1934,12 @@ class SimulationService:
                     # Level A: outlet-specific financial date override
                     override_cost, override_profit = fd_outlet_map.get((r.outlet_id, row_date), (None, None))
 
-                    # Level PH: price history timeline
-                    ph_idx = bisect.bisect_right(ph_dates, row_date)
-                    ph_c = ph_cost.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
-                    ph_p = ph_profit.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    # Level PH: price history timeline (weekday-aware)
+                    wd_dates = ph_dates_by_wd.get(weekday, [])
+                    ph_idx = bisect.bisect_right(wd_dates, row_date)
+                    ph_key = (weekday, wd_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    ph_c = ph_cost.get(ph_key) if ph_key else None
+                    ph_p = ph_profit.get(ph_key) if ph_key else None
 
                     # Level B: weekday-based outlet financials
                     wb_cost, wb_profit = fin_map.get((r.outlet_id, weekday), (None, None))
@@ -2455,7 +2459,7 @@ class SimulationService:
             sim.customer_id
         )
 
-        # Level PH: price history timeline
+        # Level PH: price history timeline (weekday-aware)
         ph_result = await self.session.execute(
             select(PriceHistory)
             .where(
@@ -2465,15 +2469,17 @@ class SimulationService:
             )
             .order_by(PriceHistory.effective_date)
         )
-        ph_dates: list[date] = []
-        ph_cost: dict[date, float] = {}
-        ph_profit: dict[date, float] = {}
+        ph_dates_by_wd: dict[int, list[date]] = {}
+        ph_cost: dict[tuple[int, date], float] = {}
+        ph_profit: dict[tuple[int, date], float] = {}
         for ph_row in ph_result.scalars():
-            ph_dates.append(ph_row.effective_date)
+            wd = ph_row.weekday
+            key = (wd, ph_row.effective_date)
+            ph_dates_by_wd.setdefault(wd, []).append(ph_row.effective_date)
             if ph_row.cost_per_unit is not None:
-                ph_cost[ph_row.effective_date] = ph_row.cost_per_unit
+                ph_cost[key] = ph_row.cost_per_unit
             if ph_row.profit_per_unit is not None:
-                ph_profit[ph_row.effective_date] = ph_row.profit_per_unit
+                ph_profit[key] = ph_row.profit_per_unit
 
         # Level A: FinancialDate + OutletFinancialDate overrides
         fd_filters = [
@@ -2553,10 +2559,12 @@ class SimulationService:
                         (r.outlet_id, row_date), (None, None)
                     )
 
-                    # Level PH: price history timeline
-                    ph_idx = bisect.bisect_right(ph_dates, row_date)
-                    ph_c = ph_cost.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
-                    ph_p = ph_profit.get(ph_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    # Level PH: price history timeline (weekday-aware)
+                    wd_dates = ph_dates_by_wd.get(weekday, [])
+                    ph_idx = bisect.bisect_right(wd_dates, row_date)
+                    ph_key = (weekday, wd_dates[ph_idx - 1]) if ph_idx > 0 else None
+                    ph_c = ph_cost.get(ph_key) if ph_key else None
+                    ph_p = ph_profit.get(ph_key) if ph_key else None
 
                     # Level B: weekday-based outlet financials
                     wb_cost, wb_profit = fin_map.get(

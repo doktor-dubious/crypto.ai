@@ -12,6 +12,8 @@ class PriceHistoryCreate(BaseModel):
     name: str
     description: str | None = None
     effective_date: date
+    weekdays: list[int]  # 1=Monday, 7=Sunday — creates one row per weekday
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
 
@@ -22,6 +24,8 @@ class PriceHistoryUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     effective_date: date | None = None
+    weekday: int | None = None
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     active: bool | None = None
@@ -37,6 +41,8 @@ class PriceHistoryResponse(BaseModel):
     name: str
     description: str | None
     effective_date: date
+    weekday: int
+    price_per_unit: float | None
     cost_per_unit: float | None
     profit_per_unit: float | None
     active: bool

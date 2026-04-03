@@ -54,6 +54,7 @@ class OutletFinancialDate(Base):
         ForeignKey("outlets.id", ondelete="CASCADE"),
         index=True,
     )
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
 

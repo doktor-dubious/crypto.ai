@@ -40,6 +40,21 @@ function priceHistoryToAssignments(entries: PriceHistoryResponse[]): StrategyAss
   }))
 }
 
+// ─── Weekday helpers ───────────────────────────────────────────────────────
+
+const WEEKDAY_LABELS: Record<number, string> = {
+  1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun",
+}
+
+// ─── Weekday presets (1=Monday, 7=Sunday) ──────────────────────────────────
+
+const WEEKDAY_PRESETS: Record<string, number[]> = {
+  all: [1, 2, 3, 4, 5, 6, 7],
+  "mon-fri": [1, 2, 3, 4, 5],
+  "mon-sat": [1, 2, 3, 4, 5, 6],
+  mon: [1], tue: [2], wed: [3], thu: [4], fri: [5], sat: [6], sun: [7],
+}
+
 // ─── Dialog state ───────────────────────────────────────────────────────────
 
 interface DeleteDialogState {
@@ -69,6 +84,8 @@ export default function PriceHistoryPage() {
   // Create form state
   const [phName, setPhName] = useState("")
   const [phDescription, setPhDescription] = useState("")
+  const [phWeekdayPreset, setPhWeekdayPreset] = useState("all")
+  const [phPricePerUnit, setPhPricePerUnit] = useState("")
   const [phCostPerUnit, setPhCostPerUnit] = useState("")
   const [phProfitPerUnit, setPhProfitPerUnit] = useState("")
   const [formWarning, setFormWarning] = useState<string | null>(null)
@@ -109,6 +126,8 @@ export default function PriceHistoryPage() {
         name: phName.trim(),
         description: phDescription.trim() || null,
         effective_date: effectiveDate,
+        weekdays: WEEKDAY_PRESETS[phWeekdayPreset] ?? WEEKDAY_PRESETS.all,
+        price_per_unit: phPricePerUnit ? parseFloat(phPricePerUnit) : null,
         cost_per_unit: phCostPerUnit ? parseFloat(phCostPerUnit) : null,
         profit_per_unit: phProfitPerUnit ? parseFloat(phProfitPerUnit) : null,
       })
@@ -138,6 +157,8 @@ export default function PriceHistoryPage() {
     setCreateOpen(false)
     setPhName("")
     setPhDescription("")
+    setPhWeekdayPreset("all")
+    setPhPricePerUnit("")
     setPhCostPerUnit("")
     setPhProfitPerUnit("")
     setFormWarning(null)
@@ -269,7 +290,8 @@ export default function PriceHistoryPage() {
                             </p>
                           )}
                           <p className="text-[10px] text-muted-foreground">
-                            {entry.effective_date}
+                            {entry.effective_date} · {WEEKDAY_LABELS[entry.weekday] ?? entry.weekday}
+                            {entry.price_per_unit != null && ` \u00b7 price: ${entry.price_per_unit}`}
                             {entry.cost_per_unit != null && ` \u00b7 cost: ${entry.cost_per_unit}`}
                             {entry.profit_per_unit != null && ` \u00b7 profit: ${entry.profit_per_unit}`}
                           </p>
@@ -330,8 +352,40 @@ export default function PriceHistoryPage() {
               />
             </div>
 
-            {/* Cost & Profit */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Weekday */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium">{t("weekdayLabel")}</label>
+              <select
+                value={phWeekdayPreset}
+                onChange={(e) => setPhWeekdayPreset(e.target.value)}
+                className="h-8 rounded-md border border-[var(--input-border)] bg-[var(--input-background)] px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] cursor-pointer"
+              >
+                <option value="all">{t("allWeekdays")}</option>
+                <option value="mon-fri">{t("monFri")}</option>
+                <option value="mon-sat">{t("monSat")}</option>
+                <option disabled>──────────</option>
+                <option value="mon">{t("monday")}</option>
+                <option value="tue">{t("tuesday")}</option>
+                <option value="wed">{t("wednesday")}</option>
+                <option value="thu">{t("thursday")}</option>
+                <option value="fri">{t("friday")}</option>
+                <option value="sat">{t("saturday")}</option>
+                <option value="sun">{t("sunday")}</option>
+              </select>
+            </div>
+
+            {/* Price, Cost & Profit */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium">{t("pricePerUnitLabel")}</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={phPricePerUnit}
+                  onChange={(e) => setPhPricePerUnit(e.target.value)}
+                  className="h-8 text-xs"
+                />
+              </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium">{t("costPerUnitLabel")}</label>
                 <Input

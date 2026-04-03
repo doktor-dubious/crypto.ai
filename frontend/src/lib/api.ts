@@ -654,6 +654,7 @@ export interface ConfigurationResponse {
   id: string
   peak_period: boolean
   minimum_delivery: number
+  price_per_unit: number | null
   cost_per_unit: number | null
   profit_per_unit: number | null
   eo_to_delivery_rounding: number
@@ -700,6 +701,7 @@ export interface CustomerConfigurationResponse {
   customer_id: string
   peak_period: boolean | null
   minimum_delivery: number | null
+  price_per_unit: number | null
   cost_per_unit: number | null
   profit_per_unit: number | null
   eo_to_delivery_rounding: number | null
@@ -1322,6 +1324,7 @@ export const healthCheckApi = {
 export interface ConfigurationUpdate {
   peak_period?: boolean | null
   minimum_delivery?: number | null
+  price_per_unit?: number | null
   cost_per_unit?: number | null
   profit_per_unit?: number | null
   eo_to_delivery_rounding?: number | null
@@ -1587,6 +1590,7 @@ export interface OutletUpdate {
 export interface OutletConstraintWeekday {
   weekday: number
   open: boolean
+  price_per_unit: number | null
   cost_per_unit: number | null
   profit_per_unit: number | null
   fixed: number | null
@@ -2461,6 +2465,8 @@ export interface PriceHistoryResponse {
   name: string
   description: string | null
   effective_date: string
+  weekday: number
+  price_per_unit: number | null
   cost_per_unit: number | null
   profit_per_unit: number | null
   active: boolean
@@ -2473,6 +2479,8 @@ export interface PriceHistoryCreate {
   name: string
   description?: string | null
   effective_date: string
+  weekdays: number[]
+  price_per_unit?: number | null
   cost_per_unit?: number | null
   profit_per_unit?: number | null
 }
@@ -2484,7 +2492,7 @@ export const priceHistoryApi = {
     ),
 
   create: (data: PriceHistoryCreate) =>
-    apiFetch<PriceHistoryResponse>("/price-history", {
+    apiFetch<PriceHistoryResponse[]>("/price-history", {
       method: "POST",
       body: JSON.stringify(data),
     }),

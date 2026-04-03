@@ -549,7 +549,7 @@ class Chronos2DirectEngine(PredictionEngine):
                 result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
 
         # Financial covariates (exclude profit_per_unit — margin, not demand driver)
-        _EXCLUDED = {"profit_per_unit"}
+        _EXCLUDED = {"cost_per_unit", "profit_per_unit"}
         if covariates:
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED:

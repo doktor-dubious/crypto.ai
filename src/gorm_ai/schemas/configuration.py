@@ -10,6 +10,7 @@ class ConfigurationUpdate(BaseModel):
 
     peak_period: bool | None = None
     minimum_delivery: int | None = None
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     eo_to_delivery_rounding: int | None = None
@@ -66,6 +67,7 @@ class ConfigurationResponse(BaseModel):
     updated_at: datetime
     peak_period: bool
     minimum_delivery: int
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     eo_to_delivery_rounding: int = 1

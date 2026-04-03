@@ -10,6 +10,7 @@ class CustomerConfigurationBase(BaseModel):
 
     peak_period: bool | None = None
     minimum_delivery: int | None = None
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     eo_to_delivery_rounding: int | None = None
@@ -67,6 +68,7 @@ class CustomerConfigurationUpdate(BaseModel):
 
     peak_period: bool | None = None
     minimum_delivery: int | None = None
+    price_per_unit: float | None = None
     cost_per_unit: float | None = None
     profit_per_unit: float | None = None
     eo_to_delivery_rounding: int | None = None

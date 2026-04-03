@@ -13,20 +13,26 @@ class PriceHistoryService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, data: PriceHistoryCreate) -> PriceHistory:
-        """Create a new price history entry."""
-        entry = PriceHistory(
-            customer_id=data.customer_id,
-            name=data.name,
-            description=data.description,
-            effective_date=data.effective_date,
-            cost_per_unit=data.cost_per_unit,
-            profit_per_unit=data.profit_per_unit,
-        )
-        self.session.add(entry)
+    async def create(self, data: PriceHistoryCreate) -> list[PriceHistory]:
+        """Create price history entries — one row per weekday in the request."""
+        entries: list[PriceHistory] = []
+        for wd in data.weekdays:
+            entry = PriceHistory(
+                customer_id=data.customer_id,
+                name=data.name,
+                description=data.description,
+                effective_date=data.effective_date,
+                weekday=wd,
+                price_per_unit=data.price_per_unit,
+                cost_per_unit=data.cost_per_unit,
+                profit_per_unit=data.profit_per_unit,
+            )
+            self.session.add(entry)
+            entries.append(entry)
         await self.session.flush()
-        await self.session.refresh(entry)
-        return entry
+        for entry in entries:
+            await self.session.refresh(entry)
+        return entries
 
     async def list_by_customer(self, customer_id: str) -> list[PriceHistory]:
         """List all price history entries for a customer, newest first."""

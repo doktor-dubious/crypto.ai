@@ -34,6 +34,7 @@ class CustomerConfiguration(Base):
     )
     peak_period: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     minimum_delivery: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     eo_to_delivery_rounding: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1=round, 2=ceil, 3=floor; None = inherit from global config

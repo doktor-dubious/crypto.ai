@@ -21,6 +21,7 @@ class Configuration(Base):
 
     peak_period: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     minimum_delivery: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     eo_to_delivery_rounding: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 1=round, 2=ceil, 3=floor

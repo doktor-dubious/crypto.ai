@@ -22,14 +22,14 @@ async def list_price_history(
     return [PriceHistoryResponse.model_validate(e) for e in entries]
 
 
-@router.post("", response_model=PriceHistoryResponse, status_code=201)
+@router.post("", response_model=list[PriceHistoryResponse], status_code=201)
 async def create_price_history(
     data: PriceHistoryCreate,
     service: PriceHistoryServiceDep,
-) -> PriceHistoryResponse:
-    """Create a new price history entry."""
-    entry = await service.create(data)
-    return PriceHistoryResponse.model_validate(entry)
+) -> list[PriceHistoryResponse]:
+    """Create price history entries (one per weekday)."""
+    entries = await service.create(data)
+    return [PriceHistoryResponse.model_validate(e) for e in entries]
 
 
 @router.patch("/{entry_id}", response_model=PriceHistoryResponse)

@@ -3,7 +3,7 @@
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, Float, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Date, Float, ForeignKey, SmallInteger, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,8 +26,8 @@ class PriceHistory(Base):
     __tablename__ = "price_history"
     __table_args__ = (
         UniqueConstraint(
-            "customer_id", "effective_date",
-            name="uq_price_history_customer_date",
+            "customer_id", "effective_date", "weekday",
+            name="uq_price_history_customer_date_weekday",
         ),
     )
 
@@ -40,6 +40,8 @@ class PriceHistory(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    weekday: Mapped[int] = mapped_column(SmallInteger, nullable=False)  # 1=Monday, 7=Sunday
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
 

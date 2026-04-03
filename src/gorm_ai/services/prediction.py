@@ -1434,28 +1434,41 @@ class PredictionService:
 
     @staticmethod
     def _resolve_price_history(
-        ph_dates: list[date],
-        ph_cost: dict[date, float],
-        ph_profit: dict[date, float],
+        ph_dates_by_wd: dict[int, list[date]],
+        ph_price: dict[tuple[int, date], float],
+        ph_cost: dict[tuple[int, date], float],
+        ph_profit: dict[tuple[int, date], float],
         target: date,
-    ) -> tuple[float | None, float | None]:
-        """Find the price in effect on *target* via bisect on sorted ph_dates.
+        weekday: int,
+    ) -> tuple[float | None, float | None, float | None]:
+        """Find the price in effect on *target* for the given weekday.
 
-        Returns (cost, profit) from the most recent entry with
-        effective_date <= target, or (None, None) if no entry applies.
+        Returns (price, cost, profit) from the most recent entry with
+        effective_date <= target for the matching weekday, or (None, None, None)
+        if no entry applies.
         """
-        idx = bisect.bisect_right(ph_dates, target)
+        wd_dates = ph_dates_by_wd.get(weekday)
+        if not wd_dates:
+            return None, None, None
+        idx = bisect.bisect_right(wd_dates, target)
         if idx == 0:
-            return None, None
-        effective = ph_dates[idx - 1]
-        return ph_cost.get(effective), ph_profit.get(effective)
+            return None, None, None
+        effective = wd_dates[idx - 1]
+        key = (weekday, effective)
+        return ph_price.get(key), ph_cost.get(key), ph_profit.get(key)
 
     async def _load_price_history(
         self, customer_id: str, end_date: date
-    ) -> tuple[list[date], dict[date, float], dict[date, float]]:
+    ) -> tuple[
+        dict[int, list[date]],
+        dict[tuple[int, date], float],
+        dict[tuple[int, date], float],
+        dict[tuple[int, date], float],
+    ]:
         """Load price history entries up to *end_date* for a customer.
 
-        Returns (sorted_dates, cost_by_date, profit_by_date).
+        Returns (dates_by_weekday, price_map, cost_map, profit_map) where
+        maps are keyed by (weekday, effective_date).
         """
         result = await self.session.execute(
             select(PriceHistory)
@@ -1466,16 +1479,21 @@ class PredictionService:
             )
             .order_by(PriceHistory.effective_date)
         )
-        ph_cost: dict[date, float] = {}
-        ph_profit: dict[date, float] = {}
-        ph_dates: list[date] = []
+        ph_price: dict[tuple[int, date], float] = {}
+        ph_cost: dict[tuple[int, date], float] = {}
+        ph_profit: dict[tuple[int, date], float] = {}
+        ph_dates_by_wd: dict[int, list[date]] = {}
         for row in result.scalars():
-            ph_dates.append(row.effective_date)
+            wd = row.weekday
+            key = (wd, row.effective_date)
+            ph_dates_by_wd.setdefault(wd, []).append(row.effective_date)
+            if row.price_per_unit is not None:
+                ph_price[key] = row.price_per_unit
             if row.cost_per_unit is not None:
-                ph_cost[row.effective_date] = row.cost_per_unit
+                ph_cost[key] = row.cost_per_unit
             if row.profit_per_unit is not None:
-                ph_profit[row.effective_date] = row.profit_per_unit
-        return ph_dates, ph_cost, ph_profit
+                ph_profit[key] = row.profit_per_unit
+        return ph_dates_by_wd, ph_price, ph_cost, ph_profit
 
     async def _build_covariates(
         self, outlet_id: str, customer_id: str, start_date: date, end_date: date
@@ -1495,6 +1513,7 @@ class PredictionService:
         financial data exists anywhere in the fallback chain.
         """
         # Level B: weekday-based OutletFinancials
+        weekday_price: dict[int, float] = {}
         weekday_cost: dict[int, float] = {}
         weekday_profit: dict[int, float] = {}
         result = await self.session.execute(
@@ -1504,6 +1523,8 @@ class PredictionService:
             )
         )
         for row in result.scalars():
+            if row.price_per_unit is not None:
+                weekday_price[row.weekday] = row.price_per_unit
             if row.cost_per_unit is not None:
                 weekday_cost[row.weekday] = row.cost_per_unit
             if row.profit_per_unit is not None:
@@ -1517,23 +1538,26 @@ class PredictionService:
             )
         )
         cc = result.scalar_one_or_none()
+        default_price: float | None = cc.price_per_unit if cc else None
         default_cost: float | None = cc.cost_per_unit if cc else None
         default_profit: float | None = cc.profit_per_unit if cc else None
 
         # Level D: global Configuration (only if still missing values)
-        if default_cost is None or default_profit is None:
+        if default_price is None or default_cost is None or default_profit is None:
             result = await self.session.execute(
                 select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
             )
             gc = result.scalar_one_or_none()
             if gc:
+                if default_price is None:
+                    default_price = gc.price_per_unit
                 if default_cost is None:
                     default_cost = gc.cost_per_unit
                 if default_profit is None:
                     default_profit = gc.profit_per_unit
 
         # Level PH: price history timeline
-        ph_dates, ph_cost, ph_profit = await self._load_price_history(customer_id, end_date)
+        ph_dates_by_wd, ph_price, ph_cost, ph_profit = await self._load_price_history(customer_id, end_date)
 
         # Level A: FinancialDate + OutletFinancialDate overrides
         # Outer join fetches only this outlet's override row (or NULL if none).
@@ -1562,7 +1586,8 @@ class PredictionService:
         for fd, ofd in fd_rows:
             fd_by_date[fd.date] = (fd, ofd)
 
-        # Resolve cost and profit for every date in the range
+        # Resolve price, cost, and profit for every date in the range
+        price_map: dict[date, float] = {}
         cost_map: dict[date, float] = {}
         profit_map: dict[date, float] = {}
         current = start_date
@@ -1570,20 +1595,28 @@ class PredictionService:
             weekday = current.weekday() + 1  # 1=Mon, 7=Sun
 
             # Level A: find a matching FinancialDate with an outlet-specific override
+            override_price: float | None = None
             override_cost: float | None = None
             override_profit: float | None = None
             fd_entry = fd_by_date.get(current)
             if fd_entry is not None:
                 _, ofd = fd_entry
                 if ofd is not None:
+                    if ofd.price_per_unit is not None:
+                        override_price = ofd.price_per_unit
                     if ofd.cost_per_unit is not None:
                         override_cost = ofd.cost_per_unit
                     if ofd.profit_per_unit is not None:
                         override_profit = ofd.profit_per_unit
 
             # Level PH: price history timeline (between A and B)
-            ph_c, ph_p = self._resolve_price_history(ph_dates, ph_cost, ph_profit, current)
+            ph_pr, ph_c, ph_p = self._resolve_price_history(ph_dates_by_wd, ph_price, ph_cost, ph_profit, current, weekday)
 
+            price = (
+                override_price if override_price is not None
+                else ph_pr if ph_pr is not None
+                else weekday_price.get(weekday, default_price)
+            )
             cost = (
                 override_cost if override_cost is not None
                 else ph_c if ph_c is not None
@@ -1595,6 +1628,8 @@ class PredictionService:
                 else weekday_profit.get(weekday, default_profit)
             )
 
+            if price is not None:
+                price_map[current] = price
             if cost is not None:
                 cost_map[current] = cost
             if profit is not None:
@@ -1603,6 +1638,8 @@ class PredictionService:
             current += timedelta(days=1)
 
         covariates: dict[str, dict[date, float]] = {}
+        if price_map:
+            covariates["price_per_unit"] = price_map
         if cost_map:
             covariates["cost_per_unit"] = cost_map
         if profit_map:
@@ -1628,10 +1665,13 @@ class PredictionService:
                 OutletFinancials.active.is_(True),
             )
         )
+        outlet_weekday_price: dict[str, dict[int, float]] = {}
         outlet_weekday_cost: dict[str, dict[int, float]] = {}
         outlet_weekday_profit: dict[str, dict[int, float]] = {}
         for row in result.scalars():
             oid = row.outlet_id
+            if row.price_per_unit is not None:
+                outlet_weekday_price.setdefault(oid, {})[row.weekday] = row.price_per_unit
             if row.cost_per_unit is not None:
                 outlet_weekday_cost.setdefault(oid, {})[row.weekday] = row.cost_per_unit
             if row.profit_per_unit is not None:
@@ -1645,23 +1685,26 @@ class PredictionService:
             )
         )
         cc = result.scalar_one_or_none()
+        default_price: float | None = cc.price_per_unit if cc else None
         default_cost: float | None = cc.cost_per_unit if cc else None
         default_profit: float | None = cc.profit_per_unit if cc else None
 
         # Level D: global Configuration (only if still missing)
-        if default_cost is None or default_profit is None:
+        if default_price is None or default_cost is None or default_profit is None:
             result = await self.session.execute(
                 select(Configuration).where(Configuration.id == _CONFIGURATION_SINGLETON_ID)
             )
             gc = result.scalar_one_or_none()
             if gc:
+                if default_price is None:
+                    default_price = gc.price_per_unit
                 if default_cost is None:
                     default_cost = gc.cost_per_unit
                 if default_profit is None:
                     default_profit = gc.profit_per_unit
 
         # Level PH: price history timeline (shared across all outlets for this customer)
-        ph_dates, ph_cost, ph_profit = await self._load_price_history(customer_id, end_date)
+        ph_dates_by_wd, ph_price, ph_cost, ph_profit = await self._load_price_history(customer_id, end_date)
 
         # Level A: fetch all FinancialDate rows for this customer+range once
         result = await self.session.execute(
@@ -1694,45 +1737,57 @@ class PredictionService:
         # Build covariates per outlet purely in Python
         output: dict[str, dict[str, dict[date, float]] | None] = {}
         for outlet_id in outlet_ids:
-            weekday_cost = outlet_weekday_cost.get(outlet_id, {})
-            weekday_profit = outlet_weekday_profit.get(outlet_id, {})
+            weekday_price_o = outlet_weekday_price.get(outlet_id, {})
+            weekday_cost_o = outlet_weekday_cost.get(outlet_id, {})
+            weekday_profit_o = outlet_weekday_profit.get(outlet_id, {})
 
             # Build outlet-specific override lookup: fd_id → OutletFinancialDate
             ofd_by_fd_id: dict[str, OutletFinancialDate] = {
                 ofd.financial_date_id: ofd for ofd in ofd_by_outlet.get(outlet_id, [])
             }
 
+            price_map: dict[date, float] = {}
             cost_map: dict[date, float] = {}
             profit_map: dict[date, float] = {}
             current = start_date
             while current <= end_date:
                 weekday = current.weekday() + 1
 
+                override_price: float | None = None
                 override_cost: float | None = None
                 override_profit: float | None = None
                 fd = fd_by_date.get(current)
                 if fd is not None:
                     ofd = ofd_by_fd_id.get(fd.id)
                     if ofd is not None:
+                        if ofd.price_per_unit is not None:
+                            override_price = ofd.price_per_unit
                         if ofd.cost_per_unit is not None:
                             override_cost = ofd.cost_per_unit
                         if ofd.profit_per_unit is not None:
                             override_profit = ofd.profit_per_unit
 
                 # Level PH: price history timeline (between A and B)
-                ph_c, ph_p = self._resolve_price_history(ph_dates, ph_cost, ph_profit, current)
+                ph_pr, ph_c, ph_p = self._resolve_price_history(ph_dates_by_wd, ph_price, ph_cost, ph_profit, current, weekday)
 
+                price = (
+                    override_price if override_price is not None
+                    else ph_pr if ph_pr is not None
+                    else weekday_price_o.get(weekday, default_price)
+                )
                 cost = (
                     override_cost if override_cost is not None
                     else ph_c if ph_c is not None
-                    else weekday_cost.get(weekday, default_cost)
+                    else weekday_cost_o.get(weekday, default_cost)
                 )
                 profit = (
                     override_profit if override_profit is not None
                     else ph_p if ph_p is not None
-                    else weekday_profit.get(weekday, default_profit)
+                    else weekday_profit_o.get(weekday, default_profit)
                 )
 
+                if price is not None:
+                    price_map[current] = price
                 if cost is not None:
                     cost_map[current] = cost
                 if profit is not None:
@@ -1741,6 +1796,8 @@ class PredictionService:
                 current += timedelta(days=1)
 
             covariates: dict[str, dict[date, float]] = {}
+            if price_map:
+                covariates["price_per_unit"] = price_map
             if cost_map:
                 covariates["cost_per_unit"] = cost_map
             if profit_map:

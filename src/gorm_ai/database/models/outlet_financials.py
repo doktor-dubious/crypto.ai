@@ -26,6 +26,7 @@ class OutletFinancials(Base):
         index=True,
     )
     weekday: Mapped[int] = mapped_column(SmallInteger)  # 1=Monday, 7=Sunday
+    price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     profit_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
 

@@ -308,6 +308,20 @@ function CoreTab({
         />
       </FieldRow>
 
+      <FieldRow label={t("fieldPricePerUnit")} info={t("fieldPricePerUnitInfo")}>
+        <Input
+          type="number"
+          step="0.01"
+          value={draft.price_per_unit != null ? String(draft.price_per_unit) : ""}
+          onChange={(e) => {
+            const v = e.target.value
+            set("price_per_unit", v === "" ? null : parseFloat(v))
+          }}
+          placeholder="—"
+          className="h-8 text-sm max-w-[140px]"
+        />
+      </FieldRow>
+
       <FieldRow label={t("fieldCostPerUnit")} info={t("fieldCostPerUnitInfo")}>
         <Input
           type="number"
