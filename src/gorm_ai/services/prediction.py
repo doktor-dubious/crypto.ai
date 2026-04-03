@@ -1809,7 +1809,7 @@ class PredictionService:
             "Financial covariates built: %d/%d outlets have cost/profit data "
             "(default_cost=%s, default_profit=%s, price_history_entries=%d)",
             n_with_financials, len(outlet_ids), default_cost, default_profit,
-            len(ph_dates),
+            sum(len(v) for v in ph_dates_by_wd.values()),
         )
 
         return output
