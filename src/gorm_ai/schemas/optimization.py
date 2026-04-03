@@ -1,5 +1,7 @@
 """Optimization settings Pydantic schemas."""
 
+from datetime import date
+
 from pydantic import BaseModel
 
 
@@ -27,11 +29,15 @@ class OptimizeSettingsRequest(BaseModel):
     correction_threshold_from: float = 0.0
     correction_threshold_to: float = 1.0
     correction_threshold_iterations: int = 4
-    # Optional: simulation parameters
-    simulation_days: int = 180  # how many days of history to simulate over
+    # Simulation date range (preferred) or legacy day count
+    simulation_from: date | None = None
+    simulation_to: date | None = None
+    simulation_days: int = 180  # fallback when dates are not provided
     delay: int = 1
     # Optional: override the prediction engine used in simulations
     prediction_engine_id: str | None = None
+    # Optional: use a specific prediction strategy (includes engine + parameters)
+    prediction_strategy_id: str | None = None
     # Optional: restrict simulation to outlets in a specific group
     outlet_group_id: str | None = None
     # Optional: route to a specific worker queue

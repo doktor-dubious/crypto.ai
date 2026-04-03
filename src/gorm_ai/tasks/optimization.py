@@ -171,28 +171,27 @@ async def _run_optimization(
 
     # --- Determine simulation date range ---
     async with task_session() as session:
-        # Find latest sales date for this customer's outlets
-        outlet_subq = select(Outlet.id).where(
-            Outlet.customer_id == request.customer_id,
-            Outlet.active.is_(True),
-        ).scalar_subquery()
+        if request.simulation_from and request.simulation_to:
+            # Explicit date range provided by the user
+            simulation_from = request.simulation_from
+            simulation_to = request.simulation_to
+        else:
+            # Legacy fallback: derive range from latest sales date
+            outlet_subq = select(Outlet.id).where(
+                Outlet.customer_id == request.customer_id,
+                Outlet.active.is_(True),
+            ).scalar_subquery()
 
-        result = await session.execute(
-            select(func.max(Sales.date)).where(Sales.outlet_id.in_(outlet_subq))
-        )
-        latest_date = result.scalar_one_or_none()
+            result = await session.execute(
+                select(func.max(Sales.date)).where(Sales.outlet_id.in_(outlet_subq))
+            )
+            latest_date = result.scalar_one_or_none()
 
-        if latest_date is None:
-            raise ValueError("No sales data found for this customer")
+            if latest_date is None:
+                raise ValueError("No sales data found for this customer")
 
-        simulation_to = latest_date
-        simulation_from = latest_date - timedelta(days=request.simulation_days)
-
-        # Get default financials for scoring
-        sim_service = SimulationService(session)
-        default_cost, default_profit = await sim_service._get_default_financials(
-            request.customer_id,
-        )
+            simulation_to = latest_date
+            simulation_from = latest_date - timedelta(days=request.simulation_days)
 
     # Resolve engine slug if a specific engine was requested
     engine_slug: str | None = None
@@ -216,8 +215,6 @@ async def _run_optimization(
         customer_id=request.customer_id,
         simulation_from=str(simulation_from),
         simulation_to=str(simulation_to),
-        cost_per_unit=default_cost,
-        profit_per_unit=default_profit,
         engine=engine_slug,
     )
 
@@ -321,6 +318,7 @@ async def _run_optimization(
             use_financials=True,
             engine=engine_slug,
             outlet_group_id=request.outlet_group_id,
+            prediction_strategy_id=request.prediction_strategy_id,
         )
 
         try:
@@ -343,16 +341,15 @@ async def _run_optimization(
                 )
                 sim_record = sim_record_result.scalar_one_or_none()
 
-                if sim_record and default_cost is not None and default_profit is not None:
-                    eo_sold = sim_record.eo_total_sold or 0
-                    eo_delivered = sim_record.eo_total_delivered or 0
-                    score = (eo_sold * default_profit) - (eo_delivered * default_cost)
-                elif sim_record:
-                    # No financials — use proxy: sold - returned
-                    eo_sold = sim_record.eo_total_sold or 0
-                    eo_delivered = sim_record.eo_total_delivered or 0
-                    eo_returned = sim_record.eo_total_returned or 0
-                    score = eo_sold - eo_returned
+                if sim_record:
+                    # Use the g-classification profit already computed by
+                    # the simulation engine (respects the full financial
+                    # fallback chain: outlet_financial_dates → price_history
+                    # → outlet_financials → customer_configuration → global).
+                    score = sum(
+                        getattr(sim_record, f"eo_g{i}") or 0.0
+                        for i in range(1, 5)
+                    )
                 else:
                     score = 0.0
 
@@ -362,6 +359,13 @@ async def _run_optimization(
                 metrics["eo_total_sold"] = sim_record.eo_total_sold
                 metrics["eo_total_delivered"] = sim_record.eo_total_delivered
                 metrics["eo_total_returned"] = sim_record.eo_total_returned
+                metrics["eo_diff_delivered"] = sim_record.eo_diff_delivered
+                metrics["eo_diff_return"] = sim_record.eo_diff_return
+                metrics["eo_lost_sale"] = sim_record.eo_lost_sale
+                metrics["eo_more_sale"] = sim_record.eo_more_sale
+                metrics["actual_total_delivered"] = sim_record.actual_total_delivered
+                metrics["actual_total_sale"] = sim_record.actual_total_sale
+                metrics["actual_total_returned"] = sim_record.actual_total_returned
                 # Calculate sold_out_pct if eo_lost_sale is available
                 eo_lost_sale = sim_record.eo_lost_sale
                 if eo_lost_sale is not None:

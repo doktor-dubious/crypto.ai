@@ -290,6 +290,7 @@ async def resume_optimization(
         "optimize_variation_adjustment": run.optimize_variation_adjustment,
         "optimize_eo_methodology": run.optimize_eo_methodology,
         "optimize_eo_extrapolation": run.optimize_eo_extrapolation,
+        "optimize_covariate_handling": run.optimize_covariate_handling,
         "optimize_weekday_profile_correction": run.optimize_weekday_profile_correction,
         "simulation_days": run.simulation_days,
         "delay": run.delay,
