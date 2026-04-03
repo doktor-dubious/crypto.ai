@@ -978,15 +978,23 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
               )}
 
               {/* Results table */}
-              {sortedResults.length > 0 && (
+              {sortedResults.length > 0 && (() => {
+                const hasActuals = sortedResults.some(
+                  (r) => r.metrics?.actual_total_sale != null,
+                )
+                return (
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">{t("automatizationRank")}</TableHead>
                       <TableHead>{t("automatizationSettings")}</TableHead>
                       <TableHead className="text-right">{t("automatizationProfitScore")}</TableHead>
+                      <TableHead className="text-right">{t("automatizationQuantity")}</TableHead>
                       <TableHead className="text-right">{t("automatizationSold")}</TableHead>
                       <TableHead className="text-right">{t("automatizationReturned")}</TableHead>
+                      {hasActuals && <TableHead className="text-right">{t("automatizationActualQuantity")}</TableHead>}
+                      {hasActuals && <TableHead className="text-right">{t("automatizationActualSale")}</TableHead>}
+                      {hasActuals && <TableHead className="text-right">{t("automatizationActualReturn")}</TableHead>}
                       <TableHead className="text-right">{t("automatizationSoldOutPct")}</TableHead>
                       <TableHead className="w-20"></TableHead>
                     </TableRow>
@@ -998,8 +1006,12 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                       const dProfit = result.score != null && best.score != null ? result.score - best.score : null
                       const m = result.metrics
                       const bm = best.metrics
-                      const dSold = m?.eo_total_sold != null && bm?.eo_total_sold != null ? m.eo_total_sold - bm.eo_total_sold : null
-                      const dReturned = m?.eo_total_returned != null && bm?.eo_total_returned != null ? m.eo_total_returned - bm.eo_total_returned : null
+                      // Deltas: EO vs actual (from pre-computed simulation fields)
+                      const dQuantity = m?.eo_diff_delivered ?? null
+                      const dSold = m?.eo_more_sale != null && m?.eo_lost_sale != null
+                        ? m.eo_more_sale - m.eo_lost_sale
+                        : null
+                      const dReturned = m?.eo_diff_return != null ? -m.eo_diff_return : null
                       const dSoldOut = m?.sold_out_pct != null && bm?.sold_out_pct != null
                         ? m.sold_out_pct - bm.sold_out_pct
                         : null
@@ -1036,17 +1048,38 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                             )}
                           </TableCell>
                           <TableCell className="text-right font-mono align-top">
+                            {m?.eo_total_delivered != null ? m.eo_total_delivered.toLocaleString() : "–"}
+                            {hasActuals && dQuantity != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtDelta(dQuantity)}</div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
                             {m?.eo_total_sold != null ? m.eo_total_sold.toLocaleString() : "–"}
-                            {rank > 1 && dSold != null && (
+                            {hasActuals && dSold != null && (
                               <div className="text-[10px] text-muted-foreground">{fmtDelta(dSold)}</div>
                             )}
                           </TableCell>
                           <TableCell className="text-right font-mono align-top">
                             {m?.eo_total_returned != null ? m.eo_total_returned.toLocaleString() : "–"}
-                            {rank > 1 && dReturned != null && (
+                            {hasActuals && dReturned != null && (
                               <div className="text-[10px] text-muted-foreground">{fmtDelta(dReturned)}</div>
                             )}
                           </TableCell>
+                          {hasActuals && (
+                            <TableCell className="text-right font-mono align-top">
+                              {m?.actual_total_delivered != null ? m.actual_total_delivered.toLocaleString() : "–"}
+                            </TableCell>
+                          )}
+                          {hasActuals && (
+                            <TableCell className="text-right font-mono align-top">
+                              {m?.actual_total_sale != null ? m.actual_total_sale.toLocaleString() : "–"}
+                            </TableCell>
+                          )}
+                          {hasActuals && (
+                            <TableCell className="text-right font-mono align-top">
+                              {m?.actual_total_returned != null ? m.actual_total_returned.toLocaleString() : "–"}
+                            </TableCell>
+                          )}
                           <TableCell className="text-right font-mono align-top">
                             {m?.sold_out_pct != null
                               ? `${m.sold_out_pct.toFixed(1)}%`
@@ -1077,7 +1110,8 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                     })}
                   </TableBody>
                 </Table>
-              )}
+                )
+              })()}
 
               {/* Conclusion */}
               {sortedResults.length > 0 && selectedRun.best_combination && (
