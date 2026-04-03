@@ -2279,16 +2279,12 @@ export interface OptimizationCombinationResult {
   combination: Record<string, unknown>
   score: number | null
   metrics: {
+    d_total_delivered?: number | null
+    d_total_sold?: number | null
+    d_total_returned?: number | null
     eo_total_sold?: number | null
     eo_total_delivered?: number | null
     eo_total_returned?: number | null
-    eo_diff_delivered?: number | null
-    eo_diff_return?: number | null
-    eo_lost_sale?: number | null
-    eo_more_sale?: number | null
-    actual_total_delivered?: number | null
-    actual_total_sale?: number | null
-    actual_total_returned?: number | null
     sold_out_pct?: number | null
   }
   simulation_id: string | null

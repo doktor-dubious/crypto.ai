@@ -356,16 +356,12 @@ async def _run_optimization(
             # Build metrics dict
             metrics: dict = {}
             if sim_record:
+                metrics["d_total_delivered"] = sim_record.d_total_delivered
+                metrics["d_total_sold"] = sim_record.d_total_sold
+                metrics["d_total_returned"] = sim_record.d_total_returned
                 metrics["eo_total_sold"] = sim_record.eo_total_sold
                 metrics["eo_total_delivered"] = sim_record.eo_total_delivered
                 metrics["eo_total_returned"] = sim_record.eo_total_returned
-                metrics["eo_diff_delivered"] = sim_record.eo_diff_delivered
-                metrics["eo_diff_return"] = sim_record.eo_diff_return
-                metrics["eo_lost_sale"] = sim_record.eo_lost_sale
-                metrics["eo_more_sale"] = sim_record.eo_more_sale
-                metrics["actual_total_delivered"] = sim_record.actual_total_delivered
-                metrics["actual_total_sale"] = sim_record.actual_total_sale
-                metrics["actual_total_returned"] = sim_record.actual_total_returned
                 # Calculate sold_out_pct if eo_lost_sale is available
                 eo_lost_sale = sim_record.eo_lost_sale
                 if eo_lost_sale is not None:

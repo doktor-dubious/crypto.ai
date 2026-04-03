@@ -531,8 +531,8 @@ class SimulationService:
                 outlet_historical[outlet_id] = historical_data
                 batch_items.append({
                     "historical_data": historical_data,
-                    "covariates": None if covariate_handling == "none" else covariates_cache[outlet_id],
-                    "pad_dates": None if covariate_handling == "none" else pad_covariates,
+                    "covariates": covariates_cache[outlet_id],
+                    "pad_dates": pad_covariates,
                     "weekday_correction": weekday_correction,
                     "weekday_profile_correction": weekday_profile_params,
                     "covariate_handling": covariate_handling,
@@ -566,8 +566,8 @@ class SimulationService:
                             continue
                         wo_items.append({
                             "historical_data": filtered,
-                            "covariates": None if covariate_handling == "none" else covariates_cache[outlet_id],
-                            "pad_dates": None if covariate_handling == "none" else pad_covariates,
+                            "covariates": covariates_cache[outlet_id],
+                            "pad_dates": pad_covariates,
                             "weekday_correction": [False] * 7,
                             "covariate_handling": covariate_handling,
                             "eo_params": eo_params,
