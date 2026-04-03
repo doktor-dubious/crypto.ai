@@ -133,9 +133,9 @@ def _get_registered_workers() -> set[str]:
     it can't respond to inspect/ping.
     """
     try:
-        from gorm_ai.tasks.celery_app import WORKER_REGISTRY_PREFIX, celery_app
-
         import redis
+
+        from gorm_ai.tasks.celery_app import WORKER_REGISTRY_PREFIX, celery_app
         r = redis.Redis.from_url(str(celery_app.conf.broker_url))
         keys = r.keys(f"{WORKER_REGISTRY_PREFIX}*")
         prefix_len = len(WORKER_REGISTRY_PREFIX)
@@ -195,12 +195,18 @@ def _is_worker_container_healthy() -> bool:
 class WorkerInfoResponse(BaseModel):
     name: str
     models: list[str]
+    gpu_index: int | None = None
 
 
 @router.get("/workers/list", response_model=list[WorkerInfoResponse])
 async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
     """Return registered Celery workers with their supported models."""
-    from gorm_ai.tasks.celery_app import WORKER_MODELS_PREFIX, WORKER_REGISTRY_PREFIX, celery_app
+    from gorm_ai.tasks.celery_app import (
+        WORKER_GPU_PREFIX,
+        WORKER_MODELS_PREFIX,
+        WORKER_REGISTRY_PREFIX,
+        celery_app,
+    )
 
     # Query workers that have active tasks — these are definitely alive even
     # if their Redis registry key expired (e.g. remote solo-pool workers
@@ -241,7 +247,9 @@ async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
             models: list[str] = []
             if models_raw:
                 models = [s.strip() for s in models_raw.decode().split(",") if s.strip()]
-            result.append(WorkerInfoResponse(name=name, models=models))
+            gpu_raw = r.get(f"{WORKER_GPU_PREFIX}{key}")
+            gpu_index = int(gpu_raw.decode()) if gpu_raw else None
+            result.append(WorkerInfoResponse(name=name, models=models, gpu_index=gpu_index))
         return result
 
     return await asyncio.to_thread(_get_workers)

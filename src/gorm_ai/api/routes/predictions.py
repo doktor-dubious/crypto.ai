@@ -86,6 +86,8 @@ async def estimate_task_resources(
             gpu_vram_total_mb=result.capacity.gpu_vram_total_mb,
             gpu_vram_available_mb=result.capacity.gpu_vram_available_mb,
             gpu_name=result.capacity.gpu_name,
+            gpu_index=result.capacity.gpu_index,
+            gpu_count=result.capacity.gpu_count,
         ),
         warnings=result.warnings,
         recommendation=result.recommendation,

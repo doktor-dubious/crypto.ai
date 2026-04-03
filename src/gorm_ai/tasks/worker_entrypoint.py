@@ -1,7 +1,14 @@
-"""Entrypoint that reads simultaneous_tasks from the DB and starts Celery."""
+"""Entrypoint that reads simultaneous_tasks from the DB and starts Celery.
+
+When GPUs are available, spawns one worker process per concurrent slot,
+each pinned to a specific GPU via CUDA_VISIBLE_DEVICES (round-robin).
+This ensures multiple GPUs are utilised for parallel inference.
+"""
 
 import asyncio
 import os
+import signal
+import subprocess
 import sys
 
 
@@ -24,30 +31,117 @@ async def _get_concurrency() -> int:
     return 1
 
 
-def main() -> None:
-    concurrency = asyncio.run(_get_concurrency())
-    pool = "prefork" if concurrency > 1 else "solo"
-    worker_name = os.environ.get("WORKER_NAME", "local")
+def _get_gpu_count() -> int:
+    """Detect number of available NVIDIA GPUs."""
+    try:
+        import torch
+        return torch.cuda.device_count()
+    except Exception:
+        return 0
 
-    # Listen on the default queue AND a worker-specific queue so tasks
-    # can be routed to a particular worker by name.
-    queues = f"celery,{worker_name}"
 
-    print(f"[worker_entrypoint] Starting worker: pool={pool}, concurrency={concurrency}, name={worker_name}, queues={queues}")
+def _spawn_gpu_workers(concurrency: int, gpu_count: int, worker_name: str, queues: str) -> None:
+    """Spawn separate Celery workers, each pinned to a GPU via CUDA_VISIBLE_DEVICES.
 
-    os.execvp(
-        "celery",
-        [
+    Each worker runs with solo pool and concurrency=1 so that exactly one
+    inference task occupies one GPU at a time.
+    """
+    children: list[subprocess.Popen] = []
+
+    def _shutdown(signum, frame):
+        for child in children:
+            child.send_signal(signal.SIGTERM)
+        for child in children:
+            child.wait()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    for i in range(concurrency):
+        gpu_id = i % gpu_count
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        env["WORKER_GPU_INDEX"] = str(gpu_id)
+
+        hostname = f"celery@{worker_name}-gpu{gpu_id}-{i}"
+
+        cmd = [
             "celery",
             "-A", "gorm_ai.tasks.celery_app",
             "worker",
             "--loglevel=info",
-            f"--concurrency={concurrency}",
-            f"--pool={pool}",
-            f"--hostname=celery@{worker_name}",
+            "--concurrency=1",
+            "--pool=solo",
+            f"--hostname={hostname}",
             f"--queues={queues}",
-        ],
-    )
+        ]
+
+        print(f"[worker_entrypoint] Spawning worker {i}: GPU={gpu_id}, hostname={hostname}")
+        children.append(subprocess.Popen(cmd, env=env))
+
+    # Wait for all children; if any exits, shut down the rest.
+    while children:
+        for child in children[:]:
+            ret = child.poll()
+            if ret is not None:
+                print(
+                    f"[worker_entrypoint] Worker PID {child.pid} exited with code {ret}",
+                    file=sys.stderr,
+                )
+                children.remove(child)
+                # If a worker dies, terminate all others.
+                for remaining in children:
+                    remaining.send_signal(signal.SIGTERM)
+                for remaining in children:
+                    remaining.wait()
+                sys.exit(ret or 1)
+        try:
+            os.waitpid(-1, 0)
+        except ChildProcessError:
+            break
+
+
+def main() -> None:
+    concurrency = asyncio.run(_get_concurrency())
+    worker_name = os.environ.get("WORKER_NAME", "local")
+    queues = f"celery,{worker_name}"
+    gpu_count = _get_gpu_count()
+
+    if gpu_count > 1 and concurrency > 1:
+        # Multi-GPU mode: spawn one worker per slot, pinned to GPUs round-robin.
+        print(
+            f"[worker_entrypoint] Multi-GPU mode: {gpu_count} GPUs, "
+            f"{concurrency} workers (round-robin)"
+        )
+        _spawn_gpu_workers(concurrency, gpu_count, worker_name, queues)
+    else:
+        # Single GPU or CPU: original behaviour — one Celery process.
+        pool = "prefork" if concurrency > 1 else "solo"
+
+        if gpu_count == 1:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+            os.environ["WORKER_GPU_INDEX"] = "0"
+
+        print(
+            f"[worker_entrypoint] Starting worker: pool={pool}, "
+            f"concurrency={concurrency}, name={worker_name}, "
+            f"queues={queues}, gpus={gpu_count}"
+        )
+
+        os.execvp(
+            "celery",
+            [
+                "celery",
+                "-A", "gorm_ai.tasks.celery_app",
+                "worker",
+                "--loglevel=info",
+                f"--concurrency={concurrency}",
+                f"--pool={pool}",
+                f"--hostname=celery@{worker_name}",
+                f"--queues={queues}",
+            ],
+        )
 
 
 if __name__ == "__main__":

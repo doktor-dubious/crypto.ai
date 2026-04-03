@@ -414,6 +414,8 @@ class SystemCapacityResponse(BaseModel):
     gpu_vram_total_mb: float | None = None
     gpu_vram_available_mb: float | None = None
     gpu_name: str | None = None
+    gpu_index: int | None = None
+    gpu_count: int = 0
 
 
 class CapacityCheckResponse(BaseModel):

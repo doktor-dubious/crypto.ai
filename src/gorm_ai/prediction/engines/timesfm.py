@@ -455,6 +455,8 @@ class TimesFMEngine(PredictionEngine):
                     )
                     covariate_handling = "external"
                 else:
+                    point_forecast = np.asarray(point_forecast)
+                    quantile_forecast = np.asarray(quantile_forecast)
                     forecast_nan = np.isnan(point_forecast[:, -horizon:])
                     if forecast_nan.any():
                         n_outlets_nan = int(forecast_nan.any(axis=1).sum())

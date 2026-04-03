@@ -61,6 +61,9 @@ def _refresh_worker_registry() -> None:
         models = _get_worker_models()
         if models:
             r.setex(f"{WORKER_MODELS_PREFIX}{hostname}", WORKER_REGISTRY_TTL, models)
+        gpu_index = os.environ.get("WORKER_GPU_INDEX")
+        if gpu_index is not None:
+            r.setex(f"{WORKER_GPU_PREFIX}{hostname}", WORKER_REGISTRY_TTL, gpu_index)
     except Exception:
         pass
 
@@ -117,6 +120,7 @@ def on_task_postrun(task_id: str, **kwargs) -> None:
 
 WORKER_REGISTRY_PREFIX = "gorm:worker:"
 WORKER_MODELS_PREFIX = "gorm:worker-models:"
+WORKER_GPU_PREFIX = "gorm:worker-gpu:"
 WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
 TASK_STOP_PREFIX = "gorm:task-stop:"
 
@@ -195,6 +199,9 @@ def on_worker_ready(sender, **kwargs):
         models = _get_worker_models()
         if models:
             r.setex(f"{WORKER_MODELS_PREFIX}{hostname}", WORKER_REGISTRY_TTL, models)
+        gpu_index = os.environ.get("WORKER_GPU_INDEX")
+        if gpu_index is not None:
+            r.setex(f"{WORKER_GPU_PREFIX}{hostname}", WORKER_REGISTRY_TTL, gpu_index)
     except Exception:
         pass
 
@@ -207,6 +214,7 @@ def on_worker_shutdown(sender, **kwargs):
         r = _get_redis()
         r.delete(f"{WORKER_REGISTRY_PREFIX}{hostname}")
         r.delete(f"{WORKER_MODELS_PREFIX}{hostname}")
+        r.delete(f"{WORKER_GPU_PREFIX}{hostname}")
     except Exception:
         pass
 

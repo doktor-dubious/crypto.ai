@@ -1,6 +1,7 @@
 """Resource estimation and capacity checking for prediction tasks."""
 
 import logging
+import os
 from dataclasses import dataclass
 
 from gorm_ai.prediction.engine import MemoryEstimate
@@ -19,6 +20,8 @@ class SystemCapacity:
     gpu_vram_total_mb: float | None = None
     gpu_vram_available_mb: float | None = None
     gpu_name: str | None = None
+    gpu_index: int | None = None
+    gpu_count: int = 0
 
 
 @dataclass
@@ -33,7 +36,12 @@ class CapacityCheck:
 
 
 def get_system_capacity() -> SystemCapacity:
-    """Query current system RAM and GPU VRAM availability."""
+    """Query current system RAM and GPU VRAM availability.
+
+    When CUDA_VISIBLE_DEVICES is set (multi-GPU worker pinning), reports
+    the VRAM of the assigned GPU.  Device index 0 in the process always
+    maps to the physical GPU selected by CUDA_VISIBLE_DEVICES.
+    """
     import psutil
 
     mem = psutil.virtual_memory()
@@ -43,17 +51,32 @@ def get_system_capacity() -> SystemCapacity:
     gpu_total = None
     gpu_available = None
     gpu_name = None
+    gpu_index = None
+    gpu_count = 0
 
+    # Read the physical GPU index assigned to this worker (set by worker_entrypoint).
+    gpu_index_env = os.environ.get("WORKER_GPU_INDEX")
+    if gpu_index_env is not None:
+        try:
+            gpu_index = int(gpu_index_env)
+        except ValueError:
+            pass
+
+    # pynvml sees *all* physical GPUs regardless of CUDA_VISIBLE_DEVICES,
+    # so we query the assigned physical GPU directly when gpu_index is set.
     try:
         import pynvml
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        gpu_total = info.total / (1024 * 1024)
-        gpu_available = info.free / (1024 * 1024)
-        gpu_name = pynvml.nvmlDeviceGetName(handle)
-        if isinstance(gpu_name, bytes):
-            gpu_name = gpu_name.decode()
+        gpu_count = pynvml.nvmlDeviceGetCount()
+        query_idx = gpu_index if gpu_index is not None else 0
+        if query_idx < gpu_count:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(query_idx)
+            info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gpu_total = info.total / (1024 * 1024)
+            gpu_available = info.free / (1024 * 1024)
+            gpu_name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(gpu_name, bytes):
+                gpu_name = gpu_name.decode()
         pynvml.nvmlShutdown()
     except Exception:
         pass
@@ -62,9 +85,11 @@ def get_system_capacity() -> SystemCapacity:
         try:
             import torch
             if torch.cuda.is_available():
+                # With CUDA_VISIBLE_DEVICES set, device 0 = the pinned GPU.
                 gpu_total = torch.cuda.get_device_properties(0).total_mem / (1024 * 1024)
                 gpu_available = (gpu_total - torch.cuda.memory_allocated(0) / (1024 * 1024))
                 gpu_name = torch.cuda.get_device_name(0)
+                gpu_count = max(gpu_count, torch.cuda.device_count())
         except Exception:
             pass
 
@@ -74,6 +99,8 @@ def get_system_capacity() -> SystemCapacity:
         gpu_vram_total_mb=round(gpu_total, 1) if gpu_total else None,
         gpu_vram_available_mb=round(gpu_available, 1) if gpu_available else None,
         gpu_name=gpu_name,
+        gpu_index=gpu_index,
+        gpu_count=gpu_count,
     )
 
 
