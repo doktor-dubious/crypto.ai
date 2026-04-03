@@ -30,7 +30,7 @@ ml = [
     "torch>=2.0.0",
 ]
 timesfm = [
-    "timesfm @ git+https://github.com/google-research/timesfm.git",
+    "timesfm[xreg] @ git+https://github.com/google-research/timesfm.git",
 ]
 # YingLong/Sundial require transformers>=4.57.6, which conflicts with FlowState.
 yinglong = [
