@@ -630,8 +630,12 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
           va = a.name ?? ""; vb = b.name ?? ""; break
         case "total_combinations":
           va = a.total_combinations; vb = b.total_combinations; break
-        case "simulation_days":
-          va = a.simulation_days; vb = b.simulation_days; break
+        case "simulation_days": {
+          const daysOf = (r: typeof a) => r.simulation_from && r.simulation_to
+            ? Math.round((new Date(r.simulation_to).getTime() - new Date(r.simulation_from).getTime()) / 86400000) + 1
+            : r.simulation_days
+          va = daysOf(a); vb = daysOf(b); break
+        }
         case "created_at":
           va = a.created_at; vb = b.created_at; break
         case "status":
@@ -769,7 +773,13 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                     {t("automatizationCombinations", { count: run.total_combinations })}
                   </TableCell>
                   <TableCell>
-                    {t("automatizationDays", { count: run.simulation_days })}
+                    {run.simulation_from && run.simulation_to
+                      ? t("automatizationDays", {
+                          count: Math.round(
+                            (new Date(run.simulation_to).getTime() - new Date(run.simulation_from).getTime()) / 86400000
+                          ) + 1,
+                        })
+                      : t("automatizationDays", { count: run.simulation_days })}
                   </TableCell>
                   <TableCell>
                     {new Date(run.created_at).toLocaleDateString(undefined, {
@@ -948,7 +958,13 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
               {/* Period */}
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-muted-foreground">{t("automatizationDetailPeriod")}</label>
-                <span className="text-sm tabular-nums">{selectedRun.simulation_days} {t("automatizationDetailDays")}</span>
+                <span className="text-sm tabular-nums">
+                  {selectedRun.simulation_from && selectedRun.simulation_to
+                    ? `${selectedRun.simulation_from} — ${selectedRun.simulation_to} (${Math.round(
+                        (new Date(selectedRun.simulation_to).getTime() - new Date(selectedRun.simulation_from).getTime()) / 86400000
+                      ) + 1} ${t("automatizationDetailDays")})`
+                    : `${selectedRun.simulation_days} ${t("automatizationDetailDays")}`}
+                </span>
               </div>
 
               {/* Date */}
