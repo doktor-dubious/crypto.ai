@@ -281,7 +281,7 @@ class SimulationService:
         engine_type = await self._resolve_engine(request.customer_id, request.engine, strategy_engine_slug)
         engine = self.engine_registry.get_engine(engine_type)
         engine.allow_fallback = await self._prediction_service._resolve_fallback_engine(request.customer_id)
-        resolved_engine_params = await self._prediction_service._apply_engine_parameters(engine, engine_type.value)
+        resolved_engine_params = await self._prediction_service._apply_engine_parameters(engine, engine_type.value, request.prediction_strategy_id)
         capabilities = engine.get_capabilities()
 
         outlet_ids = await self._resolve_outlets(
