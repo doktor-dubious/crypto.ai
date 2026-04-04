@@ -66,15 +66,6 @@ dev = [
 ]
 
 [tool.uv]
-# PyTorch CUDA 12.8 index for Blackwell (sm_120) GPU support
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-
 conflicts = [
     [
         { extra = "autogluon" },
@@ -94,6 +85,15 @@ conflicts = [
         { extra = "autogluon" },
     ],
 ]
+
+# PyTorch CUDA 12.8 index for Blackwell (sm_120) GPU support
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
 
 [build-system]
 requires = ["hatchling"]
