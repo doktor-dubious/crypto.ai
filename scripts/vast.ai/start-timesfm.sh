@@ -41,7 +41,7 @@ export FINETUNED_MODEL_PATH=/models/finetune/timesfm
 
 cd /workspace/gormai
 git pull
-command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; }
+echo "Installing/upgrading uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra ml --extra timesfm --extra yinglong
 
 PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
