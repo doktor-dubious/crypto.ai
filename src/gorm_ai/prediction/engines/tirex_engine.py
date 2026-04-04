@@ -392,7 +392,11 @@ class TiRexEngine(PredictionEngine):
         # quantiles_out: (batch, num_quantiles, horizon)
         # mean_out: (batch, horizon)
         quantiles_np = quantiles_out.cpu().float().numpy()
+        if quantiles_np.ndim == 2:
+            quantiles_np = quantiles_np[np.newaxis, :, :]  # (nq, h) → (1, nq, h)
         mean_np = mean_out.cpu().float().numpy()
+        if mean_np.ndim == 1:
+            mean_np = mean_np[np.newaxis, :]  # (horizon,) → (1, horizon)
 
         n_q = quantiles_np.shape[1]
         if n_q == 9:
