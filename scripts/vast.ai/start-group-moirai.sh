@@ -47,7 +47,8 @@ uv sync --extra ml --extra timesfm --extra yinglong --extra chronos --extra tire
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support
 uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 
-# YingLong runtime dependencies (dropout_layer_norm and rotary_emb are included in flash-attn)
-uv pip install flash-attn xformers lightning-utilities
+# YingLong runtime dependencies (flash-attn needs torch at build time)
+uv pip install flash-attn --no-build-isolation
+uv pip install xformers lightning-utilities
 
 PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
