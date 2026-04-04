@@ -3,7 +3,7 @@
 # GPU-enabled image for RunPod.  Based on NVIDIA CUDA so PyTorch can
 # use the GPU for predictions, simulations, and fine-tuning.
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04 AS builder
 
 WORKDIR /app
 
@@ -27,7 +27,7 @@ COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev --no-install-project --extra ml --extra moirai --extra chronos --extra kairos --extra tirex
 
 # Production stage
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS production
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04 AS production
 
 WORKDIR /app
 

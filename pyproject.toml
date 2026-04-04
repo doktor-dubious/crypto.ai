@@ -27,7 +27,7 @@ dependencies = [
 ml = [
     "statsmodels>=0.14.0",
     "scikit-learn>=1.4.0",
-    "torch>=2.0.0",
+    "torch>=2.7.0",
 ]
 timesfm = [
     "timesfm[xreg] @ git+https://github.com/google-research/timesfm.git",
@@ -66,6 +66,15 @@ dev = [
 ]
 
 [tool.uv]
+# PyTorch CUDA 12.8 index for Blackwell (sm_120) GPU support
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
 conflicts = [
     [
         { extra = "autogluon" },
