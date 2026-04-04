@@ -837,8 +837,10 @@ class ToolExecutor:
         if self.allowed_customer_id and customer_id != self.allowed_customer_id:
             return {"error": "Access denied: wrong customer_id."}
 
-        from gorm_ai.schemas.prediction import PredictionRequest
-        from gorm_ai.services.prediction import PredictionService
+        import asyncio
+        from gorm_ai.schemas.prediction import PredictionRequest, PredictionResponse
+        from gorm_ai.tasks.predictions import run_prediction_task
+        from gorm_ai.services.task import TaskService
 
         # Load insights prediction settings from customer config
         result = await self.db.execute(
@@ -881,12 +883,35 @@ class ToolExecutor:
             outlet_group_id=outlet_group_id,
             engine=engine_slug,
             prediction_strategy_id=strategy_id,
+            worker=worker,
         )
 
         try:
-            service = PredictionService(self.db)
-            response = await service.create_prediction(req)
+            # Dispatch to Celery worker so the prediction runs on a machine
+            # that has the required engine (e.g. tirex-ts) installed.
+            dispatch_kwargs: dict = {"args": [req.model_dump(mode="json")]}
+            if worker:
+                dispatch_kwargs["queue"] = worker
+            celery_result = run_prediction_task.apply_async(**dispatch_kwargs)
+
+            # Register the task in the DB so the dashboard can track it
+            ts = TaskService(self.db)
+            prediction_name = f"Insights: {prediction_from} → {prediction_to}"
+            await ts.create(celery_result.id, "prediction", customer_id, name=prediction_name)
             await self.db.commit()
+
+            # Wait for the Celery worker to finish (timeout 5 min).
+            # Use asyncio.to_thread to avoid blocking the event loop and
+            # to sidestep SQLAlchemy greenlet issues with the request session.
+            try:
+                response_data = await asyncio.to_thread(celery_result.get, timeout=300)
+            except Exception as poll_exc:
+                return {"error": f"Prediction timed out or failed: {poll_exc}"}
+
+            if response_data.get("skipped"):
+                return {"error": f"Prediction was skipped: {response_data.get('reason')}"}
+
+            response = PredictionResponse(**response_data)
 
             # Summarize results
             total_predicted = 0.0
