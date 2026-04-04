@@ -761,6 +761,16 @@ class TimesFMEngine(PredictionEngine):
         if self._model_loaded:
             return
         self._apply_hf_env()
+        # TimesFM's compiled_decode uses Triton kernels that may not support
+        # newer GPU architectures (e.g. Blackwell sm_120).  Disable torch.compile
+        # only when running on an unsupported architecture.
+        try:
+            import torch
+            if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 12:
+                os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+                logger.info("Disabled torch.compile (Blackwell GPU detected)")
+        except Exception:
+            pass
         try:
             import timesfm
             from huggingface_hub import hf_hub_download
