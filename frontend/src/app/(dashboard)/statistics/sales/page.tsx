@@ -426,16 +426,28 @@ export default function StatisticsSalesPage() {
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="range"
-                captionLayout="dropdown"
-                defaultMonth={dateRange?.from}
-                selected={dateRange}
-                onSelect={handleDateRangeChange}
-                numberOfMonths={2}
-                startMonth={new Date(2020, 0)}
-                endMonth={new Date(new Date().getFullYear() + 1, 11)}
-              />
+              <div className="flex gap-0">
+                <Calendar
+                  mode="range"
+                  captionLayout="dropdown"
+                  defaultMonth={dateRange?.from ?? new Date(new Date().getFullYear(), new Date().getMonth() - 1)}
+                  selected={dateRange}
+                  onSelect={handleDateRangeChange}
+                  numberOfMonths={1}
+                  startMonth={new Date(2020, 0)}
+                  endMonth={new Date(new Date().getFullYear() + 1, 11)}
+                />
+                <Calendar
+                  mode="range"
+                  captionLayout="dropdown"
+                  defaultMonth={dateRange?.to ?? new Date()}
+                  selected={dateRange}
+                  onSelect={handleDateRangeChange}
+                  numberOfMonths={1}
+                  startMonth={new Date(2020, 0)}
+                  endMonth={new Date(new Date().getFullYear() + 1, 11)}
+                />
+              </div>
             </PopoverContent>
           </Popover>
         </div>
