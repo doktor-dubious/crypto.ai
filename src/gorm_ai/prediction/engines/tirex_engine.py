@@ -381,22 +381,27 @@ class TiRexEngine(PredictionEngine):
                 v = np.concatenate([np.zeros(max_len - len(v)), v])
             contexts.append(v)
 
-        context_tensor = torch.tensor(
-            np.stack(contexts), dtype=torch.float32
-        )  # (batch_size, max_len)
-
-        with torch.no_grad():
-            quantiles_out, mean_out = self._model.forecast(
-                context=context_tensor, prediction_length=horizon,
-            )
-        # quantiles_out: (batch, num_quantiles, horizon)
-        # mean_out: (batch, horizon)
-        quantiles_np = quantiles_out.cpu().float().numpy()
-        if quantiles_np.ndim == 2:
-            quantiles_np = quantiles_np[np.newaxis, :, :]  # (nq, h) → (1, nq, h)
-        mean_np = mean_out.cpu().float().numpy()
-        if mean_np.ndim == 1:
-            mean_np = mean_np[np.newaxis, :]  # (horizon,) → (1, horizon)
+        # TiRex forecast() does not reliably batch — call per-item.
+        all_quantiles = []
+        all_means = []
+        for ctx in contexts:
+            ctx_tensor = torch.tensor(
+                ctx[np.newaxis, :], dtype=torch.float32
+            )  # (1, max_len)
+            with torch.no_grad():
+                q_out, m_out = self._model.forecast(
+                    context=ctx_tensor, prediction_length=horizon,
+                )
+            q_np = q_out.cpu().float().numpy()
+            m_np = m_out.cpu().float().numpy()
+            if q_np.ndim == 2:
+                q_np = q_np[np.newaxis, :, :]
+            if m_np.ndim == 1:
+                m_np = m_np[np.newaxis, :]
+            all_quantiles.append(q_np)
+            all_means.append(m_np)
+        quantiles_np = np.concatenate(all_quantiles, axis=0)
+        mean_np = np.concatenate(all_means, axis=0)
 
         n_q = quantiles_np.shape[1]
         if n_q == 9:
