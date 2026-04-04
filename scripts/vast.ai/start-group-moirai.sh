@@ -33,7 +33,7 @@ export CELERY_BROKER_URL=redis://localhost:6379/1
 export CELERY_RESULT_BACKEND=redis://localhost:6379/2
 export REDIS_URL=redis://localhost:6379/0
 export WORKER_NAME="Vast Group Moirai"
-export WORKER_MODELS=timesfm,yinglong,chronos,tirex
+export WORKER_MODELS=timesfm,chronos,tirex
 export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/chronos/
 export SYNC_EVERY=10
 export HF_HUB_CACHE=/workspace/models/huggingface
@@ -42,13 +42,10 @@ export FINETUNED_MODEL_PATH=/models/finetune/chronos
 cd /workspace/gormai
 git pull
 echo "Installing/upgrading uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"
-uv sync --extra ml --extra timesfm --extra yinglong --extra chronos --extra tirex
+uv sync --extra ml --extra timesfm --extra chronos --extra tirex
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support
 uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 
-# YingLong runtime dependencies (flash-attn needs torch at build time)
-uv pip install flash-attn --no-build-isolation
-uv pip install xformers lightning-utilities
 
 PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
