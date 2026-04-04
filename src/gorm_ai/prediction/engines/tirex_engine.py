@@ -403,17 +403,21 @@ class TiRexEngine(PredictionEngine):
         quantiles_np = np.concatenate(all_quantiles, axis=0)
         mean_np = np.concatenate(all_means, axis=0)
 
-        n_q = quantiles_np.shape[1]
-        if n_q == 9:
-            # Already P10–P90 — transpose to (batch, horizon, 9)
-            forecast_quantiles = quantiles_np.transpose(0, 2, 1)
+        # TiRex may return quantiles as (batch, nq, horizon) or (batch, horizon, nq).
+        # Detect orientation by comparing dimensions to the known horizon.
+        if quantiles_np.shape[-1] == horizon:
+            # (batch, nq, horizon) — transpose to (batch, horizon, nq)
+            quantiles_np = quantiles_np.transpose(0, 2, 1)
+        # Now quantiles_np is (batch, horizon, nq)
+        n_q = quantiles_np.shape[-1]
+        if n_q == len(_QUANTILE_LEVELS):
+            forecast_quantiles = quantiles_np
         else:
-            # Pick closest indices to our standard quantile levels.
             model_levels = np.linspace(0, 1, n_q + 2)[1:-1]
             target_indices = [
                 int(np.argmin(np.abs(model_levels - q))) for q in _QUANTILE_LEVELS
             ]
-            forecast_quantiles = quantiles_np[:, target_indices, :].transpose(0, 2, 1)
+            forecast_quantiles = quantiles_np[:, :, target_indices]
 
         results = []
         ridge_infos = []
