@@ -45,8 +45,7 @@ export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Insta
 uv sync --extra ml --extra timesfm --extra yinglong
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support
-uv pip install --python .venv/bin/python --reinstall --no-deps --no-cache torch --index-url https://download.pytorch.org/whl/nightly/cu128
-uv pip install --python .venv/bin/python nvidia-cusparselt-cu12
+uv pip install --python .venv/bin/python --reinstall-package torch --no-cache torch --index-url https://download.pytorch.org/whl/nightly/cu128
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
 # YingLong runtime dependencies (flash-attn compiles CUDA kernels from source, ~10-30 min)
