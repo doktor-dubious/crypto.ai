@@ -45,7 +45,7 @@ echo "Installing/upgrading uv..."; curl -LsSf https://astral.sh/uv/install.sh | 
 uv sync --extra ml --extra timesfm --extra yinglong --extra chronos
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support
-uv pip uninstall torch && uv pip install --no-cache-dir --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
+.venv/bin/pip install --force-reinstall --no-deps --no-cache-dir torch --index-url https://download.pytorch.org/whl/nightly/cu128
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
 PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint
