@@ -129,10 +129,11 @@ def main() -> None:
             f"queues={queues}, gpus={gpu_count}"
         )
 
+        celery_bin = os.path.join(os.path.dirname(sys.executable), "celery")
         os.execvp(
-            "celery",
+            celery_bin,
             [
-                "celery",
+                celery_bin,
                 "-A", "gorm_ai.tasks.celery_app",
                 "worker",
                 "--loglevel=info",
