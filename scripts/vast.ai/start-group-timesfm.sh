@@ -48,4 +48,4 @@ uv sync --extra ml --extra timesfm --extra chronos --extra tirex
 uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 
 
-PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
+PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint

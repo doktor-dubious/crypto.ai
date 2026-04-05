@@ -47,4 +47,4 @@ uv sync --extra ml --extra timesfm --extra yinglong --extra tirex
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support
 uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 
-PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
+PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint

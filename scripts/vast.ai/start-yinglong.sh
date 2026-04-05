@@ -51,4 +51,4 @@ uv pip install torch --index-url https://download.pytorch.org/whl/cu128
 uv pip install flash-attn --no-build-isolation
 uv pip install xformers lightning-utilities
 
-PYTHONPATH=src uv run python -m gorm_ai.tasks.worker_entrypoint
+PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint
