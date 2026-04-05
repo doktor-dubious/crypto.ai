@@ -35,12 +35,20 @@ import {
   TableCell,
 } from "@/components/ui/table"
 import {
+  Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
+  PaginationLink, PaginationNext, PaginationPrevious,
+} from "@/components/ui/pagination"
+import {
   optimizationApi,
+  predictionEnginesApi,
   type OptimizationRunResponse,
   type OptimizationCombinationResult,
   type OptimizationDiagnostics,
   type ApplySettingsRequest,
+  type PredictionEngineResponse,
 } from "@/lib/api"
+
+const ITEMS_PER_PAGE = 10
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -466,7 +474,7 @@ function DiagnosticsPanel({
 
 // ─── Sort helpers ───────────────────────────────────────────────────────────
 
-type MasterSortField = "name" | "total_combinations" | "simulation_days" | "created_at" | "status" | "starred"
+type MasterSortField = "name" | "prediction_engine" | "total_combinations" | "simulation_days" | "created_at" | "status" | "starred"
 type SortDir = "asc" | "desc"
 
 function SortableHead({
@@ -527,6 +535,7 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteUnderstood, setDeleteUnderstood] = useState(false)
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("")
+  const [currentPage, setCurrentPage] = useState(1)
 
   const customerId = activeCustomer?.id ?? ""
 
@@ -543,6 +552,19 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
       return false
     },
   })
+
+  // Fetch prediction engines for name lookup
+  const { data: engines = [] } = useQuery({
+    queryKey: ["predictionEngines"],
+    queryFn: () => predictionEnginesApi.list(),
+    staleTime: 60_000,
+  })
+
+  const engineMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of engines) map.set(e.id, e.name)
+    return map
+  }, [engines])
 
   // Fetch selected run details
   const { data: selectedRun } = useQuery({
@@ -628,6 +650,8 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
       switch (sortField) {
         case "name":
           va = a.name ?? ""; vb = b.name ?? ""; break
+        case "prediction_engine":
+          va = a.engine_name ?? (a.prediction_engine_id ? engineMap.get(a.prediction_engine_id) ?? "" : ""); vb = b.engine_name ?? (b.prediction_engine_id ? engineMap.get(b.prediction_engine_id) ?? "" : ""); break
         case "total_combinations":
           va = a.total_combinations; vb = b.total_combinations; break
         case "simulation_days": {
@@ -647,7 +671,28 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
       if (va > vb) return sortDir === "asc" ? 1 : -1
       return 0
     })
-  }, [runs, sortField, sortDir, showOnlyChecked, checkedIds, starredIds])
+  }, [runs, sortField, sortDir, showOnlyChecked, checkedIds, starredIds, engineMap])
+
+  // ── Pagination ──────────────────────────────────────────────────────────
+
+  const totalPages = Math.max(1, Math.ceil(displayRuns.length / ITEMS_PER_PAGE))
+  const safePage = Math.min(currentPage, totalPages)
+  const pageItems = displayRuns.slice((safePage - 1) * ITEMS_PER_PAGE, safePage * ITEMS_PER_PAGE)
+
+  // Reset page when data changes significantly
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [customerId, showOnlyChecked])
+
+  function buildPaginationPages(current: number, total: number): (number | "ellipsis")[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+    const pages: (number | "ellipsis")[] = [1]
+    if (current > 3) pages.push("ellipsis")
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i)
+    if (current < total - 2) pages.push("ellipsis")
+    if (total > 1) pages.push(total)
+    return pages
+  }
 
   // ── Checkbox header state ───────────────────────────────────────────────
 
@@ -721,12 +766,32 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                         <DropdownMenuItem onClick={() => setCheckedIds(new Set(displayRuns.filter((r) => starredIds.has(r.id)).map((r) => r.id)))}>
                           {t("automatizationSelectStarred")}
                         </DropdownMenuItem>
+                        {(() => {
+                          const engineNames = [...new Set(displayRuns
+                            .map((r) => r.engine_name ?? (r.prediction_engine_id ? engineMap.get(r.prediction_engine_id) : null))
+                            .filter((n): n is string => !!n)
+                          )].sort()
+                          if (engineNames.length === 0) return null
+                          return <>
+                            <DropdownMenuSeparator />
+                            {engineNames.map((name) => (
+                              <DropdownMenuItem key={name} onClick={() => setCheckedIds(new Set(
+                                displayRuns.filter((r) => (r.engine_name ?? (r.prediction_engine_id ? engineMap.get(r.prediction_engine_id) : null)) === name).map((r) => r.id)
+                              ))}>
+                                {t("automatizationSelectEngine", { engine: name })}
+                              </DropdownMenuItem>
+                            ))}
+                          </>
+                        })()}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
                 </TableHead>
                 <SortableHead field="name" current={sortField} dir={sortDir} onSort={handleSort}>
                   {t("automatizationColumnName")}
+                </SortableHead>
+                <SortableHead field="prediction_engine" current={sortField} dir={sortDir} onSort={handleSort}>
+                  {t("automatizationColumnEngine")}
                 </SortableHead>
                 <SortableHead field="total_combinations" current={sortField} dir={sortDir} onSort={handleSort}>
                   {t("automatizationColumnCombinations")}
@@ -746,7 +811,7 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {displayRuns.map((run) => (
+              {pageItems.map((run) => (
                 <TableRow
                   key={run.id}
                   className={`cursor-pointer ${selectedRunId === run.id ? "bg-muted/70" : ""}`}
@@ -769,6 +834,9 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                     />
                   </TableCell>
                   <TableCell className="font-medium">{run.name}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {run.engine_name ?? (run.prediction_engine_id ? engineMap.get(run.prediction_engine_id) ?? "—" : "—")}
+                  </TableCell>
                   <TableCell>
                     {t("automatizationCombinations", { count: run.total_combinations })}
                   </TableCell>
@@ -813,6 +881,49 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
               ))}
             </TableBody>
           </Table>
+          {displayRuns.length > ITEMS_PER_PAGE && (
+            <div className="flex items-center justify-between px-4 py-2 border-t">
+              <span className="text-xs text-muted-foreground">
+                {t("automatizationShowing", {
+                  from: (safePage - 1) * ITEMS_PER_PAGE + 1,
+                  to: Math.min(safePage * ITEMS_PER_PAGE, displayRuns.length),
+                  total: displayRuns.length,
+                })}
+              </span>
+              <Pagination className="w-auto mx-0">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={safePage === 1}
+                    />
+                  </PaginationItem>
+                  {buildPaginationPages(safePage, totalPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <PaginationItem key={`e${i}`}>
+                        <PaginationEllipsis />
+                      </PaginationItem>
+                    ) : (
+                      <PaginationItem key={p}>
+                        <PaginationLink
+                          isActive={safePage === p}
+                          onClick={() => setCurrentPage(p)}
+                        >
+                          {p}
+                        </PaginationLink>
+                      </PaginationItem>
+                    )
+                  )}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={safePage === totalPages}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
           {checkedIds.size > 0 && (
             <div className="flex items-center justify-between px-4 py-2 border-t bg-[var(--muted)]/30">
               <span className="text-xs text-[var(--muted-foreground)]">

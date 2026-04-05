@@ -1,10 +1,16 @@
 """Optimization run model — persisted optimization grid-search with parameters and results."""
 
+from __future__ import annotations
+
 from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gorm_ai.database.models.prediction_engine import PredictionEngine
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSON, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gorm_ai.database.base import Base
 
@@ -59,3 +65,7 @@ class OptimizationRun(Base):
     diagnostics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    prediction_engine: Mapped["PredictionEngine | None"] = relationship(
+        "PredictionEngine", foreign_keys=[prediction_engine_id], lazy="joined",
+    )

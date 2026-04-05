@@ -14,8 +14,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Copy dependency files
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies including ML extras (timesfm, torch, scikit-learn, moirai, chronos)
-RUN uv sync --frozen --no-dev --no-install-project --extra ml --extra moirai --extra chronos
+# Install dependencies including ML extras.
+# EXTRAS can be overridden at build time to swap conflicting engine groups
+# (e.g. "ml kairos chronos" vs "ml flowstate chronos").
+ARG EXTRAS="ml flowstate chronos"
+RUN set -ex; args=""; for e in $EXTRAS; do args="$args --extra $e"; done; \
+    uv sync --frozen --no-dev --no-install-project $args
 
 # Production stage
 FROM python:3.11-slim as production

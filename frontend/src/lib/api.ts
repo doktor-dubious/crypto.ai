@@ -139,6 +139,11 @@ export const tasksApi = {
 export interface WorkerInfo {
   name: string
   models: string[]
+  gpu_index: number | null
+  gpu_name: string | null
+  gpu_vram_total_mb: number | null
+  gpu_count: number | null
+  uptime_s: number | null
 }
 
 export interface CustomerUpdate {
@@ -736,6 +741,10 @@ export interface CustomerConfigurationResponse {
   eo_methodology: number | null
   eo_extrapolation: number | null
   fallback_engine: boolean | null
+  insights_system_prompt: string | null
+  insights_prediction_engine_id: string | null
+  insights_prediction_strategy_id: string | null
+  insights_worker: string | null
   open_monday: boolean | null
   open_tuesday: boolean | null
   open_wednesday: boolean | null
@@ -2307,6 +2316,8 @@ export interface OptimizationRunResponse {
   optimize_weekday_profile_correction: boolean
   simulation_days: number
   delay: number
+  prediction_engine_id: string | null
+  engine_name: string | null
   simulation_from: string | null
   simulation_to: string | null
   total_combinations: number

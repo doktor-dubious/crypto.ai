@@ -6,9 +6,11 @@ import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X, Loader2, Info, CheckCircle2, XCircle, AlertTriangle, RefreshCw } from "lucide-react"
 import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { Pickaxe } from "@/components/animate-ui/icons/pickaxe"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
-import { tasksApi, customersApi, configurationApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
+import { tasksApi, customersApi, configurationApi, type TaskRecordResponse, type TaskStatus, type WorkerInfo } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -319,6 +321,106 @@ function TaskSection({
   )
 }
 
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function WorkersSection({ workers }: { workers: WorkerInfo[] }) {
+  const t = useTranslations("tasks")
+  return (
+    <Card className="flex flex-col min-h-0">
+      <CardHeader className="pb-3 shrink-0">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          {t("workers")}
+          {workers.length > 0 && (
+            <Badge variant="muted" className="text-xs">
+              {workers.length}
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {workers.length === 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)] italic py-2">{t("noWorkers")}</p>
+        ) : (
+          <div className="space-y-2">
+            {workers.map((worker) => (
+              <AnimateIcon key={worker.name} animateOnHover asChild>
+              <div className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors cursor-default">
+                <div className="flex flex-col items-center gap-1.5 shrink-0">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-green-500/15 text-green-500">
+                    <Pickaxe size={16} className="h-4 w-4" />
+                  </div>
+                  <TooltipProvider delayDuration={100}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button className="flex h-5 w-5 items-center justify-center rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors cursor-default">
+                          <Info className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="min-w-[148px]">
+                        <div className="space-y-1">
+                          <div className="flex justify-between gap-4">
+                            <span className="text-[var(--muted-foreground)]">{t("workerGpu")}</span>
+                            <span className="font-medium">
+                              {worker.gpu_name
+                                ? `${worker.gpu_name}${worker.gpu_count ? ` (${worker.gpu_count})` : ""}`
+                                : t("workerNoGpu")}
+                            </span>
+                          </div>
+                          {worker.gpu_vram_total_mb != null && (
+                            <div className="flex justify-between gap-4">
+                              <span className="text-[var(--muted-foreground)]">{t("workerVram")}</span>
+                              <span className="font-medium">
+                                {worker.gpu_vram_total_mb >= 1024
+                                  ? `${(worker.gpu_vram_total_mb / 1024).toFixed(1)} GB`
+                                  : `${worker.gpu_vram_total_mb} MB`}
+                              </span>
+                            </div>
+                          )}
+                          {worker.uptime_s != null && (
+                            <div className="flex justify-between gap-4">
+                              <span className="text-[var(--muted-foreground)]">{t("workerUptime")}</span>
+                              <span className="font-medium">{formatUptime(worker.uptime_s)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between gap-4">
+                            <span className="text-[var(--muted-foreground)]">{t("workerModels")}</span>
+                            {worker.models.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 justify-end">
+                                {worker.models.map((model) => (
+                                  <Badge key={model} variant="muted" className="text-[10px] px-1.5 py-0 h-4">
+                                    {model}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[var(--muted-foreground)] italic">—</span>
+                            )}
+                          </div>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <div className="flex-1 min-w-0 flex items-center h-8">
+                  <span className="text-sm font-medium truncate">{worker.name}</span>
+                </div>
+              </div>
+              </AnimateIcon>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function TaskDashboard() {
   const t = useTranslations("tasks")
   const queryClient = useQueryClient()
@@ -443,6 +545,13 @@ export function TaskDashboard() {
 
   const activeTaskIds = new Set((activeWorkerTasks ?? []).map((t) => t.task_id))
 
+  const { data: workers } = useQuery({
+    queryKey: ["workers-list"],
+    queryFn: () => tasksApi.listWorkers(),
+    staleTime: 0,
+    refetchInterval: checkIntervalMs,
+  })
+
   const { data: customers } = useQuery({
     queryKey: ["customers"],
     queryFn: () => customersApi.list(),
@@ -500,14 +609,17 @@ export function TaskDashboard() {
           onRestartWorkers={handleManualRestart}
           onTaskClick={handleTaskClick}
         />
-        <TaskSection
-          title={t("finished")}
-          tasks={finished}
-          emptyLabel={t("noFinishedTasks")}
-          customerMap={customerMap}
-          activeTaskIds={activeTaskIds}
-          onTaskClick={handleTaskClick}
-        />
+        <div className="flex flex-col gap-6 min-h-0">
+          <WorkersSection workers={workers ?? []} />
+          <TaskSection
+            title={t("finished")}
+            tasks={finished}
+            emptyLabel={t("noFinishedTasks")}
+            customerMap={customerMap}
+            activeTaskIds={activeTaskIds}
+            onTaskClick={handleTaskClick}
+          />
+        </div>
       </div>
 
       <TaskDetailModal

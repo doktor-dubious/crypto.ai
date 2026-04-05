@@ -7,8 +7,9 @@ Kairos is a T5-style encoder-decoder transformer (50M params) with
 Mixture-of-Size Dynamic Patching and Instance-adaptive Rotary Position
 Embedding.  It outputs quantile forecasts directly.
 
-Covariates are handled via Ridge regression on residuals, identical to the
-approach used by the Chronos and TimesFM engines.
+Covariates are handled via Ridge regression on residuals when
+covariate_handling is "external" or "native" (no native API, so both
+use Ridge).  When "none", covariates are skipped entirely.
 """
 
 import asyncio
@@ -51,7 +52,8 @@ class KairosEngine(PredictionEngine):
     Works on both CPU and GPU.
 
     Covariates (weekday dummies, financials, PAD events) are incorporated via
-    Ridge regression on residuals, identical to the Chronos/TimesFM approach.
+    Ridge regression on residuals when covariate_handling is "external" or
+    "native".  When "none", covariates are skipped entirely.
     """
 
     _VALID_PRECISIONS = {"float32"}
@@ -296,6 +298,7 @@ class KairosEngine(PredictionEngine):
                 "feature_names": feature_names,
                 "preprocessor": pp,
                 "covariates": item.get("covariates"),
+                "covariate_handling": item.get("covariate_handling", "external"),
             })
 
         # Sort by history length to minimise padding waste.
@@ -469,24 +472,25 @@ class KairosEngine(PredictionEngine):
             base_upper = base_quantiles[:, -1]  # P90
 
             # Ridge regression on residuals for covariate adjustment.
-            n_hist = len(values)
-            align_len = min(n_hist, horizon)
-            forecast_level = float(base_pred[0])
-            residuals = values[-align_len:] - forecast_level
-            hist_X_aligned = hist_X[-align_len:]
-
+            covariate_handling = item.get("covariate_handling", "external")
             feature_names = sorted(item.get("feature_names", []))
-            if feature_names:
+            if covariate_handling != "none" and feature_names:
+                n_hist = len(values)
+                align_len = min(n_hist, horizon)
+                forecast_level = float(base_pred[0])
+                residuals = values[-align_len:] - forecast_level
+                hist_X_aligned = hist_X[-align_len:]
                 ridge = Ridge(alpha=1.0, fit_intercept=True)
                 ridge.fit(hist_X_aligned, residuals)
                 adj = ridge.predict(fut_X)
             else:
                 adj = np.zeros(horizon)
 
+            used_ridge = covariate_handling != "none" and feature_names
             ridge_infos.append({
-                "feature_names": feature_names,
-                "coefficients": list(ridge.coef_) if feature_names else [],
-                "intercept": float(ridge.intercept_) if feature_names else 0.0,
+                "feature_names": feature_names if used_ridge else [],
+                "coefficients": list(ridge.coef_) if used_ridge else [],
+                "intercept": float(ridge.intercept_) if used_ridge else 0.0,
             })
 
             results.append((

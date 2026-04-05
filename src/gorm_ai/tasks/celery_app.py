@@ -64,6 +64,31 @@ def _refresh_worker_registry() -> None:
         gpu_index = os.environ.get("WORKER_GPU_INDEX")
         if gpu_index is not None:
             r.setex(f"{WORKER_GPU_PREFIX}{hostname}", WORKER_REGISTRY_TTL, gpu_index)
+
+        # Refresh GPU hardware info and uptime (set-if-missing for started_at,
+        # always refresh TTL for the rest).
+        if not r.exists(f"{WORKER_STARTED_PREFIX}{hostname}"):
+            import time
+            r.setex(f"{WORKER_STARTED_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(time.time())))
+        else:
+            r.expire(f"{WORKER_STARTED_PREFIX}{hostname}", WORKER_REGISTRY_TTL)
+
+        # Lazily populate GPU info if not yet stored (first task after deploy)
+        if not r.exists(f"{WORKER_GPU_NAME_PREFIX}{hostname}"):
+            try:
+                from gorm_ai.services.resource_estimator import get_system_capacity
+                cap = get_system_capacity()
+                if cap.gpu_name:
+                    r.setex(f"{WORKER_GPU_NAME_PREFIX}{hostname}", WORKER_REGISTRY_TTL, cap.gpu_name)
+                if cap.gpu_vram_total_mb is not None:
+                    r.setex(f"{WORKER_GPU_VRAM_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(cap.gpu_vram_total_mb)))
+                if cap.gpu_count > 0:
+                    r.setex(f"{WORKER_GPU_COUNT_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(cap.gpu_count))
+            except Exception:
+                pass
+        else:
+            for prefix in (WORKER_GPU_NAME_PREFIX, WORKER_GPU_VRAM_PREFIX, WORKER_GPU_COUNT_PREFIX):
+                r.expire(f"{prefix}{hostname}", WORKER_REGISTRY_TTL)
     except Exception:
         pass
 
@@ -121,6 +146,10 @@ def on_task_postrun(task_id: str, **kwargs) -> None:
 WORKER_REGISTRY_PREFIX = "gorm:worker:"
 WORKER_MODELS_PREFIX = "gorm:worker-models:"
 WORKER_GPU_PREFIX = "gorm:worker-gpu:"
+WORKER_GPU_NAME_PREFIX = "gorm:worker-gpu-name:"
+WORKER_GPU_VRAM_PREFIX = "gorm:worker-gpu-vram:"
+WORKER_GPU_COUNT_PREFIX = "gorm:worker-gpu-count:"
+WORKER_STARTED_PREFIX = "gorm:worker-started:"
 WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
 TASK_STOP_PREFIX = "gorm:task-stop:"
 
@@ -202,6 +231,23 @@ def on_worker_ready(sender, **kwargs):
         gpu_index = os.environ.get("WORKER_GPU_INDEX")
         if gpu_index is not None:
             r.setex(f"{WORKER_GPU_PREFIX}{hostname}", WORKER_REGISTRY_TTL, gpu_index)
+
+        # Store start timestamp for uptime calculation
+        import time
+        r.setex(f"{WORKER_STARTED_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(time.time())))
+
+        # Store GPU hardware info
+        try:
+            from gorm_ai.services.resource_estimator import get_system_capacity
+            cap = get_system_capacity()
+            if cap.gpu_name:
+                r.setex(f"{WORKER_GPU_NAME_PREFIX}{hostname}", WORKER_REGISTRY_TTL, cap.gpu_name)
+            if cap.gpu_vram_total_mb is not None:
+                r.setex(f"{WORKER_GPU_VRAM_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(cap.gpu_vram_total_mb)))
+            if cap.gpu_count > 0:
+                r.setex(f"{WORKER_GPU_COUNT_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(cap.gpu_count))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -215,6 +261,10 @@ def on_worker_shutdown(sender, **kwargs):
         r.delete(f"{WORKER_REGISTRY_PREFIX}{hostname}")
         r.delete(f"{WORKER_MODELS_PREFIX}{hostname}")
         r.delete(f"{WORKER_GPU_PREFIX}{hostname}")
+        r.delete(f"{WORKER_GPU_NAME_PREFIX}{hostname}")
+        r.delete(f"{WORKER_GPU_VRAM_PREFIX}{hostname}")
+        r.delete(f"{WORKER_GPU_COUNT_PREFIX}{hostname}")
+        r.delete(f"{WORKER_STARTED_PREFIX}{hostname}")
     except Exception:
         pass
 

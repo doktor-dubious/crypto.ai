@@ -79,6 +79,7 @@ class OptimizationRunResponse(BaseModel):
     simulation_days: int
     delay: int
     prediction_engine_id: str | None = None
+    engine_name: str | None = None
     outlet_group_id: str | None = None
     simulation_from: str | None = None
     simulation_to: str | None = None

@@ -52,6 +52,7 @@ def _run_to_response(run: OptimizationRun) -> OptimizationRunResponse:
         simulation_days=run.simulation_days,
         delay=run.delay,
         prediction_engine_id=run.prediction_engine_id,
+        engine_name=run.prediction_engine.name if run.prediction_engine else None,
         outlet_group_id=run.outlet_group_id,
         simulation_from=str(run.simulation_from) if run.simulation_from else None,
         simulation_to=str(run.simulation_to) if run.simulation_to else None,
@@ -122,6 +123,16 @@ async def start_optimization(
     # Default name if not provided
     name = data.name or f"Optimization {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
 
+    # Resolve prediction_engine_id from strategy if not explicitly provided
+    engine_id = data.prediction_engine_id
+    if not engine_id and data.prediction_strategy_id:
+        from gorm_ai.database.models.prediction_strategy import PredictionStrategy
+        strategy = (await session.execute(
+            select(PredictionStrategy).where(PredictionStrategy.id == data.prediction_strategy_id)
+        )).scalar_one_or_none()
+        if strategy:
+            engine_id = strategy.prediction_engine_id
+
     # Create the OptimizationRun record
     optimization_run = OptimizationRun(
         customer_id=data.customer_id,
@@ -134,7 +145,7 @@ async def start_optimization(
         optimize_weekday_profile_correction=data.optimize_weekday_profile_correction,
         simulation_days=data.simulation_days,
         delay=data.delay,
-        prediction_engine_id=data.prediction_engine_id,
+        prediction_engine_id=engine_id,
         outlet_group_id=data.outlet_group_id,
     )
     session.add(optimization_run)

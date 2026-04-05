@@ -9,8 +9,9 @@ rate.  For daily data with weekly seasonality: scale_factor = 24/7 ≈ 3.43.
 
 Works on both CPU and GPU.
 
-Covariates are handled via Ridge regression on residuals, identical to the
-approach used by the Chronos and TimesFM engines.
+Covariates are handled via Ridge regression on residuals when
+covariate_handling is "external" or "native" (no native API, so both
+use Ridge).  When "none", covariates are skipped entirely.
 """
 
 import asyncio
@@ -65,10 +66,9 @@ class FlowStateEngine(PredictionEngine):
     Works on both CPU and GPU.
 
     Covariates (weekday dummies, financials, PAD events) are incorporated via
-    Ridge regression on residuals, identical to the Chronos/TimesFM approach.
+    Ridge regression on residuals when covariate_handling is "external" or
+    "native".  When "none", covariates are skipped entirely.
     """
-
-    _VALID_PRECISIONS = {"float32", "bfloat16", "float16"}
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID):
         self._model_id = model_id
@@ -77,7 +77,6 @@ class FlowStateEngine(PredictionEngine):
         self._model_loaded = False
         self._last_ridge_results: list[dict] | None = None
         self._batch_size: int = BATCH_SIZE
-        self._precision: str = "float32"
         self._scale_factor: float = DEFAULT_SCALE_FACTOR
 
     _MODEL_ALIASES: dict[str, str] = {
@@ -98,7 +97,6 @@ class FlowStateEngine(PredictionEngine):
         Supported parameter names:
           model / submodel – HuggingFace model ID or short name
           revision         – model revision (e.g. "r1.1" for research variant)
-          precision        – torch dtype: float32 | bfloat16 | float16
           batch_size       – outlets per forward pass (int)
           scale_factor     – sampling rate encoding (float); 24/N where N=steps/cycle
         """
@@ -107,14 +105,6 @@ class FlowStateEngine(PredictionEngine):
             self._model_id = self._resolve_model_id(model_value)
         if "revision" in params:
             self._revision = params["revision"]
-        if "precision" in params:
-            p = params["precision"]
-            if p in self._VALID_PRECISIONS:
-                self._precision = p
-            else:
-                logger.warning(
-                    "Ignoring unknown precision '%s'; valid: %s", p, self._VALID_PRECISIONS
-                )
         if "batch_size" in params:
             self._batch_size = int(params["batch_size"])
         if "scale_factor" in params:
@@ -139,8 +129,8 @@ class FlowStateEngine(PredictionEngine):
                         batch_size: int = 16, horizon: int = 30, context_length: int = 512,
                         num_covariates: int = 0, precision: str = "float32",
                         epochs: int = 0) -> MemoryEstimate:
-        # FlowState: 18.5M params SSM, outputs 9 quantiles directly
-        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        # FlowState: 18.5M params SSM, outputs 9 quantiles directly, always float32
+        bytes_per_param = 4
         model_mb = 18.5e6 * bytes_per_param / (1024 * 1024)
         effective_batch = min(batch_size or self._batch_size, num_outlets)
         context_mb = effective_batch * min(context_length, MAX_CONTEXT) * 4 / (1024 * 1024)
@@ -208,19 +198,13 @@ class FlowStateEngine(PredictionEngine):
                 self._model_id, revision=self._revision,
             )
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype_map = {
-                "float32": torch.float32,
-                "bfloat16": torch.bfloat16,
-                "float16": torch.float16,
-            }
-            self._dtype = dtype_map[self._precision]
-            if self._dtype != torch.float32:
-                self._model = self._model.to(self._dtype)
-            self._model.to(self._device)
+            # FlowState pretrained weights are bfloat16 but internal layers
+            # require float32 — always cast to float32.
+            self._model = self._model.to(dtype=torch.float32, device=self._device)
             self._model.eval()
             logger.info(
-                "FlowState model loaded: %s (revision: %s, %s, device: %s)",
-                self._model_id, self._revision, self._precision, self._device,
+                "FlowState model loaded: %s (revision: %s, float32, device: %s)",
+                self._model_id, self._revision, self._device,
             )
         except Exception as e:
             logger.warning("Failed to load FlowState model, falling back to statistical: %s", e)
@@ -309,6 +293,7 @@ class FlowStateEngine(PredictionEngine):
                 "feature_names": feature_names,
                 "preprocessor": pp,
                 "covariates": item.get("covariates"),
+                "covariate_handling": item.get("covariate_handling", "external"),
             })
 
         # Sort by history length to minimise padding waste.
@@ -423,7 +408,7 @@ class FlowStateEngine(PredictionEngine):
         # FlowState input: (context_length, batch_size, 1) with batch_first=False
         batch_array = np.stack(contexts)  # (batch_size, context_length)
         context_tensor = torch.tensor(
-            batch_array.T[:, :, np.newaxis], dtype=self._dtype
+            batch_array.T[:, :, np.newaxis], dtype=torch.float32
         ).to(self._device)  # (context_length, batch_size, 1)
 
         with torch.no_grad():
@@ -451,24 +436,25 @@ class FlowStateEngine(PredictionEngine):
             base_upper = base_quantiles[:, -1]  # P90
 
             # Ridge regression on residuals for covariate adjustment.
-            n_hist = len(values)
-            align_len = min(n_hist, horizon)
-            forecast_level = float(base_pred[0])
-            residuals = values[-align_len:] - forecast_level
-            hist_X_aligned = hist_X[-align_len:]
-
+            covariate_handling = item.get("covariate_handling", "external")
             feature_names = sorted(item.get("feature_names", []))
-            if feature_names:
+            if covariate_handling != "none" and feature_names:
+                n_hist = len(values)
+                align_len = min(n_hist, horizon)
+                forecast_level = float(base_pred[0])
+                residuals = values[-align_len:] - forecast_level
+                hist_X_aligned = hist_X[-align_len:]
                 ridge = Ridge(alpha=1.0, fit_intercept=True)
                 ridge.fit(hist_X_aligned, residuals)
                 adj = ridge.predict(fut_X)
             else:
                 adj = np.zeros(horizon)
 
+            used_ridge = covariate_handling != "none" and feature_names
             ridge_infos.append({
-                "feature_names": feature_names,
-                "coefficients": list(ridge.coef_) if feature_names else [],
-                "intercept": float(ridge.intercept_) if feature_names else 0.0,
+                "feature_names": feature_names if used_ridge else [],
+                "coefficients": list(ridge.coef_) if used_ridge else [],
+                "intercept": float(ridge.intercept_) if used_ridge else 0.0,
             })
 
             results.append((

@@ -303,6 +303,7 @@ class YingLongEngine(PredictionEngine):
                 "feature_names": feature_names,
                 "preprocessor": pp,
                 "covariates": item.get("covariates"),
+                "covariate_handling": item.get("covariate_handling", "external"),
             })
 
         # Sort by history length to minimise padding waste.
@@ -444,24 +445,25 @@ class YingLongEngine(PredictionEngine):
             base_upper = base_quantiles[:, -1]  # P90
 
             # Ridge regression on residuals for covariate adjustment.
-            n_hist = len(values)
-            align_len = min(n_hist, horizon)
-            forecast_level = float(base_pred[0])
-            residuals = values[-align_len:] - forecast_level
-            hist_X_aligned = hist_X[-align_len:]
-
+            covariate_handling = item.get("covariate_handling", "external")
             feature_names = sorted(item.get("feature_names", []))
-            if feature_names:
+            if covariate_handling != "none" and feature_names:
+                n_hist = len(values)
+                align_len = min(n_hist, horizon)
+                forecast_level = float(base_pred[0])
+                residuals = values[-align_len:] - forecast_level
+                hist_X_aligned = hist_X[-align_len:]
                 ridge = Ridge(alpha=1.0, fit_intercept=True)
                 ridge.fit(hist_X_aligned, residuals)
                 adj = ridge.predict(fut_X)
             else:
                 adj = np.zeros(horizon)
 
+            used_ridge = covariate_handling != "none" and feature_names
             ridge_infos.append({
-                "feature_names": feature_names,
-                "coefficients": list(ridge.coef_) if feature_names else [],
-                "intercept": float(ridge.intercept_) if feature_names else 0.0,
+                "feature_names": feature_names if used_ridge else [],
+                "coefficients": list(ridge.coef_) if used_ridge else [],
+                "intercept": float(ridge.intercept_) if used_ridge else 0.0,
             })
 
             results.append((

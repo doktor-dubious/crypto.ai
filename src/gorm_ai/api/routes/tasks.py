@@ -196,15 +196,23 @@ class WorkerInfoResponse(BaseModel):
     name: str
     models: list[str]
     gpu_index: int | None = None
+    gpu_name: str | None = None
+    gpu_vram_total_mb: int | None = None
+    gpu_count: int | None = None
+    uptime_s: int | None = None
 
 
 @router.get("/workers/list", response_model=list[WorkerInfoResponse])
 async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
     """Return registered Celery workers with their supported models."""
     from gorm_ai.tasks.celery_app import (
+        WORKER_GPU_COUNT_PREFIX,
+        WORKER_GPU_NAME_PREFIX,
         WORKER_GPU_PREFIX,
+        WORKER_GPU_VRAM_PREFIX,
         WORKER_MODELS_PREFIX,
         WORKER_REGISTRY_PREFIX,
+        WORKER_STARTED_PREFIX,
         celery_app,
     )
 
@@ -240,6 +248,8 @@ async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
             registered.add(f"celery@{wn}")
 
         # Build worker info with models from Redis
+        import time as _time
+
         result = []
         for key in sorted(registered):
             name = key.split("@", 1)[-1]
@@ -249,7 +259,22 @@ async def list_workers(service: TaskServiceDep) -> list[WorkerInfoResponse]:
                 models = [s.strip() for s in models_raw.decode().split(",") if s.strip()]
             gpu_raw = r.get(f"{WORKER_GPU_PREFIX}{key}")
             gpu_index = int(gpu_raw.decode()) if gpu_raw else None
-            result.append(WorkerInfoResponse(name=name, models=models, gpu_index=gpu_index))
+
+            gpu_name_raw = r.get(f"{WORKER_GPU_NAME_PREFIX}{key}")
+            gpu_name = gpu_name_raw.decode() if gpu_name_raw else None
+            gpu_vram_raw = r.get(f"{WORKER_GPU_VRAM_PREFIX}{key}")
+            gpu_vram_total_mb = int(gpu_vram_raw.decode()) if gpu_vram_raw else None
+            gpu_count_raw = r.get(f"{WORKER_GPU_COUNT_PREFIX}{key}")
+            gpu_count = int(gpu_count_raw.decode()) if gpu_count_raw else None
+
+            started_raw = r.get(f"{WORKER_STARTED_PREFIX}{key}")
+            uptime_s = int(_time.time()) - int(started_raw.decode()) if started_raw else None
+
+            result.append(WorkerInfoResponse(
+                name=name, models=models, gpu_index=gpu_index,
+                gpu_name=gpu_name, gpu_vram_total_mb=gpu_vram_total_mb,
+                gpu_count=gpu_count, uptime_s=uptime_s,
+            ))
         return result
 
     return await asyncio.to_thread(_get_workers)
