@@ -189,8 +189,13 @@ class AutoGluonEngine(PredictionEngine):
 
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
-        # Determine if any item has covariates (drives known_covariates_names)
-        has_covariates = any(item.get("covariates") or item.get("pad_dates") for item in items)
+        # Determine if any item has covariates (drives known_covariates_names).
+        # Skip covariates entirely when covariate_handling is "none".
+        covariate_handling = items[0].get("covariate_handling", "external") if items else "external"
+        has_covariates = (
+            covariate_handling != "none"
+            and any(item.get("covariates") or item.get("pad_dates") for item in items)
+        )
 
         # --- Step 1: preprocess each outlet and build covariate arrays ---
         prepared = []

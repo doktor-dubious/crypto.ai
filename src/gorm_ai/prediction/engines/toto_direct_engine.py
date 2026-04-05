@@ -5,17 +5,14 @@ reuses it across all prediction calls.  Toto is a 151M parameter foundation
 model trained on 1T+ data points from Datadog's observability platform.
 
 Requires a CUDA-compatible GPU; falls back to StatisticalEngine without one.
-
-Covariates are handled via Ridge regression on residuals (same approach as
-TimesFM and Chronos).
 """
 
 import logging
 
 from gorm_ai.prediction.engine import EngineCapabilities
-from gorm_ai.prediction.engines.chronos2_direct_engine import (
+from gorm_ai.prediction.engines.chronos_pipeline_engine import (
     BATCH_SIZE,
-    Chronos2DirectEngine,
+    ChronosPipelineEngine,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +34,7 @@ def _check_cuda() -> bool:
     return _CUDA_AVAILABLE
 
 
-class TotoDirectEngine(Chronos2DirectEngine):
+class TotoDirectEngine(ChronosPipelineEngine):
     """Direct Toto engine — load once, predict many.
 
     Datadog Toto (Time-Series-Optimized Transformer for Observability) is a
@@ -55,17 +52,10 @@ class TotoDirectEngine(Chronos2DirectEngine):
         "toto-open-base": "Datadog/Toto-Open-Base-1.0",
         "toto-open-base-1.0": "Datadog/Toto-Open-Base-1.0",
     }
+    _DEFAULT_PREFIX = "Datadog/"
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID):
-        super().__init__(model_id=model_id)
-        # Toto is GPU-only; default to bfloat16 for memory efficiency.
-        self._precision = "bfloat16"
-
-    def _resolve_model_id(self, value: str) -> str:
-        name = value.split("(")[0].strip()
-        if "/" in name:
-            return name
-        return self._MODEL_ALIASES.get(name, f"Datadog/{name}")
+        super().__init__(model_id=model_id, default_precision="bfloat16")
 
     def get_capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(

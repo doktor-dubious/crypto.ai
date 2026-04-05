@@ -1,7 +1,15 @@
-"""Salesforce MOIRAI-2 prediction engine."""
+"""Salesforce MOIRAI-2 prediction engine.
+
+Supports three covariate modes:
+  - "native":   covariates fed directly into MOIRAI-2 via GluonTS
+                feat_dynamic_real (the model's attention learns relationships)
+  - "external": Ridge regression on residuals (post-hoc adjustment)
+  - "none":     covariates skipped entirely
+"""
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import date, timedelta
 
 import numpy as np
@@ -38,6 +46,12 @@ class Moirai2Engine(PredictionEngine):
 
     MOIRAI-2 natively outputs quantile forecasts (P10–P90) which are used
     directly for the Newsvendor EO computation — no post-hoc sampling needed.
+
+    Covariate handling:
+      - "native":   covariates passed as feat_dynamic_real to MOIRAI-2's
+                    attention mechanism (the model learns relationships directly)
+      - "external": Ridge regression on residuals (post-hoc adjustment)
+      - "none":     no covariate adjustment
 
     The Moirai2Module (weights) is loaded once and cached on the engine instance.
     Only the lightweight Moirai2Forecast wrapper is recreated per call to
@@ -240,45 +254,94 @@ class Moirai2Engine(PredictionEngine):
     ) -> list[list[PredictionResult]]:
         """Sync: single MOIRAI-2 inference for all outlets combined."""
         from gluonts.dataset.pandas import PandasDataset
+        from sklearn.linear_model import Ridge
         from uni2ts.model.moirai2 import Moirai2Forecast
 
         future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
 
-        # --- Step 1: preprocess each outlet ---
+        # --- Step 1: preprocess each outlet and build covariates ---
+        covariate_handling = items[0].get("covariate_handling", "external") if items else "external"
+        use_native = covariate_handling == "native"
+        use_external = covariate_handling == "external"
+
         prepared = []
         for i, item in enumerate(items):
             pp = DataPreprocessor(fill_missing=True, normalize=False)
             df = pp.preprocess(item["historical_data"])
+            n_hist = len(df)
+            if covariate_handling != "none":
+                cov_arrays = self._build_covariate_arrays(
+                    df, prediction_from, horizon,
+                    item.get("covariates"), item.get("pad_dates"),
+                    item.get("weekday_correction"),
+                )
+                feature_names = sorted(cov_arrays.keys())
+                if feature_names:
+                    hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+                    fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+                else:
+                    hist_X = np.empty((n_hist, 0))
+                    fut_X = np.empty((horizon, 0))
+            else:
+                cov_arrays = {}
+                feature_names = []
+                hist_X = np.empty((n_hist, 0))
+                fut_X = np.empty((horizon, 0))
             prepared.append({
                 "key": str(i),
                 "df": df,
-                "n_hist": len(df),
+                "n_hist": n_hist,
+                "hist_X": hist_X,
+                "fut_X": fut_X,
+                "feature_names": feature_names,
+                "cov_arrays": cov_arrays,
                 "covariates": item.get("covariates"),
                 "historical_data": item["historical_data"],
                 "variation_adjustment": item.get("variation_adjustment"),
             })
 
-        # --- Step 2: build GluonTS PandasDataset (one series per outlet) ---
+        # --- Step 2: build GluonTS PandasDataset ---
+        # For native mode, include covariate columns and extend into the
+        # future so MOIRAI-2 can use them during decoding.
+        native_feature_names = prepared[0]["feature_names"] if use_native else []
         series_dict: dict[str, pd.DataFrame] = {}
         for p in prepared:
-            ts_df = pd.DataFrame(
-                {"target": p["df"]["value"].values},
-                index=pd.DatetimeIndex(p["df"]["date"]),
-            )
+            hist_dates = list(p["df"]["date"])
+            hist_values = list(p["df"]["value"].values)
+            if use_native and native_feature_names:
+                # Extend with future dates (target=NaN, covariates filled)
+                fut_dates_pd = [pd.Timestamp(d) for d in future_dates]
+                all_dates = hist_dates + fut_dates_pd
+                all_target = hist_values + [np.nan] * horizon
+                ts_df = pd.DataFrame(
+                    {"target": all_target},
+                    index=pd.DatetimeIndex(all_dates),
+                )
+                for feat in native_feature_names:
+                    ts_df[feat] = p["cov_arrays"][feat]
+            else:
+                ts_df = pd.DataFrame(
+                    {"target": hist_values},
+                    index=pd.DatetimeIndex(hist_dates),
+                )
             series_dict[p["key"]] = ts_df
 
-        ds = PandasDataset(series_dict, target="target", freq="D")
+        ds_kwargs: dict = {"target": "target", "freq": "D"}
+        if use_native and native_feature_names:
+            ds_kwargs["feat_dynamic_real"] = native_feature_names
+        ds = PandasDataset(series_dict, **ds_kwargs)
 
         # --- Step 3: create Moirai2Forecast for this horizon + context length ---
         max_hist = max(p["n_hist"] for p in prepared)
         context_length = min(max_hist, MAX_CONTEXT)
+        n_feat = len(native_feature_names) if use_native else 0
 
         model = Moirai2Forecast(
             module=self._module,
             prediction_length=horizon,
             context_length=context_length,
             target_dim=1,
-            feat_dynamic_real_dim=0,
+            feat_dynamic_real_dim=n_feat,
             past_feat_dynamic_real_dim=0,
         )
         predictor = model.create_predictor(batch_size=self._batch_size)
@@ -296,12 +359,30 @@ class Moirai2Engine(PredictionEngine):
                 output.append([])
                 continue
 
-            mean_vals = fc.mean                                           # (horizon,)
+            mean_vals = fc.quantile(0.5)                                    # (horizon,)
             lower = fc.quantile(0.1)                                      # (horizon,)
             upper = fc.quantile(0.9)                                      # (horizon,)
             all_quantiles = np.column_stack(                              # (horizon, 9)
                 [fc.quantile(float(q)) for q in _QUANTILE_LEVELS]
             )
+
+            # Ridge regression on residuals (external mode only).
+            # Native mode: covariates already fed into the model via feat_dynamic_real.
+            feature_names = p["feature_names"]
+            if use_external and feature_names:
+                values = p["df"]["value"].values
+                n_hist = len(values)
+                align_len = min(n_hist, horizon)
+                forecast_level = float(mean_vals[0])
+                residuals = values[-align_len:] - forecast_level
+                hist_X_aligned = p["hist_X"][-align_len:]
+                ridge = Ridge(alpha=1.0, fit_intercept=True)
+                ridge.fit(hist_X_aligned, residuals)
+                adj = ridge.predict(p["fut_X"])
+                mean_vals = mean_vals + adj
+                lower = lower + adj
+                upper = upper + adj
+                all_quantiles = all_quantiles + adj[:, np.newaxis]
 
             va = p.get("variation_adjustment", {})
             weekday_cvs = None
@@ -338,6 +419,40 @@ class Moirai2Engine(PredictionEngine):
             output.append(day_results)
 
         return output
+
+    @staticmethod
+    def _build_covariate_arrays(
+        df: pd.DataFrame,
+        prediction_from: date,
+        horizon: int,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
+        weekday_correction: list[bool] | None = None,
+    ) -> dict[str, list[float]]:
+        """Build covariate sequences (historical + future) for Ridge regression."""
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+        historical_dates = [ts.date() for ts in df["date"]]
+        all_dates = historical_dates + list(future_dates)
+        all_weekdays = [d.weekday() + 1 for d in all_dates]
+
+        result: dict[str, list[float]] = {}
+
+        flags = weekday_correction if weekday_correction is not None else [True] * 7
+        for dow in range(1, 8):
+            if flags[dow - 1]:
+                result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+
+        _EXCLUDED = {"cost_per_unit", "profit_per_unit"}
+        if covariates:
+            for feature, date_map in covariates.items():
+                if feature not in _EXCLUDED:
+                    result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
+
+        if pad_dates:
+            for pad_name, event_dates in pad_dates.items():
+                result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
+
+        return result
 
     def _compute_economic_optimal(
         self,

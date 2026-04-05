@@ -1,12 +1,21 @@
 """Celery application configuration."""
 
 import asyncio
+import logging
 import os
 
 from celery import Celery
-from celery.signals import task_postrun, task_prerun, worker_process_init, worker_ready, worker_shutdown
+from celery.signals import (
+    task_postrun,
+    task_prerun,
+    worker_process_init,
+    worker_ready,
+    worker_shutdown,
+)
 
 from gorm_ai.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -80,12 +89,13 @@ def _refresh_worker_registry() -> None:
                 cap = get_system_capacity()
                 if cap.gpu_name:
                     r.setex(f"{WORKER_GPU_NAME_PREFIX}{hostname}", WORKER_REGISTRY_TTL, cap.gpu_name)
+                    logger.info("Worker %s GPU lazily registered: %s", hostname, cap.gpu_name)
                 if cap.gpu_vram_total_mb is not None:
                     r.setex(f"{WORKER_GPU_VRAM_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(cap.gpu_vram_total_mb)))
                 if cap.gpu_count > 0:
                     r.setex(f"{WORKER_GPU_COUNT_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(cap.gpu_count))
             except Exception:
-                pass
+                logger.exception("Worker %s: lazy GPU detection failed", hostname)
         else:
             for prefix in (WORKER_GPU_NAME_PREFIX, WORKER_GPU_VRAM_PREFIX, WORKER_GPU_COUNT_PREFIX):
                 r.expire(f"{prefix}{hostname}", WORKER_REGISTRY_TTL)
@@ -242,12 +252,21 @@ def on_worker_ready(sender, **kwargs):
             cap = get_system_capacity()
             if cap.gpu_name:
                 r.setex(f"{WORKER_GPU_NAME_PREFIX}{hostname}", WORKER_REGISTRY_TTL, cap.gpu_name)
+                logger.info(
+                    "Worker %s GPU: %s (%s MB)",
+                    hostname, cap.gpu_name, cap.gpu_vram_total_mb,
+                )
+            else:
+                logger.warning(
+                    "Worker %s: no GPU detected (count=%s)",
+                    hostname, cap.gpu_count,
+                )
             if cap.gpu_vram_total_mb is not None:
                 r.setex(f"{WORKER_GPU_VRAM_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(int(cap.gpu_vram_total_mb)))
             if cap.gpu_count > 0:
                 r.setex(f"{WORKER_GPU_COUNT_PREFIX}{hostname}", WORKER_REGISTRY_TTL, str(cap.gpu_count))
         except Exception:
-            pass
+            logger.exception("Worker %s: failed to detect/store GPU info", hostname)
     except Exception:
         pass
 

@@ -78,8 +78,8 @@ def get_system_capacity() -> SystemCapacity:
             if isinstance(gpu_name, bytes):
                 gpu_name = gpu_name.decode()
         pynvml.nvmlShutdown()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("pynvml GPU detection failed: %s", exc)
 
     if gpu_total is None:
         try:
@@ -90,8 +90,32 @@ def get_system_capacity() -> SystemCapacity:
                 gpu_available = (gpu_total - torch.cuda.memory_allocated(0) / (1024 * 1024))
                 gpu_name = torch.cuda.get_device_name(0)
                 gpu_count = max(gpu_count, torch.cuda.device_count())
-        except Exception:
-            pass
+            else:
+                logger.debug("torch.cuda.is_available() returned False")
+        except Exception as exc:
+            logger.debug("torch GPU detection failed: %s", exc)
+
+    # Last-resort fallback: parse nvidia-smi output.
+    if gpu_total is None:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total,count",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                lines = result.stdout.strip().splitlines()
+                idx = gpu_index if gpu_index is not None else 0
+                line = lines[min(idx, len(lines) - 1)]
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2:
+                    gpu_name = parts[0]
+                    gpu_total = float(parts[1])
+                    gpu_count = len(lines)
+                    logger.info("GPU detected via nvidia-smi: %s", gpu_name)
+        except Exception as exc:
+            logger.debug("nvidia-smi GPU detection failed: %s", exc)
 
     return SystemCapacity(
         ram_total_mb=round(ram_total, 1),

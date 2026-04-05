@@ -350,7 +350,13 @@ export default function PredictionStrategiesPage() {
         toast.info(t("copyParametersEmpty"))
         return
       }
-      for (const p of engineParams) {
+      const existingNames = new Set(strategyParameters.map((p) => p.name))
+      const missingParams = engineParams.filter((p) => !existingNames.has(p.name))
+      if (missingParams.length === 0) {
+        toast.info(t("copyParametersAllPresent"))
+        return
+      }
+      for (const p of missingParams) {
         await predictionStrategiesApi.createParameter(selectedStrategy.id, {
           name: p.name,
           value: p.value,
@@ -366,7 +372,7 @@ export default function PredictionStrategiesPage() {
     } finally {
       setCopyingParams(false)
     }
-  }, [selectedStrategy, effectiveEngineId, queryClient, t])
+  }, [selectedStrategy, effectiveEngineId, strategyParameters, queryClient, t])
 
   // ── Sync draft when selected strategy changes ──────────────────────────────
 

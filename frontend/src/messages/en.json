@@ -760,6 +760,7 @@
       "toastParameterDeleteError": "Failed to remove parameter",
       "copyParameters": "Copy Parameters",
       "copyParametersEmpty": "No engine-level parameters to copy",
+      "copyParametersAllPresent": "All engine parameters are already present on this strategy",
       "toastParametersCopied": "Engine parameters copied to strategy",
       "toastParametersCopyError": "Failed to copy engine parameters"
     },
