@@ -29,6 +29,7 @@ ml = [
     "statsmodels>=0.14.0",
     "scikit-learn>=1.4.0",
     "torch>=2.0.0",
+    "nvidia-cusparselt-cu12>=0.7",
 ]
 timesfm = [
     "timesfm[xreg] @ git+https://github.com/google-research/timesfm.git",
@@ -48,6 +49,7 @@ chronos = [
 moirai = [
     "uni2ts>=2.0.0",
     "scikit-learn>=1.4.0",
+    "nvidia-cusparselt-cu12>=0.7",
 ]
 kairos = [
     "kairos @ git+https://github.com/foundation-model-research/Kairos",

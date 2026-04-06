@@ -44,12 +44,13 @@ git pull
 export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 uv sync --extra moirai
 
-# Ensure nvidia-cusparselt-cu12 is present and discoverable by torch
-uv pip install --python .venv/bin/python nvidia-cusparselt-cu12 2>/dev/null || true
+# Set LD_LIBRARY_PATH for nvidia libs installed by uv sync
 CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
 if [ -n "$CUSPARSELT_LIB" ]; then
     export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
-    echo "Found cusparselt at: $CUSPARSELT_LIB"
+    echo "cusparselt: $CUSPARSELT_LIB"
+else
+    echo "WARNING: libcusparseLt.so not found in .venv"
 fi
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support (only if needed)
