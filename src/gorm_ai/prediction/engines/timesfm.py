@@ -895,8 +895,10 @@ class TimesFMEngine(PredictionEngine):
         # Pad event indicators — binary 1.0 on event dates, 0.0 otherwise
         # Ridge learns the per-outlet effect magnitude from historical occurrences
         if pad_dates and (active_covariate_types is None or 3 in active_covariate_types):
+            future_set = set(future_dates)
             for pad_name, event_dates in pad_dates.items():
-                result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
+                if future_set & event_dates:
+                    result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
 
         return result
 
