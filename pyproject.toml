@@ -47,6 +47,7 @@ chronos = [
 # gluonts version conflict (uni2ts needs ~=0.14.3, autogluon needs >=0.15).
 moirai = [
     "uni2ts>=2.0.0",
+    "scikit-learn>=1.4.0",
 ]
 kairos = [
     "kairos @ git+https://github.com/foundation-model-research/Kairos",
