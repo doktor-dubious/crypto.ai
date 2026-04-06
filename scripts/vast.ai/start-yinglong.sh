@@ -50,7 +50,7 @@ SYSTEM_CUDA=${SYSTEM_CUDA:-128}  # fallback to cu128
 echo "Detected system CUDA: ${SYSTEM_CUDA}"
 if ! .venv/bin/python -c "import torch; assert torch.version.cuda.replace('.','') == '${SYSTEM_CUDA}'" 2>/dev/null; then
     echo "Installing torch nightly with cu${SYSTEM_CUDA}..."
-    uv pip install --python .venv/bin/python --reinstall-package torch torch --index-url "https://download.pytorch.org/whl/nightly/cu${SYSTEM_CUDA}"
+    uv pip install --python .venv/bin/python --reinstall-package torch torch nvidia-cusparselt-cu12 --index-url "https://download.pytorch.org/whl/nightly/cu${SYSTEM_CUDA}"
 fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
