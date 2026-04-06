@@ -238,6 +238,8 @@ class AutoGluonEngine(PredictionEngine):
                 "covariates": item.get("covariates"),
                 "historical_data": item["historical_data"],
                 "variation_adjustment": item.get("variation_adjustment"),
+                "pad_dates": item.get("pad_dates"),
+                "active_covariate_types": item.get("active_covariate_types"),
             })
 
         # --- Step 2: assemble training TimeSeriesDataFrame ---
@@ -345,15 +347,23 @@ class AutoGluonEngine(PredictionEngine):
             eo_meth = eo_params.get("methodology", 1) if isinstance(eo_params, dict) else 1
             eo_extrap = eo_params.get("extrapolation", 1) if isinstance(eo_params, dict) else 1
 
+            # PAD adjustment — applied per-date, not via Ridge
+            pad_adj = self.compute_pad_adjustments(
+                p["historical_data"],
+                future_dates,
+                p.get("pad_dates"),
+                active_covariate_types=p.get("active_covariate_types"),
+            )
+
             day_results = []
             for i, fd in enumerate(future_dates):
                 if i >= len(outlet_preds):
                     break
                 row = outlet_preds.iloc[i]
-                mean_val = float(row["mean"])
-                lower = float(row["0.1"])
-                upper = float(row["0.9"])
-                q_vals = np.array([float(row[c]) for c in quantile_col_names])
+                mean_val = float(row["mean"]) + float(pad_adj[i])
+                lower = float(row["0.1"]) + float(pad_adj[i])
+                upper = float(row["0.9"]) + float(pad_adj[i])
+                q_vals = np.array([float(row[c]) for c in quantile_col_names]) + float(pad_adj[i])
 
                 economic_optimal = self._compute_economic_optimal(
                     fd, q_vals, p["covariates"],
@@ -495,12 +505,5 @@ class AutoGluonEngine(PredictionEngine):
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED_COVARIATES:
                     result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
-
-        # PAD event indicators — binary 1.0 on event dates
-        if pad_dates and (active_covariate_types is None or 3 in active_covariate_types):
-            future_set = set(future_dates)
-            for pad_name, event_dates in pad_dates.items():
-                if future_set & event_dates:
-                    result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
 
         return result

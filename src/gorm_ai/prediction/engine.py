@@ -256,3 +256,66 @@ class PredictionEngine(ABC):
 
         if horizon < 1:
             raise ValueError("Horizon must be at least 1")
+
+    @staticmethod
+    def compute_pad_adjustments(
+        historical_data: list[dict],
+        future_dates: list[date],
+        pad_dates: dict[str, set[date]] | None,
+        active_covariate_types: set | list | None = None,
+    ) -> np.ndarray:
+        """Compute per-date PAD adjustments as historical mean differences.
+
+        For each PAD type with events in the future window, computes the
+        average sales difference between event days and non-event days in
+        history, then applies that shift only on future event dates.
+
+        This avoids including PAD as a Ridge regression feature, which
+        distorts the intercept and affects all dates — not just event dates.
+
+        Returns an array of length len(future_dates) with the total PAD
+        adjustment per day (zero on non-event dates).
+        """
+        adj = np.zeros(len(future_dates))
+        if not pad_dates or not historical_data:
+            return adj
+        if active_covariate_types is not None and 3 not in active_covariate_types:
+            return adj
+
+        future_set = set(future_dates)
+
+        # Collect all PAD event dates across all types for historical splitting
+        all_hist_event_dates: set[date] = set()
+        relevant_pads: dict[str, set[date]] = {}
+        for pad_name, event_dates in pad_dates.items():
+            if future_set & event_dates:
+                relevant_pads[pad_name] = event_dates
+                all_hist_event_dates |= event_dates
+
+        if not relevant_pads:
+            return adj
+
+        # Split historical values into event-day and non-event-day groups
+        event_vals: list[float] = []
+        normal_vals: list[float] = []
+        for record in historical_data:
+            v = float(record["value"])
+            if record["date"] in all_hist_event_dates:
+                event_vals.append(v)
+            else:
+                normal_vals.append(v)
+
+        if not event_vals or not normal_vals:
+            return adj
+
+        # PAD effect = mean difference between event days and normal days
+        pad_effect = float(np.mean(event_vals) - np.mean(normal_vals))
+
+        # Apply only on future event dates
+        for idx, fd in enumerate(future_dates):
+            for event_dates in relevant_pads.values():
+                if fd in event_dates:
+                    adj[idx] += pad_effect
+                    break  # one shift per date even if multiple PADs overlap
+
+        return adj

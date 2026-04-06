@@ -403,6 +403,19 @@ class Moirai2Engine(PredictionEngine):
                 upper = upper + adj
                 all_quantiles = all_quantiles + adj[:, np.newaxis]
 
+            # PAD adjustment — applied per-date, not via Ridge
+            pad_adj = self.compute_pad_adjustments(
+                p["historical_data"],
+                future_dates,
+                items[int(p["key"])].get("pad_dates"),
+                active_covariate_types=items[int(p["key"])].get("active_covariate_types"),
+            )
+            if pad_adj.any():
+                mean_vals = mean_vals + pad_adj
+                lower = lower + pad_adj
+                upper = upper + pad_adj
+                all_quantiles = all_quantiles + pad_adj[:, np.newaxis]
+
             va = p.get("variation_adjustment", {})
             weekday_cvs = None
             if va.get("enabled") if isinstance(va, dict) else va:
@@ -468,12 +481,6 @@ class Moirai2Engine(PredictionEngine):
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED:
                     result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
-
-        if pad_dates and (active_covariate_types is None or 3 in active_covariate_types):
-            future_set = set(future_dates)
-            for pad_name, event_dates in pad_dates.items():
-                if future_set & event_dates:
-                    result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
 
         return result
 

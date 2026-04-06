@@ -300,6 +300,19 @@ class TimesFMEngine(PredictionEngine):
             upper = _sanitize_nan(pp.denormalize(upper_norm))
             quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
+            # PAD adjustment — applied per-date, not via Ridge
+            pad_adj = self.compute_pad_adjustments(
+                item["historical_data"],
+                future_dates,
+                item.get("pad_dates"),
+                active_covariate_types=item.get("active_covariate_types"),
+            )
+            if pad_adj.any():
+                preds = preds + pad_adj
+                lower = lower + pad_adj
+                upper = upper + pad_adj
+                quantiles = quantiles + pad_adj[:, np.newaxis]
+
             wpc = item.get("weekday_profile_correction", {})
             if wpc.get("enabled") if isinstance(wpc, dict) else wpc:
                 preds, quantiles = self._apply_weekday_profile_correction(
@@ -891,14 +904,6 @@ class TimesFMEngine(PredictionEngine):
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED_COVARIATES:
                     result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
-
-        # Pad event indicators — binary 1.0 on event dates, 0.0 otherwise
-        # Ridge learns the per-outlet effect magnitude from historical occurrences
-        if pad_dates and (active_covariate_types is None or 3 in active_covariate_types):
-            future_set = set(future_dates)
-            for pad_name, event_dates in pad_dates.items():
-                if future_set & event_dates:
-                    result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
 
         return result
 
