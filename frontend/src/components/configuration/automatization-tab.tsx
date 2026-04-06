@@ -105,6 +105,13 @@ function formatSettingValue(
       const chMap: Record<string, string> = { none: "None", native: "Native", external: "External" }
       return `Covariates: ${chMap[String(value)] ?? String(value)}`
     }
+    case "active_covariate_types": {
+      const typeNames: Record<number, string> = { 1: "Weekday", 2: "Price", 3: "PAD" }
+      const types = Array.isArray(value) ? value as number[] : []
+      return types.length === 0
+        ? "Types: None"
+        : `Types: ${types.map((t) => typeNames[t] ?? String(t)).join("+")}`
+    }
     case "weekday_profile_correction":
       return `WPC: ${value ? "On" : "Off"}`
     case "variation_history_days":
@@ -134,6 +141,9 @@ function describeCombination(
   }
   if (run.optimize_covariate_handling && "covariate_handling" in combo) {
     parts.push(formatSettingValue("covariate_handling", combo.covariate_handling))
+  }
+  if (run.optimize_covariate_types && "active_covariate_types" in combo) {
+    parts.push(formatSettingValue("active_covariate_types", combo.active_covariate_types))
   }
   if (run.optimize_weekday_profile_correction && "weekday_profile_correction" in combo) {
     parts.push(formatSettingValue("weekday_profile_correction", combo.weekday_profile_correction))
