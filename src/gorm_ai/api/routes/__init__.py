@@ -6,6 +6,7 @@ from gorm_ai.api.routes import (
     analysis,
     chat,
     configuration,
+    configuration_covariates,
     currencies,
     customers,
     financial_dates,
@@ -45,6 +46,9 @@ api_router.include_router(
 )
 api_router.include_router(health_check.router, prefix="/health-check", tags=["health-check"])
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
+api_router.include_router(
+    configuration_covariates.router, prefix="/configuration-covariates", tags=["configuration-covariates"]
+)
 api_router.include_router(fine_tunes.router, prefix="/fine-tunes", tags=["fine-tunes"])
 api_router.include_router(
     finetune_examinations.router, prefix="/finetune-examinations", tags=["finetune-examinations"]

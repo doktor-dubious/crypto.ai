@@ -39,6 +39,7 @@ import {
   type LlmResponse,
   type LlmSubmodelResponse,
 } from "@/lib/api"
+import { CovariatesTab } from "@/components/configuration/covariates-tab"
 
 // ─── Sub-components (matching prediction→strategies patterns) ────────────────
 
@@ -372,19 +373,6 @@ function CoreTab({
           <option value="1">{t("roundingRound")}</option>
           <option value="2">{t("roundingCeil")}</option>
           <option value="3">{t("roundingFloor")}</option>
-        </select>
-      </FieldRow>
-
-      <FieldRow label={t("covariateHandling")} info={t("covariateHandlingInfo")}>
-        <select
-          value={String(draft.covariate_handling ?? (isGorm ? "external" : ""))}
-          onChange={(e) => set("covariate_handling", e.target.value === "" ? null : e.target.value)}
-          className={selectClassName}
-        >
-          {!isGorm && <option value="">{t("covariateExternal")}</option>}
-          <option value="none">{t("covariateNone")}</option>
-          <option value="native">{t("covariateNative")}</option>
-          <option value="external">{t("covariateExternal")}</option>
         </select>
       </FieldRow>
 
@@ -1129,6 +1117,7 @@ export default function ConfigurationPage() {
               [
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
+                { value: "covariates", label: t("tabCovariates") },
                 { value: "workers", label: t("tabWorkers") },
                 { value: "finetuning", label: t("tabFineTuning") },
                 { value: "insights", label: t("tabInsights") },
@@ -1148,6 +1137,9 @@ export default function ConfigurationPage() {
                 <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
+                <TabsContent value="covariates" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <CovariatesTab customerId={null} draft={gormDraft} setDraft={setGormDraft} isGorm={true} t={t} />
+                </TabsContent>
                 <TabsContent value="workers" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WorkersTab draft={gormDraft} setDraft={setGormDraft} t={t} />
                 </TabsContent>
@@ -1165,6 +1157,7 @@ export default function ConfigurationPage() {
                 { value: "details", label: t("tabDetails") },
                 { value: "core", label: t("tabCore") },
                 { value: "weekday", label: t("tabWeekday") },
+                { value: "covariates", label: t("tabCovariates") },
                 { value: "insights", label: t("tabInsights") },
               ],
               <>
@@ -1184,6 +1177,9 @@ export default function ConfigurationPage() {
                 </TabsContent>
                 <TabsContent value="weekday" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <WeekdayTab draft={configDraft} setDraft={setConfigDraft} t={t} />
+                </TabsContent>
+                <TabsContent value="covariates" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <CovariatesTab customerId={cid} draft={configDraft} setDraft={setConfigDraft} isGorm={false} t={t} />
                 </TabsContent>
                 <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <InsightsTab draft={configDraft} setDraft={setConfigDraft} engines={engines} strategies={strategies} workers={workers} llms={llms} llmSubmodels={llmSubmodels} t={t} />

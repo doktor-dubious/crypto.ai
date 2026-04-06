@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gorm_ai.database.connection import get_session
 from gorm_ai.services.analysis import AnalysisService
 from gorm_ai.services.configuration import ConfigurationService
+from gorm_ai.services.configuration_covariate import ConfigurationCovariateService
 from gorm_ai.services.customer import CustomerService
 from gorm_ai.services.customer_configuration import CustomerConfigurationService
 from gorm_ai.services.financial_date import FinancialDateService
@@ -70,6 +71,11 @@ def get_sales_service(session: DbSession) -> SalesService:
 def get_prediction_service(session: DbSession) -> PredictionService:
     """Get prediction service."""
     return PredictionService(session)
+
+
+def get_configuration_covariate_service(session: DbSession) -> ConfigurationCovariateService:
+    """Get configuration covariate service."""
+    return ConfigurationCovariateService(session)
 
 
 def get_configuration_service(session: DbSession) -> ConfigurationService:
@@ -160,6 +166,9 @@ def get_user_customer_service(session: DbSession) -> UserCustomerService:
 # Type aliases for service injection
 AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
 HealthCheckServiceDep = Annotated[HealthCheckService, Depends(get_health_check_service)]
+ConfigurationCovariateServiceDep = Annotated[
+    ConfigurationCovariateService, Depends(get_configuration_covariate_service)
+]
 ConfigurationServiceDep = Annotated[ConfigurationService, Depends(get_configuration_service)]
 FinancialDateServiceDep = Annotated[FinancialDateService, Depends(get_financial_date_service)]
 CustomerConfigurationServiceDep = Annotated[

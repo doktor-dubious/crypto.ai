@@ -174,6 +174,7 @@ class PredictionService:
         weekday_correction = await self._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._resolve_weekday_profile_correction(request.customer_id)
         covariate_handling = await self._resolve_covariate_handling(request.customer_id)
+        active_covariate_types = await self._resolve_active_covariate_types(request.customer_id)
         variation_params = await self._resolve_variation_adjustment(request.customer_id)
         eo_params = await self._resolve_eo_params(request.customer_id)
 
@@ -243,6 +244,7 @@ class PredictionService:
                 "weekday_correction": weekday_correction,
                 "weekday_profile_correction": weekday_profile_params,
                 "covariate_handling": covariate_handling,
+                "active_covariate_types": active_covariate_types,
                 "variation_adjustment": variation_params,
                 "eo_params": eo_params,
                 **(request.engine_params or {}),
@@ -1345,6 +1347,17 @@ class PredictionService:
         if gc is not None:
             return gc.covariate_handling
         return "external"
+
+    async def _resolve_active_covariate_types(self, customer_id: str) -> set[int]:
+        """Resolve which covariate types are active for a customer.
+
+        Uses the configuration_covariate table with customer → global fallback.
+        Returns {1, 2, 3} by default (all active).
+        """
+        from gorm_ai.services.configuration_covariate import ConfigurationCovariateService
+
+        svc = ConfigurationCovariateService(self.session)
+        return await svc.resolve_active_types(customer_id)
 
     async def _resolve_eo_params(self, customer_id: str) -> dict:
         """Resolve EO methodology and extrapolation settings.

@@ -69,6 +69,7 @@ const SETTINGS: Setting[] = [
   { type: "toggle", key: "optimize_eo_methodology", labelKey: "optimizeEoMethodology", infoKey: "optimizeEoMethodologyInfo", optionCount: 2 },
   { type: "toggle", key: "optimize_eo_extrapolation", labelKey: "optimizeEoExtrapolation", infoKey: "optimizeEoExtrapolationInfo", optionCount: 4 },
   { type: "toggle", key: "optimize_covariate_handling", labelKey: "optimizeCovariateHandling", infoKey: "optimizeCovariateHandlingInfo", optionCount: 3 },
+  { type: "toggle", key: "optimize_covariate_types", labelKey: "optimizeCovariateTypes", infoKey: "optimizeCovariateTypesInfo", optionCount: 8 },
   { type: "toggle", key: "optimize_weekday_profile_correction", labelKey: "optimizeWeekdayProfileCorrection", infoKey: "optimizeWeekdayProfileCorrectionInfo", optionCount: 2 },
   { type: "range", key: "optimize_history_window", labelKey: "optimizeHistoryWindow", infoKey: "optimizeHistoryWindowInfo", fromKey: "history_window_from", toKey: "history_window_to", iterKey: "history_window_iterations", fromDefault: 365, toDefault: 730, iterDefault: 4 },
   { type: "range", key: "optimize_correction_strength", labelKey: "optimizeCorrectionStrength", infoKey: "optimizeCorrectionStrengthInfo", fromKey: "correction_strength_from", toKey: "correction_strength_to", iterKey: "correction_strength_iterations", fromDefault: 1.0, toDefault: 0.0, iterDefault: 4, step: 0.1 },

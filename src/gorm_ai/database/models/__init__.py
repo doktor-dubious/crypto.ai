@@ -12,6 +12,7 @@ from gorm_ai.database.models.finetune_examination import FinetuneExamination
 from gorm_ai.database.models.finetune_progress import FinetuneProgress
 from gorm_ai.database.models.fine_tune import FineTune
 from gorm_ai.database.models.finetune_log import FinetuneLog
+from gorm_ai.database.models.configuration_covariate import ConfigurationCovariate
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.import_template import ImportTemplate, ImportTemplateElement
 from gorm_ai.database.models.llm import Llm
@@ -47,6 +48,7 @@ __all__ = [
     "ChatMessage",
     "ChatSession",
     "Configuration",
+    "ConfigurationCovariate",
     "Covariate",
     "CovariateOutlet",
     "Currency",

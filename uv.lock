@@ -1299,6 +1299,7 @@ ml = [
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-gorm-ai-autogluon' or extra == 'extra-7-gorm-ai-kairos' or extra != 'extra-7-gorm-ai-moirai' or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong')" },
 ]
 moirai = [
+    { name = "scikit-learn" },
     { name = "uni2ts" },
 ]
 timesfm = [
@@ -1337,6 +1338,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.2.0" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.4.0" },
+    { name = "scikit-learn", marker = "extra == 'moirai'", specifier = ">=1.4.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.25" },
     { name = "statsmodels", marker = "extra == 'ml'", specifier = ">=0.14.0" },
     { name = "structlog", specifier = ">=25.5.0" },

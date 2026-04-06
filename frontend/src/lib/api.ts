@@ -2651,3 +2651,34 @@ export const chatApi = {
   deleteSession: (sessionId: string) =>
     apiFetch<void>(`/chat/sessions/${sessionId}`, { method: "DELETE" }),
 }
+
+// -- Configuration Covariates ------------------------------------------------
+
+export interface ConfigurationCovariateResponse {
+  id: string
+  customer_id: string | null
+  name: string
+  description: string | null
+  type: number
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export const configurationCovariatesApi = {
+  list: (customerId?: string) =>
+    apiFetch<ConfigurationCovariateResponse[]>(
+      `/configuration-covariates${customerId ? `?customer_id=${customerId}` : ""}`
+    ),
+
+  update: (id: string, data: { active: boolean }) =>
+    apiFetch<ConfigurationCovariateResponse>(`/configuration-covariates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  ensure: (customerId: string) =>
+    apiFetch<ConfigurationCovariateResponse[]>(`/configuration-covariates/ensure/${customerId}`, {
+      method: "POST",
+    }),
+}

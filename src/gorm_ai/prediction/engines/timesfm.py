@@ -146,7 +146,8 @@ class TimesFMEngine(PredictionEngine):
             # financial covariates and pad event indicators are added when available.
             weekday_correction = kwargs.get("weekday_correction")
             cov_arrays = self._build_covariate_arrays(
-                df, prediction_from, horizon, covariates, pad_dates, weekday_correction
+                df, prediction_from, horizon, covariates, pad_dates, weekday_correction,
+                active_covariate_types=kwargs.get("active_covariate_types"),
             )
             covariate_handling = kwargs.get("covariate_handling", "external")
             predictions, lower, upper, all_quantiles = await self._run_inference_with_covariates(
@@ -247,6 +248,7 @@ class TimesFMEngine(PredictionEngine):
                 df, prediction_from, horizon,
                 item.get("covariates"), item.get("pad_dates"),
                 item.get("weekday_correction"),
+                active_covariate_types=item.get("active_covariate_types"),
             )
             n_hist = len(values)
             feature_names = sorted(cov_arrays.keys())
@@ -841,6 +843,7 @@ class TimesFMEngine(PredictionEngine):
         covariates: dict[str, dict[date, float]] | None = None,
         pad_dates: dict[str, set[date]] | None = None,
         weekday_correction: list[bool] | None = None,
+        active_covariate_types: set[int] | None = None,
     ) -> dict[str, list[float]]:
         """Build full covariate sequences covering historical context + future horizon.
 
@@ -856,6 +859,8 @@ class TimesFMEngine(PredictionEngine):
             pad_dates: Optional pad name → set of specific event dates (binary indicator)
             weekday_correction: Optional list of 7 bools [Mon..Sun]; True = include that
                 day's one-hot feature. None defaults to all True.
+            active_covariate_types: Optional set of enabled covariate type IDs
+                (1=Weekday, 2=Financial, 3=PAD). None means all enabled.
 
         Returns:
             Feature name → flat list of floats, length = len(df) + horizon
@@ -873,22 +878,23 @@ class TimesFMEngine(PredictionEngine):
 
         # Weekday one-hot encoding (dow_1=Mon .. dow_7=Sun); each day is optional.
         # Enabled days get an explicit feature; disabled days are not corrected.
-        flags = weekday_correction if weekday_correction is not None else [True] * 7
-        for dow in range(1, 8):
-            if flags[dow - 1]:
-                result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+        if active_covariate_types is None or 1 in active_covariate_types:
+            flags = weekday_correction if weekday_correction is not None else [True] * 7
+            for dow in range(1, 8):
+                if flags[dow - 1]:
+                    result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
 
         # Financial covariates keyed by date — profit_per_unit is excluded because
         # it reflects margin, not end-user price, and does not influence demand.
         _EXCLUDED_COVARIATES = {"cost_per_unit", "profit_per_unit"}
-        if covariates:
+        if covariates and (active_covariate_types is None or 2 in active_covariate_types):
             for feature, date_map in covariates.items():
                 if feature not in _EXCLUDED_COVARIATES:
                     result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
 
         # Pad event indicators — binary 1.0 on event dates, 0.0 otherwise
         # Ridge learns the per-outlet effect magnitude from historical occurrences
-        if pad_dates:
+        if pad_dates and (active_covariate_types is None or 3 in active_covariate_types):
             for pad_name, event_dates in pad_dates.items():
                 result[pad_name] = [1.0 if d in event_dates else 0.0 for d in all_dates]
 
