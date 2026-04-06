@@ -15,6 +15,7 @@ class OptimizeSettingsRequest(BaseModel):
     optimize_eo_methodology: bool = False            # 1,2 -> 2 options
     optimize_eo_extrapolation: bool = False          # 1,2,3,4 -> 4 options
     optimize_covariate_handling: bool = False         # none,native,external -> 3 options
+    optimize_covariate_types: bool = False             # 2^3=8 combos of weekday/price/PAD
     optimize_weekday_profile_correction: bool = False  # True/False -> 2 options
     # Range parameters — generate evenly spaced values between from/to
     optimize_history_window: bool = False
@@ -75,6 +76,7 @@ class OptimizationRunResponse(BaseModel):
     optimize_eo_methodology: bool
     optimize_eo_extrapolation: bool
     optimize_covariate_handling: bool
+    optimize_covariate_types: bool = False
     optimize_weekday_profile_correction: bool
     simulation_days: int
     delay: int

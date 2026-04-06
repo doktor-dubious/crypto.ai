@@ -236,6 +236,18 @@ async def _run_optimization(
         param_axes["eo_extrapolation"] = [1, 2, 3, 4]
     if request.optimize_covariate_handling:
         param_axes["covariate_handling"] = ["none", "native", "external"]
+    if request.optimize_covariate_types:
+        # All 2^3 = 8 combinations of active covariate types
+        param_axes["active_covariate_types"] = [
+            set(),              # none
+            {1},                # weekday only
+            {2},                # selling price only
+            {3},                # PAD only
+            {1, 2},             # weekday + selling price
+            {1, 3},             # weekday + PAD
+            {2, 3},             # selling price + PAD
+            {1, 2, 3},          # all
+        ]
     if request.optimize_weekday_profile_correction:
         param_axes["weekday_profile_correction"] = [False, True]
     if request.optimize_history_window:
