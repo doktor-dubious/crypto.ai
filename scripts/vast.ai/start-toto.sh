@@ -46,7 +46,11 @@ uv sync --extra ml --extra timesfm --extra yinglong --extra chronos
 
 # Ensure nvidia-cusparselt-cu12 is present and discoverable by torch
 uv pip install --python .venv/bin/python nvidia-cusparselt-cu12 2>/dev/null || true
-export LD_LIBRARY_PATH="$(.venv/bin/python -c 'import os, nvidia.cusparselt as c; print(os.path.join(os.path.dirname(c.__file__), "lib"))' 2>/dev/null):${LD_LIBRARY_PATH:-}"
+CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
+if [ -n "$CUSPARSELT_LIB" ]; then
+    export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
+    echo "Found cusparselt at: $CUSPARSELT_LIB"
+fi
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support (only if needed)
 if ! .venv/bin/python -c "import torch; assert 'sm_120' in str(torch.cuda.get_arch_list())" 2>/dev/null; then
