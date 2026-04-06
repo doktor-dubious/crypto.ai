@@ -315,30 +315,30 @@ class Moirai2Engine(PredictionEngine):
             hist_dates = list(p["df"]["date"])
             hist_values = list(p["df"]["value"].values)
             if use_native and native_feature_names:
-                # Truncate history to context_length to match model window
-                n = p["n_hist"]
-                trim = max(n - context_length, 0)
-                trimmed_values = hist_values[trim:]
-
-                # Build a continuous daily index from trimmed start through
-                # the end of the forecast horizon so GluonTS sees uniform spacing.
-                start_date = hist_dates[trim]
+                # Build exactly context_length + horizon uniform daily dates
+                # ending at the last forecast date.  This guarantees the
+                # DataFrame length matches what the model expects.
+                total_len = context_length + horizon
                 last_future = future_dates[-1]
                 uniform_idx = pd.date_range(
-                    start=pd.Timestamp(start_date), end=pd.Timestamp(last_future), freq="D"
+                    end=pd.Timestamp(last_future), periods=total_len, freq="D"
                 )
-                n_trimmed_hist = len(trimmed_values)
-                n_future = len(uniform_idx) - n_trimmed_hist
-                all_target = trimmed_values + [np.nan] * n_future
+
+                # Map historical values onto the uniform index (NaN for gaps).
+                hist_date_set = {pd.Timestamp(d): v for d, v in zip(hist_dates, hist_values)}
+                all_target = [
+                    hist_date_set.get(d, np.nan) for d in uniform_idx
+                ]
                 ts_df = pd.DataFrame({"target": all_target}, index=uniform_idx)
 
-                # Covariate arrays cover original hist + horizon; slice and
-                # pad to match the uniform index length.
+                # Map covariate arrays onto the uniform index.
+                # cov_arrays covers original hist dates + horizon future dates.
+                n = p["n_hist"]
+                cov_date_list = hist_dates + [pd.Timestamp(d) for d in future_dates]
                 for feat in native_feature_names:
-                    cov_vals = p["cov_arrays"][feat][trim:]
-                    if len(cov_vals) < len(uniform_idx):
-                        cov_vals = list(cov_vals) + [0.0] * (len(uniform_idx) - len(cov_vals))
-                    ts_df[feat] = cov_vals[: len(uniform_idx)]
+                    raw = p["cov_arrays"][feat]
+                    cov_map = {pd.Timestamp(d): v for d, v in zip(cov_date_list, raw)}
+                    ts_df[feat] = [cov_map.get(d, 0.0) for d in uniform_idx]
             else:
                 ts_df = pd.DataFrame(
                     {"target": hist_values},
