@@ -301,25 +301,34 @@ class Moirai2Engine(PredictionEngine):
                 "variation_adjustment": item.get("variation_adjustment"),
             })
 
-        # --- Step 2: build GluonTS PandasDataset ---
+        # --- Step 2: compute context length (needed before building native DataFrames) ---
+        max_hist = max(p["n_hist"] for p in prepared)
+        context_length = min(max_hist, MAX_CONTEXT)
+
+        # --- Step 3: build GluonTS PandasDataset ---
         # For native mode, include covariate columns and extend into the
-        # future so MOIRAI-2 can use them during decoding.
+        # future so MOIRAI-2 can use them during decoding.  Truncate
+        # history to context_length so covariates match the model's window.
         native_feature_names = prepared[0]["feature_names"] if use_native else []
         series_dict: dict[str, pd.DataFrame] = {}
         for p in prepared:
             hist_dates = list(p["df"]["date"])
             hist_values = list(p["df"]["value"].values)
             if use_native and native_feature_names:
-                # Extend with future dates (target=NaN, covariates filled)
+                # Truncate history to context_length to match model window
+                n = p["n_hist"]
+                trim = max(n - context_length, 0)
+                trimmed_dates = hist_dates[trim:]
+                trimmed_values = hist_values[trim:]
                 fut_dates_pd = [pd.Timestamp(d) for d in future_dates]
-                all_dates = hist_dates + fut_dates_pd
-                all_target = hist_values + [np.nan] * horizon
+                all_dates = trimmed_dates + fut_dates_pd
+                all_target = trimmed_values + [np.nan] * horizon
                 ts_df = pd.DataFrame(
                     {"target": all_target},
                     index=pd.DatetimeIndex(all_dates),
                 )
                 for feat in native_feature_names:
-                    ts_df[feat] = p["cov_arrays"][feat]
+                    ts_df[feat] = p["cov_arrays"][feat][trim:]
             else:
                 ts_df = pd.DataFrame(
                     {"target": hist_values},
@@ -331,10 +340,6 @@ class Moirai2Engine(PredictionEngine):
         if use_native and native_feature_names:
             ds_kwargs["feat_dynamic_real"] = native_feature_names
         ds = PandasDataset(series_dict, **ds_kwargs)
-
-        # --- Step 3: create Moirai2Forecast for this horizon + context length ---
-        max_hist = max(p["n_hist"] for p in prepared)
-        context_length = min(max_hist, MAX_CONTEXT)
         n_feat = len(native_feature_names) if use_native else 0
 
         model = Moirai2Forecast(
