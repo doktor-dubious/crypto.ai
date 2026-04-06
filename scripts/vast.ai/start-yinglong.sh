@@ -54,7 +54,12 @@ if ! .venv/bin/python -c "import torch; assert torch.version.cuda.replace('.',''
 fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
-# YingLong runtime dependencies (flash-attn compiles CUDA kernels from source, ~10-30 min)
+# YingLong runtime dependencies (flash-attn compiles CUDA kernels from source)
+# Only compile for the GPU on this machine + use all CPU cores to speed up build
+GPU_ARCH=$(.venv/bin/python -c "import torch; cc = torch.cuda.get_device_capability(); print(f'{cc[0]}.{cc[1]}')" 2>/dev/null || echo "8.0")
+export TORCH_CUDA_ARCH_LIST="${GPU_ARCH}"
+export MAX_JOBS=$(nproc)
+echo "Building flash-attn for arch ${GPU_ARCH} with ${MAX_JOBS} jobs..."
 uv pip install --python .venv/bin/python flash-attn --no-build-isolation
 uv pip install --python .venv/bin/python xformers lightning-utilities
 
