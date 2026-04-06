@@ -306,6 +306,7 @@ export default function ExplorationNewPage() {
       optimize_eo_methodology: !!enabled.optimize_eo_methodology,
       optimize_eo_extrapolation: !!enabled.optimize_eo_extrapolation,
       optimize_covariate_handling: !!enabled.optimize_covariate_handling,
+      optimize_covariate_types: !!enabled.optimize_covariate_types,
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_from: format(startDate, "yyyy-MM-dd"),
       simulation_to: format(endDate, "yyyy-MM-dd"),
