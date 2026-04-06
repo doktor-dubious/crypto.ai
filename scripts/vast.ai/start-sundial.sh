@@ -44,8 +44,9 @@ git pull
 export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 uv sync --extra ml --extra timesfm --extra yinglong
 
-# Ensure nvidia-cusparselt-cu12 is present (torch nightly depends on it)
+# Ensure nvidia-cusparselt-cu12 is present and discoverable by torch
 uv pip install --python .venv/bin/python nvidia-cusparselt-cu12 2>/dev/null || true
+export LD_LIBRARY_PATH="$(.venv/bin/python -c 'import os, nvidia.cusparselt as c; print(os.path.join(os.path.dirname(c.__file__), "lib"))' 2>/dev/null):${LD_LIBRARY_PATH:-}"
 
 # Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support (only if needed)
 if ! .venv/bin/python -c "import torch; assert 'sm_120' in str(torch.cuda.get_arch_list())" 2>/dev/null; then
