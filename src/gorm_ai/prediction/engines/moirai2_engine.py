@@ -318,17 +318,27 @@ class Moirai2Engine(PredictionEngine):
                 # Truncate history to context_length to match model window
                 n = p["n_hist"]
                 trim = max(n - context_length, 0)
-                trimmed_dates = hist_dates[trim:]
                 trimmed_values = hist_values[trim:]
-                fut_dates_pd = [pd.Timestamp(d) for d in future_dates]
-                all_dates = trimmed_dates + fut_dates_pd
-                all_target = trimmed_values + [np.nan] * horizon
-                ts_df = pd.DataFrame(
-                    {"target": all_target},
-                    index=pd.DatetimeIndex(all_dates),
+
+                # Build a continuous daily index from trimmed start through
+                # the end of the forecast horizon so GluonTS sees uniform spacing.
+                start_date = hist_dates[trim]
+                last_future = future_dates[-1]
+                uniform_idx = pd.date_range(
+                    start=pd.Timestamp(start_date), end=pd.Timestamp(last_future), freq="D"
                 )
+                n_trimmed_hist = len(trimmed_values)
+                n_future = len(uniform_idx) - n_trimmed_hist
+                all_target = trimmed_values + [np.nan] * n_future
+                ts_df = pd.DataFrame({"target": all_target}, index=uniform_idx)
+
+                # Covariate arrays cover original hist + horizon; slice and
+                # pad to match the uniform index length.
                 for feat in native_feature_names:
-                    ts_df[feat] = p["cov_arrays"][feat][trim:]
+                    cov_vals = p["cov_arrays"][feat][trim:]
+                    if len(cov_vals) < len(uniform_idx):
+                        cov_vals = list(cov_vals) + [0.0] * (len(uniform_idx) - len(cov_vals))
+                    ts_df[feat] = cov_vals[: len(uniform_idx)]
             else:
                 ts_df = pd.DataFrame(
                     {"target": hist_values},
