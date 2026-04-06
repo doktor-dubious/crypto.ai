@@ -55,7 +55,7 @@ fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
 # YingLong runtime dependencies (flash-attn compiles CUDA kernels from source, ~10-30 min)
-uv pip install flash-attn --no-build-isolation
-uv pip install xformers lightning-utilities
+uv pip install --python .venv/bin/python flash-attn --no-build-isolation
+uv pip install --python .venv/bin/python xformers lightning-utilities
 
 PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint
