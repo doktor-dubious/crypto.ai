@@ -395,7 +395,7 @@ class SimulationService:
             if "covariate_handling" in config_overrides:
                 covariate_handling = config_overrides["covariate_handling"]
             if "active_covariate_types" in config_overrides:
-                active_covariate_types = config_overrides["active_covariate_types"]
+                active_covariate_types = set(config_overrides["active_covariate_types"])
 
         # --- Per-outlet closed days (same logic as in PredictionService) ---
         # Build a set of python weekdays (0-6) that are closed for each outlet,
