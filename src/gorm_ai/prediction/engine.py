@@ -284,38 +284,38 @@ class PredictionEngine(ABC):
 
         future_set = set(future_dates)
 
-        # Collect all PAD event dates across all types for historical splitting
-        all_hist_event_dates: set[date] = set()
+        # Identify PAD types that have events in the future window
         relevant_pads: dict[str, set[date]] = {}
         for pad_name, event_dates in pad_dates.items():
             if future_set & event_dates:
                 relevant_pads[pad_name] = event_dates
-                all_hist_event_dates |= event_dates
 
         if not relevant_pads:
             return adj
 
-        # Split historical values into event-day and non-event-day groups
-        event_vals: list[float] = []
-        normal_vals: list[float] = []
+        # Build a date→value lookup from historical data
+        hist_by_date: dict[date, float] = {}
         for record in historical_data:
-            v = float(record["value"])
-            if record["date"] in all_hist_event_dates:
-                event_vals.append(v)
-            else:
-                normal_vals.append(v)
+            hist_by_date[record["date"]] = float(record["value"])
 
-        if not event_vals or not normal_vals:
+        # Normal-day mean (excluding ALL PAD event dates)
+        all_event_dates: set[date] = set()
+        for event_dates in pad_dates.values():
+            all_event_dates |= event_dates
+
+        normal_vals = [v for d, v in hist_by_date.items() if d not in all_event_dates]
+        if not normal_vals:
             return adj
+        normal_mean = float(np.mean(normal_vals))
 
-        # PAD effect = mean difference between event days and normal days
-        pad_effect = float(np.mean(event_vals) - np.mean(normal_vals))
-
-        # Apply only on future event dates
-        for idx, fd in enumerate(future_dates):
-            for event_dates in relevant_pads.values():
+        # Compute per-PAD-type effect and apply to future event dates
+        for pad_name, event_dates in relevant_pads.items():
+            hist_event_vals = [hist_by_date[d] for d in event_dates if d in hist_by_date]
+            if not hist_event_vals:
+                continue
+            pad_effect = float(np.mean(hist_event_vals) - normal_mean)
+            for idx, fd in enumerate(future_dates):
                 if fd in event_dates:
                     adj[idx] += pad_effect
-                    break  # one shift per date even if multiple PADs overlap
 
         return adj
