@@ -261,8 +261,11 @@ class Moirai2Engine(PredictionEngine):
 
         # --- Step 1: preprocess each outlet and build covariates ---
         covariate_handling = items[0].get("covariate_handling", "external") if items else "external"
-        use_native = covariate_handling == "native"
-        use_external = covariate_handling == "external"
+        # Native covariate mode via feat_dynamic_real is not yet supported
+        # by MOIRAI-2 (tensor shape issues with GluonTS patching).
+        # Treat "native" the same as "external" (Ridge regression).
+        use_native = False
+        use_external = covariate_handling in ("external", "native")
 
         prepared = []
         for i, item in enumerate(items):
