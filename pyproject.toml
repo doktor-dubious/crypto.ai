@@ -29,7 +29,7 @@ ml = [
     "statsmodels>=0.14.0",
     "scikit-learn>=1.4.0",
     "torch>=2.0.0",
-    "nvidia-cusparselt-cu12>=0.7",
+    "nvidia-cusparselt-cu12>=0.6",
 ]
 timesfm = [
     "timesfm[xreg] @ git+https://github.com/google-research/timesfm.git",
@@ -78,6 +78,7 @@ conflicts = [
         { extra = "autogluon" },
         { extra = "moirai" },
         { extra = "kairos" },
+        { extra = "toto" },
     ],
     [
         { extra = "flowstate" },
@@ -90,6 +91,14 @@ conflicts = [
     [
         { extra = "flowstate" },
         { extra = "autogluon" },
+    ],
+    [
+        { extra = "toto" },
+        { extra = "yinglong" },
+    ],
+    [
+        { extra = "toto" },
+        { extra = "flowstate" },
     ],
 ]
 

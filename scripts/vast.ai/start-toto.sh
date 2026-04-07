@@ -42,7 +42,7 @@ export FINETUNED_MODEL_PATH=/models/finetune/toto
 cd /workspace/gormai
 git pull
 export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-uv sync --extra ml --extra timesfm --extra yinglong --extra chronos --extra toto
+uv sync --extra ml --extra timesfm --extra chronos --extra toto
 
 # Set LD_LIBRARY_PATH for nvidia libs installed by uv sync
 CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
