@@ -1830,12 +1830,10 @@ class PredictionService:
     async def _build_pad_covariates(
         self, customer_id: str
     ) -> dict[str, set[date]] | None:
-        """Build pad event date sets split by weekday, for use as Ridge covariates.
+        """Build pad event date sets — one entry per PAD with all event dates.
 
-        Each PAD is split into up to 7 features — one per weekday — so Ridge learns
-        a separate effect per (PAD, weekday) combination. Features are named
-        "{pad_name}_dow_{N}" (e.g. "christmas_dow_6" for Christmas on Saturday).
-        Only weekdays that actually appear in the PAD's event dates are emitted.
+        compute_pad_adjustments handles weekday matching internally, so PADs
+        are no longer pre-split by weekday.
         """
         result = await self.session.execute(
             select(Pad).where(
@@ -1853,10 +1851,7 @@ class PredictionService:
             if not event_dates:
                 continue
             slug = _slugify(pad.name)
-            for dow in range(1, 8):
-                dow_dates = {d for d in event_dates if d.weekday() + 1 == dow}
-                if dow_dates:
-                    pad_map[f"{slug}_dow_{dow}"] = dow_dates
+            pad_map[slug] = event_dates
 
         return pad_map or None
 
