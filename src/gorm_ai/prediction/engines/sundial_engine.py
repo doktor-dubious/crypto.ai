@@ -457,7 +457,7 @@ class SundialEngine(PredictionEngine):
             contexts.append(v)
         context_tensor = torch.tensor(
             np.stack(contexts), dtype=torch.float32
-        )  # (batch_size, max_len)
+        ).to(self._device)  # (batch_size, max_len)
 
         # Call forward() directly — max_output_length is in time steps.
         # Disable KV cache (not needed for single-pass flow-matching inference).
