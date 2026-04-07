@@ -298,22 +298,38 @@ class PredictionEngine(ABC):
         for record in historical_data:
             hist_by_date[record["date"]] = float(record["value"])
 
-        # Normal-day mean (excluding ALL PAD event dates)
+        # Group non-PAD historical values by weekday for matched baselines.
+        # This avoids over/underestimating PAD effects when the event always
+        # falls on a high- or low-demand day of the week (e.g. Thanksgiving = Thu).
         all_event_dates: set[date] = set()
         for event_dates in pad_dates.values():
             all_event_dates |= event_dates
 
-        normal_vals = [v for d, v in hist_by_date.items() if d not in all_event_dates]
-        if not normal_vals:
-            return adj
-        normal_mean = float(np.mean(normal_vals))
-
-        # Compute per-PAD-type effect and apply to future event dates
-        for pad_name, event_dates in relevant_pads.items():
-            hist_event_vals = [hist_by_date[d] for d in event_dates if d in hist_by_date]
-            if not hist_event_vals:
+        normal_by_weekday: dict[int, list[float]] = {}
+        for d, v in hist_by_date.items():
+            if d in all_event_dates:
                 continue
-            pad_effect = float(np.mean(hist_event_vals) - normal_mean)
+            normal_by_weekday.setdefault(d.weekday(), []).append(v)
+
+        if not normal_by_weekday:
+            return adj
+
+        # Compute per-PAD-type effect using weekday-matched baselines.
+        # For each historical occurrence, the "bump" is computed against the
+        # mean of non-PAD days that share the same weekday.  Average those
+        # bumps across all historical occurrences to get the PAD effect.
+        for pad_name, event_dates in relevant_pads.items():
+            bumps: list[float] = []
+            for d in event_dates:
+                if d not in hist_by_date:
+                    continue
+                same_weekday_vals = normal_by_weekday.get(d.weekday())
+                if not same_weekday_vals:
+                    continue
+                bumps.append(hist_by_date[d] - float(np.mean(same_weekday_vals)))
+            if not bumps:
+                continue
+            pad_effect = float(np.mean(bumps))
             for idx, fd in enumerate(future_dates):
                 if fd in event_dates:
                     adj[idx] += pad_effect
