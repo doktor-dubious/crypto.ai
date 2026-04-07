@@ -68,7 +68,11 @@ class TotoDirectEngine(ChronosPipelineEngine):
     _DEFAULT_PREFIX = "Datadog/"
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID):
-        super().__init__(model_id=model_id, default_precision="bfloat16")
+        # Toto's Categorical output head is precision-sensitive: bfloat16 sums
+        # of the per-bin probabilities don't exactly equal 1.0, which fails
+        # torch.distributions.Categorical's Simplex constraint.  Default to
+        # float32; users can still override via the "precision" DB parameter.
+        super().__init__(model_id=model_id, default_precision="float32")
         self._forecaster = None
         self._device: str = "cpu"
         self._torch_dtype = None  # set in _load_model()
