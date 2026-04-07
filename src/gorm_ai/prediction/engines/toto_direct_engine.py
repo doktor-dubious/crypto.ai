@@ -71,6 +71,7 @@ class TotoDirectEngine(ChronosPipelineEngine):
         super().__init__(model_id=model_id, default_precision="bfloat16")
         self._forecaster = None
         self._device: str = "cpu"
+        self._torch_dtype = None  # set in _load_model()
 
     def get_capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(
@@ -127,13 +128,15 @@ class TotoDirectEngine(ChronosPipelineEngine):
                 "float16": torch.float16,
             }
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            torch_dtype = dtype_map[self._precision]
             logger.info("Downloading/resolving Toto model from Hugging Face: %s", self._model_id)
             model = Toto.from_pretrained(self._model_id)
-            model.to(device, dtype=dtype_map[self._precision])
+            model.to(device, dtype=torch_dtype)
             model.eval()
             self._pipeline = model
             self._forecaster = TotoForecaster(model.model)
             self._device = device
+            self._torch_dtype = torch_dtype
             logger.info(
                 "Toto model loaded: %s (%s, device: %s)",
                 self._model_id, self._precision, device,
@@ -178,13 +181,22 @@ class TotoDirectEngine(ChronosPipelineEngine):
             fut_X = item["fut_X"]
 
             # Toto expects (variates, time_steps).  Single univariate series → (1, T).
+            # Cast series to the model's dtype to avoid mat1/mat2 dtype mismatch.
             series_np = np.asarray(values, dtype=np.float32).reshape(1, -1)
-            series_tensor = torch.tensor(series_np, dtype=torch.float32, device=self._device)
+            series_tensor = torch.tensor(
+                series_np, dtype=self._torch_dtype, device=self._device,
+            )
             inputs = MaskedTimeseries(
                 series=series_tensor,
-                padding_mask=torch.full_like(series_tensor, True, dtype=torch.bool),
-                id_mask=torch.zeros_like(series_tensor),
-                timestamp_seconds=torch.zeros_like(series_tensor),
+                padding_mask=torch.full(
+                    series_tensor.shape, True, dtype=torch.bool, device=self._device,
+                ),
+                id_mask=torch.zeros(
+                    series_tensor.shape, dtype=torch.long, device=self._device,
+                ),
+                timestamp_seconds=torch.zeros(
+                    series_tensor.shape, dtype=torch.long, device=self._device,
+                ),
                 time_interval_seconds=torch.full(
                     (1,), 86400, dtype=torch.long, device=self._device,
                 ),
