@@ -44,6 +44,9 @@ autogluon = [
 chronos = [
     "chronos-forecasting>=1.4.0",
 ]
+toto = [
+    "toto-ts",
+]
 # MOIRAI-2 (Salesforce): cannot coexist with autogluon-timeseries due to
 # gluonts version conflict (uni2ts needs ~=0.14.3, autogluon needs >=0.15).
 moirai = [

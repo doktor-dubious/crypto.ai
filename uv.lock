@@ -1293,12 +1293,14 @@ kairos = [
     { name = "kairos" },
 ]
 ml = [
+    { name = "nvidia-cusparselt-cu12" },
     { name = "scikit-learn" },
     { name = "statsmodels" },
     { name = "torch", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-flowstate') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-kairos') or (extra != 'extra-7-gorm-ai-kairos' and extra == 'extra-7-gorm-ai-moirai') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong') or (extra != 'extra-7-gorm-ai-autogluon' and extra != 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-moirai')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-gorm-ai-autogluon' or extra == 'extra-7-gorm-ai-kairos' or extra != 'extra-7-gorm-ai-moirai' or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong')" },
 ]
 moirai = [
+    { name = "nvidia-cusparselt-cu12" },
     { name = "scikit-learn" },
     { name = "uni2ts" },
 ]
@@ -1327,6 +1329,8 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26.0" },
     { name = "kairos", marker = "extra == 'kairos'", git = "https://github.com/foundation-model-research/Kairos" },
     { name = "numpy", specifier = ">=1.26.0" },
+    { name = "nvidia-cusparselt-cu12", marker = "extra == 'ml'", specifier = ">=0.7" },
+    { name = "nvidia-cusparselt-cu12", marker = "extra == 'moirai'", specifier = ">=0.7" },
     { name = "nvidia-ml-py3", specifier = ">=7.352.0" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "psutil", specifier = ">=7.1.3" },
