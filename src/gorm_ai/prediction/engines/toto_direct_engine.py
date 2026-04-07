@@ -213,8 +213,10 @@ class TotoDirectEngine(ChronosPipelineEngine):
                     num_samples=self._num_samples,
                     samples_per_batch=self._num_samples,
                 )
-            # forecast.samples shape: (variates=1, num_samples, horizon)
-            outlet_samples = forecast.samples.float().cpu().numpy()[0]
+            # forecast.samples shape: (batch=1, variate=1, horizon, num_samples)
+            # Squeeze batch+variate, then transpose to (num_samples, horizon)
+            # to match the layout the rest of this code expects.
+            outlet_samples = forecast.samples[0, 0].float().cpu().numpy().T
 
             base_pred = np.median(outlet_samples, axis=0)
             base_quantiles = np.quantile(
