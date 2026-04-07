@@ -142,7 +142,10 @@ function describeCombination(
   if (run.optimize_covariate_handling && "covariate_handling" in combo) {
     parts.push(formatSettingValue("covariate_handling", combo.covariate_handling))
   }
-  if (run.optimize_covariate_types && "active_covariate_types" in combo) {
+  if (
+    (run.optimize_covariate_weekday || run.optimize_covariate_price || run.optimize_covariate_pad)
+    && "active_covariate_types" in combo
+  ) {
     parts.push(formatSettingValue("active_covariate_types", combo.active_covariate_types))
   }
   if (run.optimize_weekday_profile_correction && "weekday_profile_correction" in combo) {

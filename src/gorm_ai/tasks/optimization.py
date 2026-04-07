@@ -236,19 +236,47 @@ async def _run_optimization(
         param_axes["eo_extrapolation"] = [1, 2, 3, 4]
     if request.optimize_covariate_handling:
         param_axes["covariate_handling"] = ["none", "native", "external"]
-    if request.optimize_covariate_types:
-        # All 2^3 = 8 combinations of active covariate types.
-        # Stored as sorted lists (not sets) for JSON serialization.
-        param_axes["active_covariate_types"] = [
-            [],              # none
-            [1],             # weekday only
-            [2],             # selling price only
-            [3],             # PAD only
-            [1, 2],          # weekday + selling price
-            [1, 3],          # weekday + PAD
-            [2, 3],          # selling price + PAD
-            [1, 2, 3],       # all
-        ]
+    # Per-type covariate explorations: each enabled flag toggles one type
+    # on/off while keeping the others at the customer's resolved setting.
+    # The cartesian product of enabled flags is generated as
+    # active_covariate_types lists.
+    enabled_types: list[int] = []
+    if request.optimize_covariate_weekday:
+        enabled_types.append(1)
+    if request.optimize_covariate_price:
+        enabled_types.append(2)
+    if request.optimize_covariate_pad:
+        enabled_types.append(3)
+
+    if enabled_types:
+        from gorm_ai.services.configuration_covariate import ConfigurationCovariateService
+
+        async with task_session() as session:
+            base_types = await ConfigurationCovariateService(session).resolve_active_types(
+                request.customer_id
+            )
+
+        # Generate all 2^N combinations of the enabled flags, applied on
+        # top of the customer's base configuration.
+        type_combos: list[list[int]] = []
+        for mask in range(1 << len(enabled_types)):
+            combo_types = set(base_types)
+            for i, t in enumerate(enabled_types):
+                if mask & (1 << i):
+                    combo_types.add(t)
+                else:
+                    combo_types.discard(t)
+            type_combos.append(sorted(combo_types))
+
+        # Deduplicate (in case base_types already matched some flags)
+        seen: set[tuple[int, ...]] = set()
+        unique_combos: list[list[int]] = []
+        for c in type_combos:
+            key = tuple(c)
+            if key not in seen:
+                seen.add(key)
+                unique_combos.append(c)
+        param_axes["active_covariate_types"] = unique_combos
     if request.optimize_weekday_profile_correction:
         param_axes["weekday_profile_correction"] = [False, True]
     if request.optimize_history_window:

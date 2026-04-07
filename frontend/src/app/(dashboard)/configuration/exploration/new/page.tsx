@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
@@ -69,7 +69,9 @@ const SETTINGS: Setting[] = [
   { type: "toggle", key: "optimize_eo_methodology", labelKey: "optimizeEoMethodology", infoKey: "optimizeEoMethodologyInfo", optionCount: 2 },
   { type: "toggle", key: "optimize_eo_extrapolation", labelKey: "optimizeEoExtrapolation", infoKey: "optimizeEoExtrapolationInfo", optionCount: 4 },
   { type: "toggle", key: "optimize_covariate_handling", labelKey: "optimizeCovariateHandling", infoKey: "optimizeCovariateHandlingInfo", optionCount: 3 },
-  { type: "toggle", key: "optimize_covariate_types", labelKey: "optimizeCovariateTypes", infoKey: "optimizeCovariateTypesInfo", optionCount: 8 },
+  { type: "toggle", key: "optimize_covariate_weekday", labelKey: "optimizeCovariateWeekday", infoKey: "optimizeCovariateWeekdayInfo", optionCount: 2 },
+  { type: "toggle", key: "optimize_covariate_price", labelKey: "optimizeCovariatePrice", infoKey: "optimizeCovariatePriceInfo", optionCount: 2 },
+  { type: "toggle", key: "optimize_covariate_pad", labelKey: "optimizeCovariatePad", infoKey: "optimizeCovariatePadInfo", optionCount: 2 },
   { type: "toggle", key: "optimize_weekday_profile_correction", labelKey: "optimizeWeekdayProfileCorrection", infoKey: "optimizeWeekdayProfileCorrectionInfo", optionCount: 2 },
   { type: "range", key: "optimize_history_window", labelKey: "optimizeHistoryWindow", infoKey: "optimizeHistoryWindowInfo", fromKey: "history_window_from", toKey: "history_window_to", iterKey: "history_window_iterations", fromDefault: 365, toDefault: 730, iterDefault: 4 },
   { type: "range", key: "optimize_correction_strength", labelKey: "optimizeCorrectionStrength", infoKey: "optimizeCorrectionStrengthInfo", fromKey: "correction_strength_from", toKey: "correction_strength_to", iterKey: "correction_strength_iterations", fromDefault: 1.0, toDefault: 0.0, iterDefault: 4, step: 0.1 },
@@ -209,12 +211,39 @@ function StepCircle({ n, active }: { n: number; active: boolean }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+const STORAGE_KEY = "gorm:explorationNew"
+
+interface PersistedState {
+  name: string
+  selectedStrategyId: string | null
+  selectedGroupId: string | null
+  enabled: Record<string, boolean>
+  rangeParams: Record<string, number>
+  startDate: string | null
+  endDate: string | null
+  worker: string | null
+}
+
+function loadPersistedState(): Partial<PersistedState> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function parseDate(s: string | null | undefined): Date | undefined {
+  if (!s) return undefined
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? undefined : d
+}
+
 export default function ExplorationNewPage() {
   const t = useTranslations("configuration")
   const router = useRouter()
   const { activeCustomer } = useCustomer()
   const queryClient = useQueryClient()
 
+  const [hydrated, setHydrated] = useState(false)
   const [name, setName] = useState("")
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
@@ -223,6 +252,41 @@ export default function ExplorationNewPage() {
   const [startDate, setStartDate] = useState<Date | undefined>(undefined)
   const [endDate, setEndDate] = useState<Date | undefined>(undefined)
   const [worker, setWorker] = useState<string | null>(null)
+
+  // Hydrate from localStorage on mount
+  useEffect(() => {
+    const saved = loadPersistedState()
+    if (saved) {
+      if (saved.name) setName(saved.name)
+      if (saved.selectedStrategyId !== undefined) setSelectedStrategyId(saved.selectedStrategyId)
+      if (saved.selectedGroupId !== undefined) setSelectedGroupId(saved.selectedGroupId)
+      if (saved.enabled) setEnabled(saved.enabled)
+      if (saved.rangeParams) setRangeParams(saved.rangeParams)
+      setStartDate(parseDate(saved.startDate))
+      setEndDate(parseDate(saved.endDate))
+      if (saved.worker !== undefined) setWorker(saved.worker)
+    }
+    setHydrated(true)
+  }, [])
+
+  // Persist to localStorage on change
+  const persist = useCallback(() => {
+    const state: PersistedState = {
+      name,
+      selectedStrategyId,
+      selectedGroupId,
+      enabled,
+      rangeParams,
+      startDate: startDate ? startDate.toISOString() : null,
+      endDate: endDate ? endDate.toISOString() : null,
+      worker,
+    }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch {}
+  }, [name, selectedStrategyId, selectedGroupId, enabled, rangeParams, startDate, endDate, worker])
+
+  useEffect(() => {
+    if (hydrated) persist()
+  }, [hydrated, persist])
 
   const { data: strategies = [] } = useQuery({
     queryKey: ["prediction-strategies", activeCustomer?.id],
@@ -306,7 +370,9 @@ export default function ExplorationNewPage() {
       optimize_eo_methodology: !!enabled.optimize_eo_methodology,
       optimize_eo_extrapolation: !!enabled.optimize_eo_extrapolation,
       optimize_covariate_handling: !!enabled.optimize_covariate_handling,
-      optimize_covariate_types: !!enabled.optimize_covariate_types,
+      optimize_covariate_weekday: !!enabled.optimize_covariate_weekday,
+      optimize_covariate_price: !!enabled.optimize_covariate_price,
+      optimize_covariate_pad: !!enabled.optimize_covariate_pad,
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_from: format(startDate, "yyyy-MM-dd"),
       simulation_to: format(endDate, "yyyy-MM-dd"),
@@ -333,6 +399,7 @@ export default function ExplorationNewPage() {
     setStartDate(undefined)
     setEndDate(undefined)
     setWorker(null)
+    try { localStorage.removeItem(STORAGE_KEY) } catch {}
   }
 
   if (!activeCustomer) {

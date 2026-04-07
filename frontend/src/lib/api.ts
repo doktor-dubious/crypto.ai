@@ -2265,7 +2265,9 @@ export interface OptimizeSettingsRequest {
   optimize_eo_methodology: boolean
   optimize_eo_extrapolation: boolean
   optimize_covariate_handling: boolean
-  optimize_covariate_types?: boolean
+  optimize_covariate_weekday?: boolean
+  optimize_covariate_price?: boolean
+  optimize_covariate_pad?: boolean
   optimize_weekday_profile_correction: boolean
   optimize_history_window?: boolean
   history_window_from?: number
@@ -2314,7 +2316,9 @@ export interface OptimizationRunResponse {
   optimize_eo_methodology: boolean
   optimize_eo_extrapolation: boolean
   optimize_covariate_handling: boolean
-  optimize_covariate_types: boolean
+  optimize_covariate_weekday: boolean
+  optimize_covariate_price: boolean
+  optimize_covariate_pad: boolean
   optimize_weekday_profile_correction: boolean
   simulation_days: number
   delay: number
