@@ -53,19 +53,27 @@ if .venv/bin/python -c "import torch" 2>/dev/null && \
 fi
 if [ "$NEED_BLACKWELL_TORCH" = "1" ]; then
     echo "Installing torch nightly with cu128 for Blackwell support..."
-    # cusparselt comes from PyPI (not on the pytorch nightly index), so install it first
-    uv pip install --python .venv/bin/python nvidia-cusparselt-cu12
+    # Reinstall torch from the pytorch nightly index (replaces PyPI for this command)
     uv pip install --python .venv/bin/python --reinstall-package torch torch --index-url https://download.pytorch.org/whl/nightly/cu128
 fi
 
-# Set LD_LIBRARY_PATH for nvidia libs (must run AFTER torch/cusparselt install)
+# Ensure nvidia-cusparselt-cu12 is installed (torch nightly needs it but the
+# nightly index doesn't ship it, so install from PyPI via the venv's own pip
+# to bypass any uv project/index restrictions).
+echo "Ensuring nvidia-cusparselt-cu12 is present..."
+.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true
+.venv/bin/python -m pip install --quiet nvidia-cusparselt-cu12
+
+# Verify the .so actually landed in the venv
 CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
-if [ -n "$CUSPARSELT_LIB" ]; then
-    export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
-    echo "cusparselt: $CUSPARSELT_LIB"
-else
-    echo "WARNING: libcusparseLt.so not found in .venv"
+if [ -z "$CUSPARSELT_LIB" ]; then
+    echo "ERROR: libcusparseLt.so still not found after install. Diagnostics:"
+    .venv/bin/python -m pip show nvidia-cusparselt-cu12 || true
+    find .venv -path '*nvidia/cusparselt*' 2>/dev/null | head -20 || true
+    exit 1
 fi
+export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
+echo "cusparselt: $CUSPARSELT_LIB"
 
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
