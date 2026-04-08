@@ -57,19 +57,27 @@ if [ "$NEED_BLACKWELL_TORCH" = "1" ]; then
     uv pip install --python .venv/bin/python --reinstall-package torch torch --index-url https://download.pytorch.org/whl/nightly/cu128
 fi
 
-# Ensure nvidia-cusparselt-cu12 is installed (torch nightly needs it but the
-# nightly index doesn't ship it, so install from PyPI via the venv's own pip
-# to bypass any uv project/index restrictions).
+# Ensure nvidia-cusparselt-cu12 is installed. torch nightly cu128 pins a
+# specific version; install whatever torch declared as its dep, then locate
+# the .so. We bypass uv and use the venv's own pip to avoid project/index
+# constraints from the uv lockfile.
 echo "Ensuring nvidia-cusparselt-cu12 is present..."
 .venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true
-.venv/bin/python -m pip install --quiet nvidia-cusparselt-cu12
+# Reinstall to force file extraction even if metadata says it's present
+.venv/bin/python -m pip install --force-reinstall --no-deps nvidia-cusparselt-cu12
 
-# Verify the .so actually landed in the venv
-CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
+# Locate libcusparseLt.so anywhere in the venv
+CUSPARSELT_LIB=$(find .venv -iname "libcusparseLt.so*" -print -quit 2>/dev/null)
 if [ -z "$CUSPARSELT_LIB" ]; then
     echo "ERROR: libcusparseLt.so still not found after install. Diagnostics:"
-    .venv/bin/python -m pip show nvidia-cusparselt-cu12 || true
-    find .venv -path '*nvidia/cusparselt*' 2>/dev/null | head -20 || true
+    echo "--- pip show -f ---"
+    .venv/bin/python -m pip show -f nvidia-cusparselt-cu12 2>&1 | head -60 || true
+    echo "--- import probe ---"
+    .venv/bin/python -c "import nvidia.cusparselt as m; print(m.__file__)" 2>&1 || true
+    echo "--- any cusparselt files ---"
+    find .venv -iname "*cusparselt*" 2>/dev/null | head -40 || true
+    echo "--- nvidia dir contents ---"
+    ls -la .venv/lib/python3.12/site-packages/nvidia/ 2>&1 || true
     exit 1
 fi
 export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
