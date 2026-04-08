@@ -44,7 +44,19 @@ git pull
 export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 uv sync --extra ml --extra timesfm --extra yinglong
 
-# Set LD_LIBRARY_PATH for nvidia libs installed by uv sync
+# Probe for Blackwell support; if missing, install cu128 nightly torch + cusparselt.
+# We can't `import torch` here without LD_LIBRARY_PATH, so check via pip metadata first.
+NEED_BLACKWELL_TORCH=1
+if .venv/bin/python -c "import torch" 2>/dev/null && \
+   .venv/bin/python -c "import torch; import sys; sys.exit(0 if 'sm_120' in str(torch.cuda.get_arch_list()) else 1)" 2>/dev/null; then
+    NEED_BLACKWELL_TORCH=0
+fi
+if [ "$NEED_BLACKWELL_TORCH" = "1" ]; then
+    echo "Installing torch nightly with cu128 for Blackwell support..."
+    uv pip install --python .venv/bin/python --reinstall-package torch torch nvidia-cusparselt-cu12 --index-url https://download.pytorch.org/whl/nightly/cu128
+fi
+
+# Set LD_LIBRARY_PATH for nvidia libs (must run AFTER torch/cusparselt install)
 CUSPARSELT_LIB=$(find .venv -name "libcusparseLt.so*" -print -quit 2>/dev/null)
 if [ -n "$CUSPARSELT_LIB" ]; then
     export LD_LIBRARY_PATH="$(dirname "$CUSPARSELT_LIB"):${LD_LIBRARY_PATH:-}"
@@ -53,11 +65,6 @@ else
     echo "WARNING: libcusparseLt.so not found in .venv"
 fi
 
-# Upgrade torch to CUDA 12.8 wheel for Blackwell (sm_120) GPU support (only if needed)
-if ! .venv/bin/python -c "import torch; assert 'sm_120' in str(torch.cuda.get_arch_list())" 2>/dev/null; then
-    echo "Installing torch nightly with cu128 for Blackwell support..."
-    uv pip install --python .venv/bin/python --reinstall-package torch torch nvidia-cusparselt-cu12 --index-url https://download.pytorch.org/whl/nightly/cu128
-fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
 PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint
