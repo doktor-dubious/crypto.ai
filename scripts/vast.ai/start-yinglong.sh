@@ -55,11 +55,18 @@ fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
 # YingLong runtime dependencies (flash-attn compiles CUDA kernels from source)
-# Only compile for the GPU on this machine + use all CPU cores to speed up build
+# flash-attn 2.8.x ignores TORCH_CUDA_ARCH_LIST and builds all 4 archs (sm_80,
+# 90, 100, 120) per file, so each cc1plus/nvcc job needs ~3-4 GB RAM.  Cap
+# MAX_JOBS by available RAM (≈4 GB per job) to prevent OOM-kill.
 GPU_ARCH=$(.venv/bin/python -c "import torch; cc = torch.cuda.get_device_capability(); print(f'{cc[0]}.{cc[1]}')" 2>/dev/null || echo "8.0")
 export TORCH_CUDA_ARCH_LIST="${GPU_ARCH}"
-export MAX_JOBS=$(nproc)
-echo "Building flash-attn for arch ${GPU_ARCH} with ${MAX_JOBS} jobs..."
+RAM_GB=$(awk '/MemTotal/ {print int($2/1024/1024)}' /proc/meminfo)
+RAM_JOBS=$(( RAM_GB / 4 ))
+CPU_JOBS=$(nproc)
+MAX_JOBS=$(( RAM_JOBS < CPU_JOBS ? RAM_JOBS : CPU_JOBS ))
+[ "$MAX_JOBS" -lt 1 ] && MAX_JOBS=1
+export MAX_JOBS
+echo "Building flash-attn: arch ${GPU_ARCH}, ${MAX_JOBS} jobs (RAM ${RAM_GB}GB, CPU ${CPU_JOBS})..."
 uv pip install --python .venv/bin/python flash-attn --no-build-isolation
 uv pip install --python .venv/bin/python xformers lightning-utilities
 
