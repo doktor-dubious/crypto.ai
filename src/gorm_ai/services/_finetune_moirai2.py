@@ -154,7 +154,12 @@ def _save_checkpoint(module, output_dir):
 
 
 def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
-    """Pull an existing checkpoint from the sync target before training."""
+    """Pull an existing checkpoint from the sync target before training.
+
+    Raises RuntimeError on network/rsync failure. We never silently fall
+    back to the base model after a failed pull, because that would
+    overwrite the server's existing checkpoint on the next sync.
+    """
     os.makedirs(output_dir, exist_ok=True)
     source = sync_target.rstrip("/") + "/"
     dest = output_dir.rstrip("/") + "/"
@@ -167,12 +172,18 @@ def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=1200)
         logger.info("Pull complete.")
-    except FileNotFoundError:
-        logger.warning(
-            "rsync not found — install rsync to enable checkpoint pull",
-        )
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "rsync not found — cannot pull existing checkpoint. Install "
+            "rsync on the worker or unset finetune_sync_target to allow "
+            "training from base model.",
+        ) from e
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-        logger.warning("Pull failed (will start from base model): %s", e)
+        raise RuntimeError(
+            f"Failed to pull existing checkpoint from {sync_target}: {e}. "
+            "Aborting to avoid overwriting the server's checkpoint with a "
+            "model trained from base. Retry once the server is reachable.",
+        ) from e
 
 
 def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
@@ -204,7 +215,7 @@ async def run_finetune(
     sync_every: int = 5,
     early_stopping_patience: int = 0,
     should_stop: Callable[[], bool] | None = None,
-    allow_new_checkpoint: bool = True,
+    allow_new_checkpoint: bool = False,
 ) -> bool:
     """Fine-tune MOIRAI-2 on the provided outlet series."""
     from uni2ts.model.moirai2 import Moirai2Module

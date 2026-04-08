@@ -194,6 +194,10 @@ def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
     This is the reverse of _sync_checkpoint: on a fresh remote worker the
     local ``output_dir`` is empty, so we pull from the server to resume
     from the last fine-tuned weights instead of starting from scratch.
+
+    Raises RuntimeError on network/rsync failure. We never silently fall
+    back to the base model after a failed pull, because that would
+    overwrite the server's existing checkpoint on the next sync.
     """
     os.makedirs(output_dir, exist_ok=True)
     source = sync_target.rstrip("/") + "/"
@@ -210,12 +214,18 @@ def _pull_checkpoint(output_dir: str, sync_target: str) -> None:
             timeout=1200,
         )
         logger.info("Pull complete.")
-    except FileNotFoundError:
-        logger.warning(
-            "rsync not found — install rsync to enable checkpoint pull",
-        )
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "rsync not found — cannot pull existing checkpoint. Install "
+            "rsync on the worker or unset finetune_sync_target to allow "
+            "training from base model.",
+        ) from e
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-        logger.warning("Pull failed (will start from base model): %s", e)
+        raise RuntimeError(
+            f"Failed to pull existing checkpoint from {sync_target}: {e}. "
+            "Aborting to avoid overwriting the server's checkpoint with a "
+            "model trained from base. Retry once the server is reachable.",
+        ) from e
 
 
 def _sync_checkpoint(output_dir: str, sync_target: str) -> None:
@@ -256,7 +266,7 @@ async def run_finetune(
     should_stop: Callable[[], bool] | None = None,
     sane_check_epochs: int | None = None,
     max_sane_loss: float | None = None,
-    allow_new_checkpoint: bool = True,
+    allow_new_checkpoint: bool = False,
 ) -> dict:
     """Fine-tune TimesFM on the provided outlet series.
 
