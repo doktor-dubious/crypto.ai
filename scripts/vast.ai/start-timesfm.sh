@@ -53,7 +53,9 @@ if .venv/bin/python -c "import torch" 2>/dev/null && \
 fi
 if [ "$NEED_BLACKWELL_TORCH" = "1" ]; then
     echo "Installing torch nightly with cu128 for Blackwell support..."
-    uv pip install --python .venv/bin/python --reinstall-package torch torch nvidia-cusparselt-cu12 --index-url https://download.pytorch.org/whl/nightly/cu128
+    # cusparselt comes from PyPI (not on the pytorch nightly index), so install it first
+    uv pip install --python .venv/bin/python nvidia-cusparselt-cu12
+    uv pip install --python .venv/bin/python --reinstall-package torch torch --index-url https://download.pytorch.org/whl/nightly/cu128
 fi
 
 # Set LD_LIBRARY_PATH for nvidia libs (must run AFTER torch/cusparselt install)
