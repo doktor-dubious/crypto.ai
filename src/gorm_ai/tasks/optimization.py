@@ -383,12 +383,11 @@ async def _run_optimization(
                 sim_record = sim_record_result.scalar_one_or_none()
 
                 if sim_record:
-                    # Use the g-classification profit already computed by
-                    # the simulation engine (respects the full financial
-                    # fallback chain: outlet_financial_dates → price_history
-                    # → outlet_financials → customer_configuration → global).
+                    # Use the Delivered scenario g-classification profit
+                    # (d_g1..d_g4) so the score matches the Delivered
+                    # quantities shown in the exploration UI.
                     score = sum(
-                        getattr(sim_record, f"eo_g{i}") or 0.0
+                        getattr(sim_record, f"d_g{i}") or 0.0
                         for i in range(1, 5)
                     )
                 else:
@@ -411,6 +410,24 @@ async def _run_optimization(
                         metrics["sold_out_pct"] = round(
                             (eo_lost_sale / total_potential) * 100, 2
                         )
+
+            # Fetch prediction accuracy metrics (MAE, RMSE, R²)
+            if sim_result.id:
+                try:
+                    async with task_session() as session:
+                        from gorm_ai.services.simulation import SimulationService
+                        acc_service = SimulationService(session)
+                        acc_stats = await acc_service.get_accuracy_stats(
+                            sim_result.id, column="delivered"
+                        )
+                        if acc_stats:
+                            metrics["mae"] = acc_stats["mae"]
+                            metrics["rmse"] = acc_stats["rmse"]
+                            metrics["r_squared"] = acc_stats["r_squared"]
+                            metrics["mape"] = acc_stats["mape"]
+                            metrics["bias"] = acc_stats["bias"]
+                except Exception as e:
+                    logger.warning("optimization.accuracy_stats_failed", error=str(e))
 
             combo_result = {
                 "combination": combo,

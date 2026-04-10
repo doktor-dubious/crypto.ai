@@ -217,6 +217,7 @@ interface PersistedState {
   name: string
   selectedStrategyId: string | null
   selectedGroupId: string | null
+  delay: number
   enabled: Record<string, boolean>
   rangeParams: Record<string, number>
   startDate: string | null
@@ -247,6 +248,7 @@ export default function ExplorationNewPage() {
   const [name, setName] = useState("")
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [delay, setDelay] = useState(14)
   const [enabled, setEnabled] = useState<Record<string, boolean>>({})
   const [rangeParams, setRangeParams] = useState<Record<string, number>>({})
   const [startDate, setStartDate] = useState<Date | undefined>(undefined)
@@ -260,6 +262,7 @@ export default function ExplorationNewPage() {
       if (saved.name) setName(saved.name)
       if (saved.selectedStrategyId !== undefined) setSelectedStrategyId(saved.selectedStrategyId)
       if (saved.selectedGroupId !== undefined) setSelectedGroupId(saved.selectedGroupId)
+      if (saved.delay !== undefined) setDelay(saved.delay)
       if (saved.enabled) setEnabled(saved.enabled)
       if (saved.rangeParams) setRangeParams(saved.rangeParams)
       setStartDate(parseDate(saved.startDate))
@@ -275,6 +278,7 @@ export default function ExplorationNewPage() {
       name,
       selectedStrategyId,
       selectedGroupId,
+      delay,
       enabled,
       rangeParams,
       startDate: startDate ? startDate.toISOString() : null,
@@ -282,7 +286,7 @@ export default function ExplorationNewPage() {
       worker,
     }
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch {}
-  }, [name, selectedStrategyId, selectedGroupId, enabled, rangeParams, startDate, endDate, worker])
+  }, [name, selectedStrategyId, selectedGroupId, delay, enabled, rangeParams, startDate, endDate, worker])
 
   useEffect(() => {
     if (hydrated) persist()
@@ -376,6 +380,7 @@ export default function ExplorationNewPage() {
       optimize_weekday_profile_correction: !!enabled.optimize_weekday_profile_correction,
       simulation_from: format(startDate, "yyyy-MM-dd"),
       simulation_to: format(endDate, "yyyy-MM-dd"),
+      delay,
       prediction_strategy_id: selectedStrategyId || undefined,
       outlet_group_id: selectedGroupId || undefined,
       worker: worker || undefined,
@@ -394,6 +399,7 @@ export default function ExplorationNewPage() {
     setName("")
     setSelectedStrategyId(null)
     setSelectedGroupId(null)
+    setDelay(14)
     setEnabled({})
     setRangeParams({})
     setStartDate(undefined)
@@ -556,6 +562,22 @@ export default function ExplorationNewPage() {
           </DropdownMenu>
         </div>
       )}
+
+      {/* Delay */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("optimizeDelay" as Parameters<typeof t>[0])}</label>
+          <InfoIcon text={t("optimizeDelayInfo" as Parameters<typeof t>[0])} />
+        </div>
+        <input
+          type="number"
+          min={1}
+          max={90}
+          value={delay}
+          onChange={(e) => setDelay(Math.max(1, Math.min(90, parseInt(e.target.value) || 1)))}
+          className="h-8 w-24 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm tabular-nums"
+        />
+      </div>
 
       {/* Worker */}
       {workers.length > 0 && (

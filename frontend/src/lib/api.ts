@@ -687,6 +687,7 @@ export interface ConfigurationResponse {
   covariate_handling: string
   variation_adjustment: boolean
   variation_history_days: number
+  pad_baseline_window_days: number
   eo_methodology: number
   eo_extrapolation: number
   open_monday: boolean
@@ -738,6 +739,7 @@ export interface CustomerConfigurationResponse {
   covariate_handling: string | null
   variation_adjustment: boolean | null
   variation_history_days: number | null
+  pad_baseline_window_days: number | null
   eo_methodology: number | null
   eo_extrapolation: number | null
   fallback_engine: boolean | null
@@ -1361,6 +1363,7 @@ export interface ConfigurationUpdate {
   covariate_handling?: string | null
   variation_adjustment?: boolean | null
   variation_history_days?: number | null
+  pad_baseline_window_days?: number | null
   open_monday?: boolean | null
   open_tuesday?: boolean | null
   open_wednesday?: boolean | null
@@ -2302,6 +2305,11 @@ export interface OptimizationCombinationResult {
     eo_total_delivered?: number | null
     eo_total_returned?: number | null
     sold_out_pct?: number | null
+    mae?: number | null
+    rmse?: number | null
+    r_squared?: number | null
+    mape?: number | null
+    bias?: number | null
   }
   simulation_id: string | null
   error?: string

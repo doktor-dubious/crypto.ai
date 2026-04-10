@@ -1129,6 +1129,30 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                       <TableHead className="text-right">{t("automatizationSold")}</TableHead>
                       <TableHead className="text-right">{t("automatizationReturned")}</TableHead>
                       <TableHead className="text-right">{t("automatizationSoldOutPct")}</TableHead>
+                      <TableHead className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {t("automatizationMAE")}
+                          <Tooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">Mean Absolute Error — average absolute difference between predicted and actual sales per outlet per day. Lower is better.</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {t("automatizationRMSE")}
+                          <Tooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">Root Mean Squared Error — like MAE but penalizes large errors more heavily. Lower is better.</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {t("automatizationR2")}
+                          <Tooltip><TooltipTrigger asChild><Info className="h-3 w-3 text-muted-foreground cursor-help shrink-0" /></TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">Coefficient of determination — how well predictions explain the variance in actual sales. 1.0 = perfect, 0.0 = no better than the mean. Higher is better.</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </TableHead>
                       <TableHead className="w-20"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1204,6 +1228,15 @@ export function AutomatizationTab({ onOpenOptimize }: AutomatizationTabProps = {
                             {rank > 1 && dSoldOut != null && (
                               <div className="text-[10px] text-muted-foreground">{fmtDelta(dSoldOut, 1)}%</div>
                             )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.mae != null ? m.mae.toFixed(2) : "\u2014"}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.rmse != null ? m.rmse.toFixed(2) : "\u2014"}
+                          </TableCell>
+                          <TableCell className="text-right font-mono align-top">
+                            {m?.r_squared != null ? m.r_squared.toFixed(3) : "\u2014"}
                           </TableCell>
                           <TableCell className="align-top">
                             <Button
