@@ -36,6 +36,7 @@ class ConfigurationUpdate(BaseModel):
     covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    pad_baseline_window_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
     fallback_engine: bool | None = None
@@ -93,6 +94,7 @@ class ConfigurationResponse(BaseModel):
     covariate_handling: str = "external"
     variation_adjustment: bool = False
     variation_history_days: int = 365
+    pad_baseline_window_days: int = 56
     eo_methodology: int = 1
     eo_extrapolation: int = 3
     fallback_engine: bool = False

@@ -68,6 +68,9 @@ class CustomerConfiguration(Base):
     variation_history_days: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )
+    pad_baseline_window_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
     eo_methodology: Mapped[int | None] = mapped_column(
         Integer, nullable=True,
     )  # 1=interpolate, 2=snap; None = inherit

@@ -266,6 +266,8 @@ class SimulationService:
 
         # Load strategy and apply its columns as defaults (request params take precedence)
         strategy_engine_slug: str | None = None
+        finetuned_model: str | None = None
+        finetuned_model_base_path: str | None = None
         if request.prediction_strategy_id:
             strategy = await self._prediction_service._load_strategy(request.prediction_strategy_id)
             if strategy:
@@ -275,12 +277,19 @@ class SimulationService:
                     request = request.model_copy(update=updates)
                 if strategy.prediction_engine:
                     strategy_engine_slug = strategy.prediction_engine.slug
+                    finetuned_model_base_path = strategy.prediction_engine.finetuned_model_path
+                finetuned_model = strategy.finetuned_model
 
         is_same_draw = request.simulation_type == 3
 
         engine_type = await self._resolve_engine(request.customer_id, request.engine, strategy_engine_slug)
-        engine = self.engine_registry.get_engine(engine_type)
-        engine.allow_fallback = await self._prediction_service._resolve_fallback_engine(request.customer_id)
+        allow_fallback = await self._prediction_service._resolve_fallback_engine(request.customer_id)
+        engine = self._prediction_service._resolve_engine_instance(
+            engine_type=engine_type,
+            finetuned_model=finetuned_model,
+            finetuned_model_base_path=finetuned_model_base_path,
+            allow_fallback=allow_fallback,
+        )
         resolved_engine_params = await self._prediction_service._apply_engine_parameters(engine, engine_type.value, request.prediction_strategy_id)
         capabilities = engine.get_capabilities()
 
@@ -370,6 +379,7 @@ class SimulationService:
         weekday_correction = await self._prediction_service._resolve_weekday_correction(request.customer_id)
         weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
         variation_params = await self._prediction_service._resolve_variation_adjustment(request.customer_id)
+        pad_baseline_window_days = await self._prediction_service._resolve_pad_baseline_window_days(request.customer_id)
         covariate_handling = await self._prediction_service._resolve_covariate_handling(request.customer_id)
         active_covariate_types = await self._prediction_service._resolve_active_covariate_types(request.customer_id)
         eo_params = await self._prediction_service._resolve_eo_params(request.customer_id)
@@ -541,6 +551,7 @@ class SimulationService:
                     "covariate_handling": covariate_handling,
                     "active_covariate_types": active_covariate_types,
                     "variation_adjustment": variation_params,
+                    "pad_baseline_window_days": pad_baseline_window_days,
                     "eo_params": eo_params,
                 })
                 batch_outlet_ids.append(outlet_id)
@@ -575,6 +586,7 @@ class SimulationService:
                             "weekday_correction": [False] * 7,
                             "covariate_handling": covariate_handling,
                             "active_covariate_types": active_covariate_types,
+                            "pad_baseline_window_days": pad_baseline_window_days,
                             "eo_params": eo_params,
                         })
                         wo_ids.append(outlet_id)

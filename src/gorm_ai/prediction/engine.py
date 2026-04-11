@@ -3,7 +3,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 
@@ -263,15 +263,25 @@ class PredictionEngine(ABC):
         future_dates: list[date],
         pad_dates: dict[str, set[date]] | None,
         active_covariate_types: set | list | None = None,
+        baseline_window_days: int = 56,
     ) -> np.ndarray:
-        """Compute per-date PAD adjustments as historical mean differences.
+        """Compute per-date PAD adjustments as trend-scaled historical bumps.
 
-        For each PAD type with events in the future window, computes the
-        average sales difference between event days and non-event days in
-        history, then applies that shift only on future event dates.
+        For each PAD type with events in the future window:
+          1. For every historical occurrence, measure the raw bump against a
+             *local* same-weekday baseline (non-PAD days near the event).
+          2. Scale that raw bump by ``current_baseline / local_baseline`` so
+             older bumps are normalized to today's sales level. This corrects
+             for outlets whose underlying volume has trended up or down since
+             the historical event.
+          3. Average the scaled bumps across all historical occurrences and
+             apply to matching future event dates.
 
-        This avoids including PAD as a Ridge regression feature, which
-        distorts the intercept and affects all dates — not just event dates.
+        Both the local historical baseline and the current baseline use the
+        same window length (``baseline_window_days``), restricted to non-PAD
+        dates of the matching weekday. PAD-event days and other-PAD-event days
+        are excluded from baselines so unrelated holidays don't pollute them.
+        Sales-filter dates are already removed upstream.
 
         Returns an array of length len(future_dates) with the total PAD
         adjustment per day (zero on non-event dates).
@@ -298,38 +308,75 @@ class PredictionEngine(ABC):
         for record in historical_data:
             hist_by_date[record["date"]] = float(record["value"])
 
-        # Group non-PAD historical values by weekday for matched baselines.
-        # This avoids over/underestimating PAD effects when the event always
-        # falls on a high- or low-demand day of the week (e.g. Thanksgiving = Thu).
+        # All PAD-event dates across all pad types — excluded from baselines
+        # so unrelated holidays (e.g. Black Friday) don't pollute the
+        # Thanksgiving baseline.
         all_event_dates: set[date] = set()
         for event_dates in pad_dates.values():
             all_event_dates |= event_dates
 
-        normal_by_weekday: dict[int, list[float]] = {}
+        # Current baseline by weekday: mean of non-PAD same-weekday values in
+        # the most recent `baseline_window_days` of history. This represents
+        # "today's level" against which historical bumps are normalized.
+        max_hist_date = max(hist_by_date)
+        current_window_start = max_hist_date - timedelta(days=baseline_window_days)
+        current_by_weekday: dict[int, list[float]] = {}
         for d, v in hist_by_date.items():
+            if d <= current_window_start:
+                continue
             if d in all_event_dates:
                 continue
-            normal_by_weekday.setdefault(d.weekday(), []).append(v)
+            current_by_weekday.setdefault(d.weekday(), []).append(v)
+        current_baseline_by_weekday: dict[int, float] = {
+            wd: float(np.mean(vs)) for wd, vs in current_by_weekday.items() if vs
+        }
 
-        if not normal_by_weekday:
-            return adj
+        # Half-window used for the per-event local baseline. Total span is
+        # `baseline_window_days` (±half on either side of the event), so the
+        # local and current baselines use approximately the same number of
+        # observations per weekday.
+        half_window = max(1, baseline_window_days // 2)
 
-        # Compute per-PAD-type effect using weekday-matched baselines.
-        # For each historical occurrence, the "bump" is computed against the
-        # mean of non-PAD days that share the same weekday.  Average those
-        # bumps across all historical occurrences to get the PAD effect.
+        # Compute per-PAD-type effect.
         for pad_name, event_dates in relevant_pads.items():
-            bumps: list[float] = []
+            scaled_bumps: list[float] = []
             for d in event_dates:
                 if d not in hist_by_date:
                     continue
-                same_weekday_vals = normal_by_weekday.get(d.weekday())
-                if not same_weekday_vals:
+                wd = d.weekday()
+
+                # Local same-weekday baseline around this historical event.
+                local_vals: list[float] = []
+                for offset in range(-half_window, half_window + 1):
+                    nd = d + timedelta(days=offset)
+                    if nd == d or nd in all_event_dates:
+                        continue
+                    if nd.weekday() != wd:
+                        continue
+                    v = hist_by_date.get(nd)
+                    if v is not None:
+                        local_vals.append(v)
+                if not local_vals:
                     continue
-                bumps.append(hist_by_date[d] - float(np.mean(same_weekday_vals)))
-            if not bumps:
+                local_baseline = float(np.mean(local_vals))
+                if local_baseline <= 0:
+                    # Can't scale by trend without a positive denominator;
+                    # skip this occurrence rather than letting it distort.
+                    continue
+
+                raw_bump = hist_by_date[d] - local_baseline
+                current_baseline = current_baseline_by_weekday.get(wd)
+                if current_baseline is None:
+                    # No recent data for this weekday — fall back to the raw
+                    # bump (no trend correction) so we still contribute.
+                    scale = 1.0
+                else:
+                    scale = current_baseline / local_baseline
+                scaled_bumps.append(raw_bump * scale)
+
+            if not scaled_bumps:
                 continue
-            pad_effect = float(np.mean(bumps))
+            pad_effect = float(np.mean(scaled_bumps))
             for idx, fd in enumerate(future_dates):
                 if fd in event_dates:
                     adj[idx] += pad_effect

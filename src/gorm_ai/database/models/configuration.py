@@ -55,6 +55,9 @@ class Configuration(Base):
     variation_history_days: Mapped[int] = mapped_column(
         Integer, default=365, nullable=False,
     )
+    pad_baseline_window_days: Mapped[int] = mapped_column(
+        Integer, default=56, nullable=False,
+    )
     eo_methodology: Mapped[int] = mapped_column(
         Integer, default=1, nullable=False,
     )  # 1=interpolate, 2=snap to nearest quantile

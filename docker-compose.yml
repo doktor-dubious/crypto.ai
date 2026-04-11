@@ -14,13 +14,15 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - CLAUDE_API=${CLAUDE_API}
+      # Override .env's host-path HF_HUB_CACHE with the in-container mount path.
+      - HF_HUB_CACHE=/app/models/huggingface
     group_add:
       - "124"  # docker group GID — grants access to /var/run/docker.sock
     volumes:
       - ./src:/app/src
       - ./alembic:/app/alembic
       - ./log:/app/log
-      - ./models:/app/models:ro
+      - ./models:/app/models
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
@@ -36,6 +38,8 @@ services:
     # Reads simultaneous_tasks from DB config and starts with matching concurrency.
     # Uses prefork pool when concurrency > 1, solo pool for concurrency = 1.
     command: python -m gorm_ai.tasks.worker_entrypoint
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
       - REDIS_URL=redis://redis:6379/0
@@ -46,9 +50,12 @@ services:
       - MKL_NUM_THREADS=4
       - OPENBLAS_NUM_THREADS=4
       - WORKER_NAME=${WORKER_NAME:-local}
+      # Override .env's host-path HF_HUB_CACHE with the in-container mount path.
+      - HF_HUB_CACHE=/app/models/huggingface
     volumes:
       - ./src:/app/src
       - ./log:/app/log
+      - ./models:/app/models
     depends_on:
       db:
         condition: service_healthy

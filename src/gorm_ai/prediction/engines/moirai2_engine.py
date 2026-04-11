@@ -409,6 +409,7 @@ class Moirai2Engine(PredictionEngine):
                 future_dates,
                 items[int(p["key"])].get("pad_dates"),
                 active_covariate_types=items[int(p["key"])].get("active_covariate_types"),
+                baseline_window_days=items[int(p["key"])].get("pad_baseline_window_days", 56),
             )
             if pad_adj.any():
                 mean_vals = mean_vals + pad_adj

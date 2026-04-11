@@ -240,6 +240,7 @@ class AutoGluonEngine(PredictionEngine):
                 "variation_adjustment": item.get("variation_adjustment"),
                 "pad_dates": item.get("pad_dates"),
                 "active_covariate_types": item.get("active_covariate_types"),
+                "pad_baseline_window_days": item.get("pad_baseline_window_days", 56),
             })
 
         # --- Step 2: assemble training TimeSeriesDataFrame ---
@@ -353,6 +354,7 @@ class AutoGluonEngine(PredictionEngine):
                 future_dates,
                 p.get("pad_dates"),
                 active_covariate_types=p.get("active_covariate_types"),
+                baseline_window_days=p.get("pad_baseline_window_days", 56),
             )
 
             day_results = []

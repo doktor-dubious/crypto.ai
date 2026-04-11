@@ -401,6 +401,22 @@ function CoreTab({
         </div>
       )}
 
+      <FieldRow label={t("padBaselineWindowDays")} info={t("padBaselineWindowDaysInfo")}>
+        <Input
+          type="number"
+          min={7}
+          max={365}
+          step={1}
+          value={draft.pad_baseline_window_days != null ? String(draft.pad_baseline_window_days) : (isGorm ? "56" : "")}
+          onChange={(e) => {
+            const v = e.target.value
+            set("pad_baseline_window_days", v === "" ? null : Math.max(7, Math.min(365, parseInt(v, 10) || 56)))
+          }}
+          placeholder={isGorm ? undefined : "—"}
+          className="h-8 text-sm max-w-[140px]"
+        />
+      </FieldRow>
+
       <FieldRow label={t("eoMethodology")} info={t("eoMethodologyInfo")}>
         <select
           value={String(draft.eo_methodology ?? (isGorm ? 1 : ""))}

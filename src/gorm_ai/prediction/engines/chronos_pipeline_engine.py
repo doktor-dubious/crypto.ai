@@ -354,6 +354,7 @@ class ChronosPipelineEngine(PredictionEngine):
                 future_dates,
                 item.get("pad_dates"),
                 active_covariate_types=item.get("active_covariate_types"),
+                baseline_window_days=item.get("pad_baseline_window_days", 56),
             )
             if pad_adj.any():
                 preds = preds + pad_adj

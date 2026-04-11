@@ -17,7 +17,7 @@ COPY pyproject.toml uv.lock* ./
 # Install dependencies including ML extras.
 # EXTRAS can be overridden at build time to swap conflicting engine groups
 # (e.g. "ml kairos chronos" vs "ml flowstate chronos").
-ARG EXTRAS="ml flowstate chronos"
+ARG EXTRAS="ml timesfm chronos"
 RUN set -ex; args=""; for e in $EXTRAS; do args="$args --extra $e"; done; \
     uv sync --frozen --no-dev --no-install-project $args
 

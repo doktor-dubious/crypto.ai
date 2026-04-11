@@ -94,20 +94,12 @@ class PredictionService:
         # Resolve fallback_engine setting
         allow_fallback = await self._resolve_fallback_engine(request.customer_id)
 
-        # When a finetuned model is selected, use the finetuned engine variant
-        # with the specific checkpoint path
-        if finetuned_model and finetuned_model_base_path:
-            import os
-            checkpoint_path = os.path.join(finetuned_model_base_path, finetuned_model)
-            from gorm_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
-            engine = TimesFMFinetunedEngine(
-                checkpoint_path=checkpoint_path,
-                allow_fallback=allow_fallback,
-            )
-            logger.info("Using finetuned model: %s", checkpoint_path)
-        else:
-            engine = self.engine_registry.get_engine(engine_type)
-        engine.allow_fallback = allow_fallback
+        engine = self._resolve_engine_instance(
+            engine_type=engine_type,
+            finetuned_model=finetuned_model,
+            finetuned_model_base_path=finetuned_model_base_path,
+            allow_fallback=allow_fallback,
+        )
         resolved_engine_params = await self._apply_engine_parameters(
             engine, engine_type.value, request.prediction_strategy_id,
         )
@@ -176,6 +168,7 @@ class PredictionService:
         covariate_handling = await self._resolve_covariate_handling(request.customer_id)
         active_covariate_types = await self._resolve_active_covariate_types(request.customer_id)
         variation_params = await self._resolve_variation_adjustment(request.customer_id)
+        pad_baseline_window_days = await self._resolve_pad_baseline_window_days(request.customer_id)
         eo_params = await self._resolve_eo_params(request.customer_id)
 
         # Filter closed-day data from historical series so that engines don't
@@ -246,6 +239,7 @@ class PredictionService:
                 "covariate_handling": covariate_handling,
                 "active_covariate_types": active_covariate_types,
                 "variation_adjustment": variation_params,
+                "pad_baseline_window_days": pad_baseline_window_days,
                 "eo_params": eo_params,
                 **(request.engine_params or {}),
             })
@@ -285,6 +279,7 @@ class PredictionService:
                         "covariates": covariates_by_outlet.get(outlet_id) if request.use_financials else None,
                         "pad_dates": pad_covariates,
                         "weekday_correction": [False] * 7,
+                        "pad_baseline_window_days": pad_baseline_window_days,
                         "eo_params": eo_params,
                     })
                     wo_ids.append(outlet_id)
@@ -1323,6 +1318,28 @@ class PredictionService:
             "history_days": _resolve("variation_history_days", 365),
         }
 
+    async def _resolve_pad_baseline_window_days(self, customer_id: str) -> int:
+        """Resolve PAD baseline window length (days), customer → global → 56."""
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+        if cc and cc.pad_baseline_window_days is not None:
+            return cc.pad_baseline_window_days
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+        if gc is not None and gc.pad_baseline_window_days is not None:
+            return gc.pad_baseline_window_days
+        return 56
+
     async def _resolve_covariate_handling(self, customer_id: str) -> str:
         """Resolve covariate handling mode.
 
@@ -1946,6 +1963,34 @@ class PredictionService:
             logger.info("Applying engine parameters for '%s': %s", engine_slug, params)
             engine.apply_parameters(params)
         return params
+
+    def _resolve_engine_instance(
+        self,
+        engine_type: PredictionEngine,
+        finetuned_model: str | None,
+        finetuned_model_base_path: str | None,
+        allow_fallback: bool,
+    ):
+        """Build the engine instance, honoring a finetuned-model strategy if set.
+
+        When a finetuned model is configured on the strategy, instantiate
+        ``TimesFMFinetunedEngine`` directly with the checkpoint path; otherwise
+        return the registry-cached engine for ``engine_type``. Both branches
+        set ``allow_fallback`` so callers don't have to.
+        """
+        if finetuned_model and finetuned_model_base_path:
+            import os
+            from gorm_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
+            checkpoint_path = os.path.join(finetuned_model_base_path, finetuned_model)
+            engine = TimesFMFinetunedEngine(
+                checkpoint_path=checkpoint_path,
+                allow_fallback=allow_fallback,
+            )
+            logger.info("Using finetuned model: %s", checkpoint_path)
+        else:
+            engine = self.engine_registry.get_engine(engine_type)
+        engine.allow_fallback = allow_fallback
+        return engine
 
     async def _resolve_engine(
         self,

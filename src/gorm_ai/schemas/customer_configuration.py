@@ -39,6 +39,7 @@ class CustomerConfigurationBase(BaseModel):
     covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    pad_baseline_window_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
     fallback_engine: bool | None = None
@@ -97,6 +98,7 @@ class CustomerConfigurationUpdate(BaseModel):
     covariate_handling: str | None = None
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
+    pad_baseline_window_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
     fallback_engine: bool | None = None
