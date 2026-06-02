@@ -243,6 +243,9 @@ class TiRexEngine(PredictionEngine):
             fallback = StatisticalEngine()
             return await fallback.predict_batch(items, horizon, prediction_from, batch_size)
 
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
         # Preprocess each outlet.
         prepared: list[dict] = []
         for item in items:
@@ -311,6 +314,7 @@ class TiRexEngine(PredictionEngine):
                 item.get("pad_dates"),
                 active_covariate_types=item.get("active_covariate_types"),
                 baseline_window_days=item.get("pad_baseline_window_days", 56),
+                history_days=item.get("pad_history_days", 730),
             )
             if pad_adj.any():
                 preds = preds + pad_adj
@@ -364,6 +368,8 @@ class TiRexEngine(PredictionEngine):
                 ))
             output.append(day_results)
 
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
         return output
 
     # -- batch inference (sync, runs in thread pool) -------------------------

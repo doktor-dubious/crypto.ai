@@ -40,6 +40,7 @@ class CustomerConfigurationBase(BaseModel):
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
     pad_baseline_window_days: int | None = None
+    pad_history_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
     fallback_engine: bool | None = None
@@ -56,6 +57,11 @@ class CustomerConfigurationBase(BaseModel):
     insights_worker: str | None = None
     insight_model_id: str | None = None
     insight_submodel_id: str | None = None
+    home_directory: str | None = None
+    upload_directory: str | None = None
+    upload_directory_storage: str | None = None
+    forecast_directory: str | None = None
+    forecast_directory_storage: str | None = None
 
 
 class CustomerConfigurationCreate(CustomerConfigurationBase):
@@ -99,6 +105,7 @@ class CustomerConfigurationUpdate(BaseModel):
     variation_adjustment: bool | None = None
     variation_history_days: int | None = None
     pad_baseline_window_days: int | None = None
+    pad_history_days: int | None = None
     eo_methodology: int | None = None
     eo_extrapolation: int | None = None
     fallback_engine: bool | None = None
@@ -115,6 +122,11 @@ class CustomerConfigurationUpdate(BaseModel):
     insights_worker: str | None = None
     insight_model_id: str | None = None
     insight_submodel_id: str | None = None
+    home_directory: str | None = None
+    upload_directory: str | None = None
+    upload_directory_storage: str | None = None
+    forecast_directory: str | None = None
+    forecast_directory_storage: str | None = None
 
 
 class CustomerConfigurationResponse(CustomerConfigurationBase):

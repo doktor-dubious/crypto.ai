@@ -7,6 +7,7 @@ from gorm_ai.database.models.import_template import ImportTemplate, ImportTempla
 from gorm_ai.schemas.import_template import (
     ImportTemplateCreate,
     ImportTemplateElementCreate,
+    ImportTemplateElementUpdate,
     ImportTemplateUpdate,
 )
 
@@ -40,6 +41,7 @@ class ImportTemplateService:
                 description=elem_data.description,
                 element_index=elem_data.element_index,
                 type=elem_data.type,
+                value_type=elem_data.value_type,
                 allow=elem_data.allow,
                 disallow=elem_data.disallow,
                 allow_empty=elem_data.allow_empty,
@@ -121,6 +123,7 @@ class ImportTemplateService:
             description=data.description,
             element_index=data.element_index,
             type=data.type,
+            value_type=data.value_type,
             allow=data.allow,
             disallow=data.disallow,
             allow_empty=data.allow_empty,
@@ -141,8 +144,80 @@ class ImportTemplateService:
         await self.session.refresh(element)
         return element
 
+    async def update_element(
+        self, element_id: str, data: ImportTemplateElementUpdate
+    ) -> ImportTemplateElement | None:
+        """Update an element's configuration."""
+        result = await self.session.execute(
+            select(ImportTemplateElement).where(
+                ImportTemplateElement.id == element_id,
+                ImportTemplateElement.active.is_(True),
+            )
+        )
+        element = result.scalar_one_or_none()
+        if not element:
+            return None
+
+        update_data = data.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(element, field, value)
+
+        await self.session.flush()
+        await self.session.refresh(element)
+        return element
+
+    async def clone(self, template_id: str, new_name: str) -> ImportTemplate | None:
+        """Duplicate a template along with all of its elements."""
+        source = await self.get(template_id)
+        if not source:
+            return None
+
+        clone = ImportTemplate(
+            customer_id=source.customer_id,
+            name=new_name,
+            description=source.description,
+            move_file=source.move_file,
+            header_lines=source.header_lines,
+            footer_lines=source.footer_lines,
+            separator=source.separator,
+            reset_production_group=source.reset_production_group,
+            add_to_production_group=source.add_to_production_group,
+        )
+        self.session.add(clone)
+        await self.session.flush()
+
+        for elem in source.elements:
+            self.session.add(
+                ImportTemplateElement(
+                    template_id=clone.id,
+                    name=elem.name,
+                    description=elem.description,
+                    element_index=elem.element_index,
+                    type=elem.type,
+                    value_type=elem.value_type,
+                    allow=elem.allow,
+                    disallow=elem.disallow,
+                    allow_empty=elem.allow_empty,
+                    allow_negative=elem.allow_negative,
+                    allow_positive=elem.allow_positive,
+                    allow_zero=elem.allow_zero,
+                    date_format=elem.date_format,
+                    decimal_separator=elem.decimal_separator,
+                    maximum_value=elem.maximum_value,
+                    empty_is_zero=elem.empty_is_zero,
+                    negative_parenthesis=elem.negative_parenthesis,
+                    sequence_separator=elem.sequence_separator,
+                    weekday_start=elem.weekday_start,
+                    strip=elem.strip,
+                )
+            )
+
+        await self.session.flush()
+        await self.session.refresh(clone)
+        return clone
+
     async def remove_element(self, element_id: str) -> bool:
-        """Soft delete an element."""
+        """Hard delete an element (soft delete would leak via relationship)."""
         result = await self.session.execute(
             select(ImportTemplateElement).where(
                 ImportTemplateElement.id == element_id,
@@ -153,7 +228,7 @@ class ImportTemplateService:
         if not element:
             return False
 
-        element.active = False
+        await self.session.delete(element)
         await self.session.flush()
         return True
 

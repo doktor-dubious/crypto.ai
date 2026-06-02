@@ -4,16 +4,21 @@ from fastapi import APIRouter
 
 from gorm_ai.api.routes import (
     analysis,
+    analytics,
     chat,
+    cohort_audit,
+    cohort_investigate,
     configuration,
     configuration_covariates,
     currencies,
     customers,
+    elasticity_events,
     financial_dates,
     fine_tunes,
     finetune_examinations,
     health_check,
     import_templates,
+    imports,
     llms,
     logs,
     optimization,
@@ -40,9 +45,21 @@ from gorm_ai.api.routes import (
 api_router = APIRouter()
 
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
+api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
+api_router.include_router(
+    elasticity_events.router,
+    prefix="/analytics/elasticity-events",
+    tags=["analytics"],
+)
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(
     outlier_investigate.router, prefix="/analysis", tags=["analysis"],
+)
+api_router.include_router(
+    cohort_audit.router, prefix="/analysis", tags=["analysis"],
+)
+api_router.include_router(
+    cohort_investigate.router, prefix="/analysis", tags=["analysis"],
 )
 api_router.include_router(health_check.router, prefix="/health-check", tags=["health-check"])
 api_router.include_router(configuration.router, prefix="/configuration", tags=["configuration"])
@@ -59,6 +76,7 @@ api_router.include_router(currencies.router, prefix="/currencies", tags=["curren
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])
 api_router.include_router(import_templates.router, prefix="/import-templates", tags=["import-templates"])
+api_router.include_router(imports.router, prefix="/imports", tags=["imports"])
 api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
 api_router.include_router(outlets.router, prefix="/outlets", tags=["outlets"])
 api_router.include_router(outlet_groups.router, prefix="/outlet-groups", tags=["outlet-groups"])

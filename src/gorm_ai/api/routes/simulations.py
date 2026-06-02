@@ -93,12 +93,14 @@ async def get_simulation_overview_filtered(
     column: str = "delivered",
     weekdays: list[int] | None = Query(default=None),
     outlet_ids: list[str] | None = Query(default=None),
+    from_date: date | None = None,
+    to_date: date | None = None,
     service: SimulationService = Depends(get_simulation_service),
 ) -> FilteredOverviewResponse:
-    """Get overview stats, optionally filtered by weekday/outlet."""
+    """Get overview stats, optionally filtered by weekday/outlet/date range."""
     result = await service.get_overview_filtered(
         simulation_id, column=column, weekdays=weekdays,
-        outlet_ids=outlet_ids,
+        outlet_ids=outlet_ids, from_date=from_date, to_date=to_date,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Simulation not found")
@@ -305,6 +307,7 @@ async def run_simulation(
 async def run_simulation_async(
     data: SimulationRequest,
     task_service: TaskServiceDep,
+    session: AsyncSession = Depends(get_db),
 ) -> SimulationTaskStatus:
     """Queue a simulation as a background Celery task.
 
@@ -314,6 +317,14 @@ async def run_simulation_async(
 
     from gorm_ai.services.resource_estimator import check_capacity, estimate_task
     from gorm_ai.tasks.simulations import run_simulation_task
+
+    # Validate customer / outlet-group ownership before queuing
+    try:
+        await SimulationService(session)._resolve_outlets(
+            data.customer_id, data.outlet_ids, data.outlet_group_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Pre-flight capacity check
     engine_slug = data.engine or "statistical"

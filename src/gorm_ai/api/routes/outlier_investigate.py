@@ -11,10 +11,8 @@ from sqlalchemy import select
 
 from gorm_ai.api.deps import DbSession
 from gorm_ai.config import get_settings
-from gorm_ai.database.connection import get_session
-from gorm_ai.database.models.llm import Llm
 from gorm_ai.database.models.outlet import Outlet
-from gorm_ai.database.models.token import Token, TokenLlm
+from gorm_ai.services.llm_usage import record_anthropic_usage
 
 router = APIRouter()
 log = structlog.get_logger("gorm_ai.llm")
@@ -34,62 +32,6 @@ class InvestigateRequest(BaseModel):
     day: int
     years: list[int]
     direction: str  # "positive" | "negative"
-
-
-async def _update_token_usage(
-    customer_id: str, total_tokens: int,
-) -> None:
-    """Add tokens used to token and token_llm tables."""
-    async for session in get_session():
-        try:
-            # Find or create Token for customer
-            result = await session.execute(
-                select(Token).where(
-                    Token.customer_id == customer_id,
-                    Token.active.is_(True),
-                )
-            )
-            token = result.scalar_one_or_none()
-            if not token:
-                token = Token(
-                    customer_id=customer_id,
-                    used=0, available=0,
-                )
-                session.add(token)
-                await session.flush()
-
-            # Find Anthropic LLM
-            result = await session.execute(
-                select(Llm).where(Llm.name == "Anthropic")
-            )
-            llm_row = result.scalar_one_or_none()
-            if not llm_row:
-                await session.commit()
-                return
-
-            # Find or create TokenLlm
-            result = await session.execute(
-                select(TokenLlm).where(
-                    TokenLlm.token_id == token.id,
-                    TokenLlm.llm_id == llm_row.id,
-                    TokenLlm.active.is_(True),
-                )
-            )
-            token_llm = result.scalar_one_or_none()
-            if not token_llm:
-                token_llm = TokenLlm(
-                    token_id=token.id,
-                    llm_id=llm_row.id,
-                    used=0, available=0,
-                )
-                session.add(token_llm)
-
-            # Update counts
-            token.used += total_tokens
-            token_llm.used += total_tokens
-            await session.commit()
-        except Exception:
-            await session.rollback()
 
 
 @router.post("/investigate")
@@ -180,8 +122,8 @@ async def investigate_outlier(
         "explanations ranked by probability."
     )
 
-    model = "claude-sonnet-4-20250514"
-    model_tag = "Sonnet 4"
+    model = "claude-sonnet-4-6"
+    model_tag = "Sonnet 4.6"
     llm = log.bind(provider="Claude", model_tag=model_tag)
     llm.info("prompt", text=prompt)
 
@@ -220,12 +162,11 @@ async def investigate_outlier(
                 resp_kwargs["output_tokens"] = (
                     usage_info.output_tokens
                 )
-                total = (
-                    usage_info.input_tokens
-                    + usage_info.output_tokens
-                )
-                await _update_token_usage(
-                    customer_id, total,
+                await record_anthropic_usage(
+                    customer_id,
+                    model,
+                    usage_info.input_tokens,
+                    usage_info.output_tokens,
                 )
             llm.info("response", **resp_kwargs)
 

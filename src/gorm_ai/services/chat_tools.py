@@ -27,6 +27,47 @@ from gorm_ai.database.models.sales import Sales
 
 log = structlog.get_logger("gorm_ai.chat_tools")
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _validate_uuids(field: str, ids: list[str] | None) -> dict | None:
+    """Return a structured error dict if any id is not a valid UUID, else None.
+
+    The error message nudges the model toward calling lookup_entities first
+    instead of passing human-readable names or external IDs.
+    """
+    if not ids:
+        return None
+    bad = [x for x in ids if not (isinstance(x, str) and _UUID_RE.match(x))]
+    if not bad:
+        return None
+    sample = bad[:3]
+    return {
+        "error": (
+            f"Invalid UUID(s) in {field}: {sample}. "
+            "These look like names or external IDs, not UUIDs. "
+            "Call lookup_entities with the name(s) first to get the UUID(s), "
+            "then retry this tool with the resolved UUIDs."
+        ),
+    }
+
+
+def _validate_uuid(field: str, value: str | None) -> dict | None:
+    """Same as _validate_uuids but for a single optional id."""
+    if value is None:
+        return None
+    if isinstance(value, str) and _UUID_RE.match(value):
+        return None
+    return {
+        "error": (
+            f"Invalid UUID for {field}: {value!r}. "
+            "Call lookup_entities first to resolve names/IDs to a UUID."
+        ),
+    }
+
 # ── Claude tool definitions (sent to the API) ────────────────────────────────
 
 TOOL_DEFINITIONS: list[dict] = [
@@ -157,7 +198,12 @@ TOOL_DEFINITIONS: list[dict] = [
         "description": (
             "Search for outlets, outlet groups, or customers by name, city, "
             "state, or other attributes.  Use this to resolve ambiguous "
-            "references in the user's question (e.g. '7/11', 'Burbank')."
+            "references in the user's question (e.g. '7/11', 'Burbank').\n\n"
+            "Returns a `fuzzy_match: true` flag when no literal substring "
+            "match was found and trigram similarity was used as a fallback. "
+            "If results come back empty even after the fuzzy pass, retry "
+            "with a more canonical spelling (e.g. '7-Eleven' for '7/11', "
+            "'McDonald's' for 'McDs') or spell numbers as words."
         ),
         "input_schema": {
             "type": "object",
@@ -319,6 +365,10 @@ class ToolExecutor:
         metric: str,
         outlet_ids: list[str] | None = None,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
+        if err := _validate_uuids("outlet_ids", outlet_ids):
+            return err
         col = getattr(Sales, metric)
         d_from = date.fromisoformat(date_from)
         d_to = date.fromisoformat(date_to)
@@ -413,6 +463,10 @@ class ToolExecutor:
         metric: str,
         outlet_ids: list[str] | None = None,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
+        if err := _validate_uuids("outlet_ids", outlet_ids):
+            return err
         col = getattr(Sales, metric)
 
         async def _period_agg(d_from: str, d_to: str) -> dict:
@@ -462,6 +516,8 @@ class ToolExecutor:
         order: str,
         limit: int = 10,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
         d_from = date.fromisoformat(date_from)
         d_to = date.fromisoformat(date_to)
 
@@ -536,6 +592,10 @@ class ToolExecutor:
         customer_id: str,
         outlet_ids: list[str] | None = None,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
+        if err := _validate_uuids("outlet_ids", outlet_ids):
+            return err
         # Use last_prediction table for latest per-outlet-weekday data.
         stmt = (
             select(
@@ -615,6 +675,10 @@ class ToolExecutor:
         customer_id: str | None = None,
     ) -> dict:
         q = f"%{query}%"
+        # pg_trgm similarity threshold for the fuzzy fallback. 0.3 catches
+        # things like "7-Eleven" for "7/11" or "MacDonalds" for "McDonald's"
+        # without flooding results with unrelated names.
+        similarity_threshold = 0.3
 
         if entity_type == "outlet":
             stmt = (
@@ -632,8 +696,33 @@ class ToolExecutor:
                 stmt = stmt.where(Outlet.customer_id == customer_id)
 
             rows = (await self.db.execute(stmt)).all()
+            fuzzy = False
+            if not rows:
+                # Fuzzy fallback: trigram similarity against name/city
+                sim_expr = func.greatest(
+                    func.similarity(Outlet.name, query),
+                    func.similarity(Outlet.city, query),
+                )
+                fuzzy_stmt = (
+                    select(
+                        Outlet.id, Outlet.name, Outlet.city, Outlet.state,
+                        sim_expr.label("sim"),
+                    )
+                    .where(
+                        Outlet.active.is_(True),
+                        sim_expr >= similarity_threshold,
+                    )
+                    .order_by(sim_expr.desc())
+                    .limit(20)
+                )
+                if customer_id:
+                    fuzzy_stmt = fuzzy_stmt.where(Outlet.customer_id == customer_id)
+                rows = (await self.db.execute(fuzzy_stmt)).all()
+                fuzzy = bool(rows)
+
             return {
                 "entity_type": "outlet",
+                "fuzzy_match": fuzzy,
                 "results": [
                     {"id": r.id, "name": r.name, "city": r.city, "state": r.state}
                     for r in rows
@@ -653,8 +742,29 @@ class ToolExecutor:
                 stmt = stmt.where(OutletGroup.customer_id == customer_id)
 
             rows = (await self.db.execute(stmt)).all()
+            fuzzy = False
+            if not rows:
+                sim_expr = func.similarity(OutletGroup.name, query)
+                fuzzy_stmt = (
+                    select(
+                        OutletGroup.id, OutletGroup.name, OutletGroup.description,
+                        sim_expr.label("sim"),
+                    )
+                    .where(
+                        OutletGroup.active.is_(True),
+                        sim_expr >= similarity_threshold,
+                    )
+                    .order_by(sim_expr.desc())
+                    .limit(20)
+                )
+                if customer_id:
+                    fuzzy_stmt = fuzzy_stmt.where(OutletGroup.customer_id == customer_id)
+                rows = (await self.db.execute(fuzzy_stmt)).all()
+                fuzzy = bool(rows)
+
             return {
                 "entity_type": "outlet_group",
+                "fuzzy_match": fuzzy,
                 "results": [
                     {"id": r.id, "name": r.name, "description": r.description}
                     for r in rows
@@ -671,8 +781,24 @@ class ToolExecutor:
                 .limit(20)
             )
             rows = (await self.db.execute(stmt)).all()
+            fuzzy = False
+            if not rows:
+                sim_expr = func.similarity(Customer.name, query)
+                fuzzy_stmt = (
+                    select(Customer.id, Customer.name, sim_expr.label("sim"))
+                    .where(
+                        Customer.active.is_(True),
+                        sim_expr >= similarity_threshold,
+                    )
+                    .order_by(sim_expr.desc())
+                    .limit(20)
+                )
+                rows = (await self.db.execute(fuzzy_stmt)).all()
+                fuzzy = bool(rows)
+
             return {
                 "entity_type": "customer",
+                "fuzzy_match": fuzzy,
                 "results": [{"id": r.id, "name": r.name} for r in rows],
             }
 
@@ -684,6 +810,8 @@ class ToolExecutor:
         self,
         outlet_ids: list[str],
     ) -> dict:
+        if err := _validate_uuids("outlet_ids", outlet_ids):
+            return err
         stmt = (
             select(
                 Outlet.id, Outlet.name, Outlet.ext_id,
@@ -718,6 +846,8 @@ class ToolExecutor:
         self,
         customer_id: str,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
         schema = _get_schema_description()
 
         # Fetch outlet_info keys for this customer
@@ -764,6 +894,8 @@ class ToolExecutor:
     # ── run_query ─────────────────────────────────────────────────────────
 
     async def _tool_run_query(self, customer_id: str, sql: str) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
         # Enforce customer scope
         if self.allowed_customer_id and customer_id != self.allowed_customer_id:
             return {"error": "Access denied: wrong customer_id."}
@@ -834,6 +966,12 @@ class ToolExecutor:
         outlet_ids: list[str] | None = None,
         outlet_group_id: str | None = None,
     ) -> dict:
+        if err := _validate_uuid("customer_id", customer_id):
+            return err
+        if err := _validate_uuids("outlet_ids", outlet_ids):
+            return err
+        if err := _validate_uuid("outlet_group_id", outlet_group_id):
+            return err
         if self.allowed_customer_id and customer_id != self.allowed_customer_id:
             return {"error": "Access denied: wrong customer_id."}
 

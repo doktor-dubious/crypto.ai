@@ -12,11 +12,17 @@ router = APIRouter()
 
 
 class TokenLlmResponse(BaseModel):
-    """Per-LLM token usage."""
+    """Per-(LLM provider, model) token usage. `model_name` is null for
+    legacy rows written before per-model tracking was added.
+    `input_used` and `output_used` are 0 on rows written before the
+    input/output split was added; `used` is the sum either way."""
 
     llm_id: str
     llm_name: str
+    model_name: str | None = None
     used: int
+    input_used: int = 0
+    output_used: int = 0
     available: int
 
 
@@ -72,7 +78,10 @@ async def get_token_usage(
             TokenLlmResponse(
                 llm_id=tl.llm_id,
                 llm_name=tl.llm.name if tl.llm else "Unknown",
+                model_name=tl.model_name,
                 used=tl.used,
+                input_used=tl.input_used,
+                output_used=tl.output_used,
                 available=tl.available,
             )
             for tl in token.llms

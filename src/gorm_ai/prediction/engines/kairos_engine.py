@@ -264,6 +264,9 @@ class KairosEngine(PredictionEngine):
         if not self._model_loaded:
             self._load_model()
 
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
         if self._model is None:
             if not self.allow_fallback:
                 raise RuntimeError("Kairos model failed to load and engine fallback is disabled")
@@ -340,6 +343,7 @@ class KairosEngine(PredictionEngine):
                 item.get("pad_dates"),
                 active_covariate_types=item.get("active_covariate_types"),
                 baseline_window_days=item.get("pad_baseline_window_days", 56),
+                history_days=item.get("pad_history_days", 730),
             )
             if pad_adj.any():
                 preds = preds + pad_adj
@@ -393,6 +397,8 @@ class KairosEngine(PredictionEngine):
                 ))
             output.append(day_results)
 
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
         return output
 
     # -- batch inference (sync, runs in thread pool) -------------------------

@@ -32,6 +32,7 @@ const ROUTE_TITLE_MAP: Record<string, string> = {
   "/pads/predefined": "predefinedPads",
   "/financials/date-override": "financialsDateOverride",
   "/financials/price-history": "financialsPriceHistory",
+  "/financials/pricing-analytics": "financialsPricingAnalytics",
   "/financials/bulk-update": "financialsBulkUpdate",
   "/outlet-groups": "outletGroups",
   "/prediction-adjustments": "predictionAdjustments",

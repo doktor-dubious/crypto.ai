@@ -1,6 +1,13 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo } from "react"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import {
+  SimulationParametersForm,
+  buildParametersPayload,
+  DEFAULT_PARAMS_STATE,
+  type ParametersState,
+} from "@/components/simulations/parameters-form"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -196,6 +203,17 @@ export default function SimulationsNewPage() {
   const [startDate, setStartDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "startDate", null); return v ? new Date(v) : undefined })
   const [endDate, setEndDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "endDate", null); return v ? new Date(v) : undefined })
   const [worker, setWorker] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<"simulation" | "parameters">("simulation")
+  const [parameters, setParameters] = useState<ParametersState>(
+    () => loadSimNJson<ParametersState>(cid, "parameters", DEFAULT_PARAMS_STATE),
+  )
+  const tabsListRef = useRef<HTMLDivElement>(null)
+  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
+  useEffect(() => {
+    if (!tabsListRef.current) return
+    const el = tabsListRef.current.querySelector("[data-state='active']") as HTMLElement | null
+    if (el) setIndicatorStyle({ left: el.offsetLeft, width: el.offsetWidth })
+  }, [activeTab])
 
   const { data: allWorkers = [] } = useQuery({
     queryKey: ["workers"],
@@ -251,6 +269,7 @@ export default function SimulationsNewPage() {
   useEffect(() => { if (cid) saveSimNJson(cid, "outletGroupId", outletGroupId) }, [cid, outletGroupId])
   useEffect(() => { if (cid) saveSimNJson(cid, "startDate", startDate?.toISOString() ?? null) }, [cid, startDate])
   useEffect(() => { if (cid) saveSimNJson(cid, "endDate", endDate?.toISOString() ?? null) }, [cid, endDate])
+  useEffect(() => { if (cid) saveSimNJson(cid, "parameters", parameters) }, [cid, parameters])
 
   const prevCidRef = useRef(cid)
   useEffect(() => {
@@ -265,6 +284,7 @@ export default function SimulationsNewPage() {
       setStartDate(sd ? new Date(sd) : undefined)
       const ed = loadSimNJson<string | null>(cid, "endDate", null)
       setEndDate(ed ? new Date(ed) : undefined)
+      setParameters(loadSimNJson<ParametersState>(cid, "parameters", DEFAULT_PARAMS_STATE))
     }
     prevCidRef.current = cid
   }, [cid])
@@ -318,6 +338,7 @@ export default function SimulationsNewPage() {
       prediction_strategy_id: strategyId,
       outlet_group_id: resolvedGroupId || undefined,
       worker: worker || undefined,
+      parameters: buildParametersPayload(parameters),
     })
     if (!name.trim()) setName(resolvedName)
   }
@@ -331,6 +352,7 @@ export default function SimulationsNewPage() {
     setOutletGroupId(null) // null = restore to customer config default
     setStartDate(undefined)
     setEndDate(undefined)
+    setParameters(DEFAULT_PARAMS_STATE)
   }
 
   function handleStartSelect(d: Date) {
@@ -345,8 +367,23 @@ export default function SimulationsNewPage() {
     ? differenceInCalendarDays(endDate, startDate) + 1
     : null
 
+  const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
+
   return (
-    <div className="max-w-5xl px-6 py-6 flex flex-col gap-8">
+    <div className="max-w-5xl px-6 py-6 flex flex-col gap-6">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "simulation" | "parameters")} className="flex flex-col gap-0">
+        <div className="relative w-full">
+          <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+            <TabsTrigger value="simulation" className={TAB_CLASS}>{t("tabSimulation")}</TabsTrigger>
+            <TabsTrigger value="parameters" className={TAB_CLASS}>{t("tabParameters")}</TabsTrigger>
+          </TabsList>
+          <div
+            className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
+            style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
+          />
+        </div>
+
+        <TabsContent value="simulation" className="mt-6">
 
       {/* ── Fields ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-4">
@@ -579,6 +616,12 @@ export default function SimulationsNewPage() {
         )}
       </div>
 
+        </TabsContent>
+
+        <TabsContent value="parameters" className="mt-6">
+          <SimulationParametersForm state={parameters} onChange={setParameters} />
+        </TabsContent>
+      </Tabs>
 
       {/* ── Actions ────────────────────────────────────────────────────────── */}
       <div className="flex justify-end gap-2">

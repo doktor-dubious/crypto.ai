@@ -52,7 +52,13 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
         def _should_stop() -> bool:
             return is_stop_requested(task_id)
 
-        async def _on_progress(progress: int, message: str) -> None:
+        # Heartbeat: long chunks (e.g. Moirai @ 60+ min) emit progress less
+        # often than the orphan detector's 10-min stale_seconds, so a busy
+        # solo-pool worker looks dead and gets marked 'Worker lost'. Re-emit
+        # the latest progress every 60s to keep updated_at fresh.
+        last_progress: list[tuple[int, str]] = []  # list as nonlocal-friendly box
+
+        async def _persist_progress(progress: int, message: str) -> None:
             from gorm_ai.tasks.celery_app import get_current_metrics, refresh_worker_registry
             refresh_worker_registry()
             async with task_session() as s:
@@ -63,24 +69,46 @@ async def _run_simulation_async(task_id: str, request_data: dict, hostname: str 
                     await ts.update_resource_metrics(task_id, peak_mem, cpu_time)
                 await s.commit()
 
-        async with task_session() as session:
-            service = SimulationService(session)
-            if resume_simulation_id:
-                result = await service.resume_simulation(
-                    resume_simulation_id, task_id=task_id, on_progress=_on_progress,
-                    should_stop=_should_stop,
-                )
-            else:
-                if isinstance(request_data.get("simulation_from"), str):
-                    request_data["simulation_from"] = date.fromisoformat(request_data["simulation_from"])
-                if isinstance(request_data.get("simulation_to"), str):
-                    request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
-                request = SimulationRequest(**request_data)
-                result = await service.run_simulation(
-                    request, task_id=task_id, on_progress=_on_progress,
-                    should_stop=_should_stop,
-                )
-            await session.commit()
+        async def _on_progress(progress: int, message: str) -> None:
+            last_progress[:] = [(progress, message)]
+            await _persist_progress(progress, message)
+
+        async def _heartbeat() -> None:
+            while True:
+                await asyncio.sleep(60)
+                if last_progress:
+                    try:
+                        await _persist_progress(*last_progress[0])
+                    except Exception:
+                        pass
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
+
+        try:
+            async with task_session() as session:
+                service = SimulationService(session)
+                if resume_simulation_id:
+                    result = await service.resume_simulation(
+                        resume_simulation_id, task_id=task_id, on_progress=_on_progress,
+                        should_stop=_should_stop,
+                    )
+                else:
+                    if isinstance(request_data.get("simulation_from"), str):
+                        request_data["simulation_from"] = date.fromisoformat(request_data["simulation_from"])
+                    if isinstance(request_data.get("simulation_to"), str):
+                        request_data["simulation_to"] = date.fromisoformat(request_data["simulation_to"])
+                    request = SimulationRequest(**request_data)
+                    result = await service.run_simulation(
+                        request, task_id=task_id, on_progress=_on_progress,
+                        should_stop=_should_stop,
+                    )
+                await session.commit()
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
         was_stopped = is_stop_requested(task_id)
         clear_stop_flag(task_id)

@@ -10,18 +10,16 @@ import json
 
 import anthropic
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gorm_ai.database.connection import get_session
 from gorm_ai.database.models.chat import ChatMessage, ChatSession
-from gorm_ai.database.models.customer import Customer
 from gorm_ai.database.models.configuration import Configuration
+from gorm_ai.database.models.customer import Customer
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
-from gorm_ai.database.models.llm import Llm
 from gorm_ai.database.models.outlet import Outlet
 from gorm_ai.database.models.outlet_group import OutletGroup
-from gorm_ai.database.models.token import Token, TokenLlm
+from gorm_ai.database.models.outlet_info import OutletInfo
 from gorm_ai.schemas.chat import (
     ChartConfig,
     ChartSeries,
@@ -29,12 +27,26 @@ from gorm_ai.schemas.chat import (
     ChatSendResponse,
     OutletRef,
 )
-from gorm_ai.services.chat_tools import TOOL_DEFINITIONS, ToolExecutor
+from gorm_ai.services.chat_tools import (
+    TOOL_DEFINITIONS,
+    ToolExecutor,
+    _get_schema_description,
+)
+from gorm_ai.services.llm_usage import record_anthropic_usage
 
 log = structlog.get_logger("gorm_ai.chat")
 
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOOL_ROUNDS = 6  # keep token usage manageable
+
+# Tool definitions are static and sent on every round of the tool-use loop.
+# Add a cache_control breakpoint on the last tool so Anthropic caches the
+# whole tools array — big win since each round otherwise resends ~all tool
+# schemas verbatim.
+CACHED_TOOLS: list[dict] = [
+    *TOOL_DEFINITIONS[:-1],
+    {**TOOL_DEFINITIONS[-1], "cache_control": {"type": "ephemeral"}},
+]
 
 
 DEFAULT_INSIGHTS_PROMPT = """\
@@ -50,24 +62,28 @@ def _build_system_prompt(
     customer_id: str,
     customer_name: str,
     outlet_groups: list[dict],
+    outlet_info_keys: list[dict],
     custom_prompt: str | None = None,
     hidden_prompt: str | None = None,
-) -> str:
+) -> list[dict]:
+    """Return the system prompt as Anthropic content blocks with a cache breakpoint.
+
+    The stable block (persona + customer + rules) carries cache_control so
+    Anthropic caches it across the tool-use loop and across turns in a
+    session. The dynamic block (current date/time) is appended uncached.
+    """
     groups_text = "\n".join(
         f"  - {g['name']} (id: {g['id']})" for g in outlet_groups
     ) or "  (none)"
 
-    from datetime import datetime, UTC
-    now = datetime.now(UTC)
+    info_keys_text = "\n".join(
+        f"  - {k['key']} ({k['outlet_count']} outlets)" for k in outlet_info_keys
+    ) or "  (none)"
 
     persona = custom_prompt.strip() if custom_prompt else DEFAULT_INSIGHTS_PROMPT
 
-    return f"""\
+    stable = f"""\
 {persona}
-
-## Current date and time
-Today is {now.strftime("%A, %B %d, %Y")}. The current year is {now.year}. \
-Current time is {now.strftime("%H:%M")} UTC.
 
 ## Current customer
 ID: {customer_id}
@@ -79,10 +95,30 @@ require customer_id. Never pass a customer name as customer_id.
 ## Available outlet groups
 {groups_text}
 
+## Database schema
+The full database schema is provided below — you do NOT need to call \
+get_database_schema unless you need it for debugging. When writing SQL \
+via run_query, use the tables and columns listed here. All tables have \
+`id`, `active`, `created_at`, `updated_at`. Always filter by \
+`active = true` and (where applicable) `customer_id`.
+
+{_get_schema_description()}
+
+### outlet_info keys for this customer
+{info_keys_text}
+
 ## Important rules
 1. ALWAYS use the lookup_entities tool first when the user mentions an \
 outlet, city, region, or group by name — you need the UUID before you \
-can query data.
+can query data. Do not pass outlet names, store numbers, or external IDs \
+where a UUID is required; the tool will reject them.
+   - If lookup_entities returns no results, retry with common variants \
+before telling the user nothing was found: spell numbers as words or \
+vice versa (7/11 → 7-Eleven, 7-Eleven → Seven Eleven), swap punctuation \
+(/, -, space, none), strip apostrophes (McD's → McDs), or try the chain's \
+canonical name. The tool also runs a trigram fuzzy fallback automatically; \
+when it returns `fuzzy_match: true`, treat the results as suggestions \
+and confirm with the user if any look uncertain.
 2. Use query_sales_summary, compare_periods, or get_top_outlets to \
 answer questions about historical sales.
 3. Use get_prediction_summary to answer questions about future demand / \
@@ -125,6 +161,20 @@ OUTLETS_JSON::[{{"outlet_id":"...","name":"...","city":"...","value":123,"value_
 8. Keep answers concise. Use bullet points for lists.
 {_hidden_section(hidden_prompt)}"""
 
+    from datetime import datetime, UTC
+    now = datetime.now(UTC)
+    dynamic = (
+        "## Current date and time\n"
+        f"Today is {now.strftime('%A, %B %d, %Y')}. "
+        f"The current year is {now.year}. "
+        f"Current time is {now.strftime('%H:%M')} UTC."
+    )
+
+    return [
+        {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": dynamic},
+    ]
+
 
 def _hidden_section(hidden_prompt: str | None) -> str:
     if hidden_prompt and hidden_prompt.strip():
@@ -159,6 +209,7 @@ class ChatService:
             raise ValueError(f"Customer not found: {customer_id}")
 
         outlet_groups = await self._get_outlet_groups(customer_id)
+        outlet_info_keys = await self._get_outlet_info_keys(customer_id)
         custom_prompt, hidden_prompt = await self._get_insights_prompts(customer_id)
 
         # 2. Get or create session
@@ -179,7 +230,10 @@ class ChatService:
         messages = await self._build_messages(session, message)
 
         # 5. Call Claude in a tool-use loop
-        system = _build_system_prompt(customer_id, customer.name, outlet_groups, custom_prompt, hidden_prompt)
+        system = _build_system_prompt(
+            customer_id, customer.name, outlet_groups, outlet_info_keys,
+            custom_prompt, hidden_prompt,
+        )
         assistant_text, chart, outlets, total_tokens = await self._run_conversation(
             system, messages, customer_id,
         )
@@ -215,8 +269,12 @@ class ChatService:
 
         # 8. Track token usage
         if total_tokens.get("input") or total_tokens.get("output"):
-            total = (total_tokens.get("input") or 0) + (total_tokens.get("output") or 0)
-            await self._update_token_usage(customer_id, total)
+            await record_anthropic_usage(
+                customer_id,
+                MODEL,
+                total_tokens.get("input") or 0,
+                total_tokens.get("output") or 0,
+            )
 
         return ChatSendResponse(
             session_id=session.id,
@@ -252,6 +310,7 @@ class ChatService:
             return
 
         outlet_groups = await self._get_outlet_groups(customer_id)
+        outlet_info_keys = await self._get_outlet_info_keys(customer_id)
         custom_prompt, hidden_prompt = await self._get_insights_prompts(customer_id)
 
         session = await self._get_or_create_session(
@@ -266,7 +325,8 @@ class ChatService:
 
         messages = await self._build_messages(session, message)
         system_prompt = _build_system_prompt(
-            customer_id, customer.name, outlet_groups, custom_prompt, hidden_prompt,
+            customer_id, customer.name, outlet_groups, outlet_info_keys,
+            custom_prompt, hidden_prompt,
         )
 
         # 5. Run conversation with streaming
@@ -281,7 +341,7 @@ class ChatService:
                     model=MODEL,
                     max_tokens=4096,
                     system=system_prompt,
-                    tools=TOOL_DEFINITIONS,
+                    tools=CACHED_TOOLS,
                     messages=messages,
                 )
             except anthropic.RateLimitError:
@@ -431,7 +491,9 @@ class ChatService:
         await self.db.refresh(assistant_msg)
 
         if total_input or total_output:
-            await self._update_token_usage(customer_id, total_input + total_output)
+            await record_anthropic_usage(
+                customer_id, MODEL, total_input, total_output,
+            )
 
         # Send done event with metadata
         yield f"event: done\ndata: {json.dumps({'session_id': session.id, 'message_id': assistant_msg.id})}\n\n"
@@ -452,7 +514,7 @@ class ChatService:
                     model=MODEL,
                     max_tokens=4096,
                     system=system,
-                    tools=TOOL_DEFINITIONS,
+                    tools=CACHED_TOOLS,
                     messages=messages,
                 )
             except anthropic.RateLimitError as exc:
@@ -742,6 +804,22 @@ class ChatService:
         )
         return [{"id": r.id, "name": r.name} for r in result.all()]
 
+    async def _get_outlet_info_keys(self, customer_id: str) -> list[dict]:
+        """Return distinct outlet_info keys and their outlet coverage for this customer."""
+        stmt = (
+            select(OutletInfo.key, func.count().label("cnt"))
+            .join(Outlet, Outlet.id == OutletInfo.outlet_id)
+            .where(
+                Outlet.customer_id == customer_id,
+                Outlet.active.is_(True),
+                OutletInfo.active.is_(True),
+            )
+            .group_by(OutletInfo.key)
+            .order_by(func.count().desc())
+        )
+        rows = (await self.db.execute(stmt)).all()
+        return [{"key": r.key, "outlet_count": r.cnt} for r in rows]
+
     async def _get_or_create_session(
         self,
         customer_id: str,
@@ -767,52 +845,3 @@ class ChatService:
         await self.db.flush()
         return session
 
-    async def _update_token_usage(
-        self, customer_id: str, total_tokens: int,
-    ) -> None:
-        """Track token usage in token/token_llm tables."""
-        async for session in get_session():
-            try:
-                result = await session.execute(
-                    select(Token).where(
-                        Token.customer_id == customer_id,
-                        Token.active.is_(True),
-                    )
-                )
-                token = result.scalar_one_or_none()
-                if not token:
-                    token = Token(
-                        customer_id=customer_id, used=0, available=0,
-                    )
-                    session.add(token)
-                    await session.flush()
-
-                result = await session.execute(
-                    select(Llm).where(Llm.name == "Anthropic")
-                )
-                llm_row = result.scalar_one_or_none()
-                if not llm_row:
-                    await session.commit()
-                    return
-
-                result = await session.execute(
-                    select(TokenLlm).where(
-                        TokenLlm.token_id == token.id,
-                        TokenLlm.llm_id == llm_row.id,
-                        TokenLlm.active.is_(True),
-                    )
-                )
-                token_llm = result.scalar_one_or_none()
-                if not token_llm:
-                    token_llm = TokenLlm(
-                        token_id=token.id,
-                        llm_id=llm_row.id,
-                        used=0, available=0,
-                    )
-                    session.add(token_llm)
-
-                token.used += total_tokens
-                token_llm.used += total_tokens
-                await session.commit()
-            except Exception:
-                await session.rollback()

@@ -238,6 +238,9 @@ class TimesFMEngine(PredictionEngine):
         if self._model is None:
             return await super().predict_batch(items, horizon, prediction_from)
 
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
         # Preprocess each outlet with its own DataPreprocessor (stateful min/max).
         prepared: list[dict] = []
         for item in items:
@@ -307,6 +310,7 @@ class TimesFMEngine(PredictionEngine):
                 item.get("pad_dates"),
                 active_covariate_types=item.get("active_covariate_types"),
                 baseline_window_days=item.get("pad_baseline_window_days", 56),
+                history_days=item.get("pad_history_days", 730),
             )
             if pad_adj.any():
                 preds = preds + pad_adj
@@ -360,6 +364,8 @@ class TimesFMEngine(PredictionEngine):
                 ))
             output.append(day_results)
 
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
         return output
 
     @staticmethod

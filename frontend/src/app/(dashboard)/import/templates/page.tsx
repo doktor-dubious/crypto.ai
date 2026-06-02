@@ -1,14 +1,20 @@
 "use client"
 
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, useCallback } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
-  Search, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Plus, GripVertical,
+  Search, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Plus,
+  Settings, ListFilter, X, Copy, GripVertical, Focus,
 } from "lucide-react"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
+import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
@@ -26,11 +32,13 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import { useCustomer } from "@/components/providers/customer-provider"
-import { useLock } from "@/components/providers/lock-provider"
 import {
   importTemplatesApi,
   type ImportTemplateResponse,
+  type ImportTemplateElementResponse,
   type ImportTemplateUpdate,
+  type ImportTemplateElementUpdate,
+  type ImportTemplateElementCreate,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -40,38 +48,140 @@ import { toast } from "sonner"
 const ITEMS_PER_PAGE = 10
 type SortField = "name" | "separator" | "starred"
 
-// ─── Available element types (right-side palette) ─────────────────────────────
+type Section =
+  | "miscellaneous"
+  | "distribution"
+  | "outletDetails"
+  | "outletInstructions"
+  | "userDefined"
 
-interface AvailableElement {
+interface AvailableField {
   type: string
   labelKey: string
-  column: "miscellaneous" | "distribution" | "accountInfo"
+  section: Section
+  weekdayStart?: number
 }
 
-const AVAILABLE_ELEMENTS: AvailableElement[] = [
-  // Miscellaneous
-  { type: "unused", labelKey: "elementUnused", column: "miscellaneous" },
-  { type: "account_id", labelKey: "elementAccountId", column: "miscellaneous" },
-  // Distribution
-  { type: "date", labelKey: "elementDate", column: "distribution" },
-  { type: "delivery_quantity", labelKey: "elementDeliveryQuantity", column: "distribution" },
-  { type: "delivery_adjustment", labelKey: "elementDeliveryAdjustment", column: "distribution" },
-  { type: "sold", labelKey: "elementSold", column: "distribution" },
-  { type: "scan", labelKey: "elementScan", column: "distribution" },
-  { type: "return", labelKey: "elementReturn", column: "distribution" },
-  { type: "delivery_sequence", labelKey: "elementDeliverySequence", column: "distribution" },
-  { type: "sold_sequence", labelKey: "elementSoldSequence", column: "distribution" },
-  { type: "scan_sequence", labelKey: "elementScanSequence", column: "distribution" },
-  { type: "return_sequence", labelKey: "elementReturnSequence", column: "distribution" },
-  // Account Info
-  { type: "name", labelKey: "elementName", column: "accountInfo" },
-  { type: "address", labelKey: "elementAddress", column: "accountInfo" },
-  { type: "zip", labelKey: "elementZip", column: "accountInfo" },
-  { type: "state", labelKey: "elementState", column: "accountInfo" },
-  { type: "country", labelKey: "elementCountry", column: "accountInfo" },
+const WEEKDAYS: [string, string, string][] = [
+  // [day-english, Open-key, Fixed-key, Min-key] — 4 entries, handled below
+  ["Monday", "elementMondayOpen", "elementMondayFixed"],
+  ["Tuesday", "elementTuesdayOpen", "elementTuesdayFixed"],
+  ["Wednesday", "elementWednesdayOpen", "elementWednesdayFixed"],
+  ["Thursday", "elementThursdayOpen", "elementThursdayFixed"],
+  ["Friday", "elementFridayOpen", "elementFridayFixed"],
+  ["Saturday", "elementSaturdayOpen", "elementSaturdayFixed"],
+  ["Sunday", "elementSundayOpen", "elementSundayFixed"],
 ]
 
+function buildWeekdayFields(): AvailableField[] {
+  const out: AvailableField[] = []
+  const openKeys = [
+    "elementMondayOpen", "elementTuesdayOpen", "elementWednesdayOpen",
+    "elementThursdayOpen", "elementFridayOpen", "elementSaturdayOpen", "elementSundayOpen",
+  ]
+  const fixedKeys = [
+    "elementMondayFixed", "elementTuesdayFixed", "elementWednesdayFixed",
+    "elementThursdayFixed", "elementFridayFixed", "elementSaturdayFixed", "elementSundayFixed",
+  ]
+  const minKeys = [
+    "elementMondayMinimum", "elementTuesdayMinimum", "elementWednesdayMinimum",
+    "elementThursdayMinimum", "elementFridayMinimum", "elementSaturdayMinimum", "elementSundayMinimum",
+  ]
+  for (let d = 1; d <= 7; d++) {
+    out.push({ type: "weekday_open", labelKey: openKeys[d - 1], section: "outletInstructions", weekdayStart: d })
+  }
+  for (let d = 1; d <= 7; d++) {
+    out.push({ type: "weekday_fixed", labelKey: fixedKeys[d - 1], section: "outletInstructions", weekdayStart: d })
+  }
+  for (let d = 1; d <= 7; d++) {
+    out.push({ type: "weekday_minimum", labelKey: minKeys[d - 1], section: "outletInstructions", weekdayStart: d })
+  }
+  return out
+}
+void WEEKDAYS
+
+const AVAILABLE_FIELDS: AvailableField[] = [
+  // Miscellaneous
+  { type: "unused", labelKey: "elementUnused", section: "miscellaneous" },
+  { type: "account_id", labelKey: "elementAccountId", section: "miscellaneous" },
+
+  // Distribution
+  { type: "date", labelKey: "elementDate", section: "distribution" },
+  { type: "quantity", labelKey: "elementQuantity", section: "distribution" },
+  { type: "quantity_adjustment", labelKey: "elementQuantityAdjustment", section: "distribution" },
+  { type: "sold_net", labelKey: "elementSoldNet", section: "distribution" },
+  { type: "sold_scan", labelKey: "elementSoldScan", section: "distribution" },
+  { type: "return", labelKey: "elementReturn", section: "distribution" },
+  { type: "shrinkage", labelKey: "elementShrinkage", section: "distribution" },
+  { type: "quantity_sequence", labelKey: "elementQuantitySequence", section: "distribution" },
+
+  // Outlet Details
+  { type: "name", labelKey: "elementName", section: "outletDetails" },
+  { type: "description", labelKey: "elementDescription", section: "outletDetails" },
+  { type: "address", labelKey: "elementAddress", section: "outletDetails" },
+  { type: "zip", labelKey: "elementZip", section: "outletDetails" },
+  { type: "city", labelKey: "elementCity", section: "outletDetails" },
+  { type: "state", labelKey: "elementState", section: "outletDetails" },
+  { type: "country", labelKey: "elementCountry", section: "outletDetails" },
+  { type: "start_date", labelKey: "elementStartDate", section: "outletDetails" },
+  { type: "end_date", labelKey: "elementEndDate", section: "outletDetails" },
+
+  // Outlet Instructions
+  { type: "weekday", labelKey: "elementWeekday", section: "outletInstructions" },
+  { type: "open", labelKey: "elementOpen", section: "outletInstructions" },
+  { type: "cost", labelKey: "elementCost", section: "outletInstructions" },
+  { type: "profit", labelKey: "elementProfit", section: "outletInstructions" },
+  { type: "revenue", labelKey: "elementRevenue", section: "outletInstructions" },
+  { type: "fixed_quantity", labelKey: "elementFixedQuantity", section: "outletInstructions" },
+  { type: "minimum_quantity", labelKey: "elementMinimumQuantity", section: "outletInstructions" },
+  { type: "maximum_quantity", labelKey: "elementMaximumQuantity", section: "outletInstructions" },
+  ...buildWeekdayFields(),
+]
+
+const SECTION_ORDER: Section[] = [
+  "miscellaneous", "distribution", "outletDetails", "outletInstructions", "userDefined",
+]
+
+const SECTION_LABEL_KEY: Record<Section, string> = {
+  miscellaneous: "sectionMiscellaneous",
+  distribution: "sectionDistribution",
+  outletDetails: "sectionOutletDetails",
+  outletInstructions: "sectionOutletInstructions",
+  userDefined: "sectionUserDefined",
+}
+
+// ─── Config field visibility per element type ────────────────────────────────
+
+type ConfigField = "allow_empty" | "maximum_value" | "date_format" | "add_subtract"
+  | "empty_is_zero" | "allow_positive" | "allow_negative" | "value_type"
+
+function configFieldsForType(type: string): ConfigField[] {
+  if (type === "unused") return []
+  if (type === "account_id" || type === "zip") return ["value_type", "allow_empty"]
+  if (type === "date" || type === "start_date" || type === "end_date") return ["date_format", "allow_empty"]
+  if (type === "quantity_adjustment") return ["allow_empty", "add_subtract", "maximum_value"]
+  if (type === "return") {
+    return ["allow_empty", "empty_is_zero", "allow_positive", "allow_negative", "maximum_value"]
+  }
+  if (
+    ["quantity", "sold_net", "sold_scan", "shrinkage", "quantity_sequence",
+     "open", "cost", "profit", "revenue", "fixed_quantity", "minimum_quantity", "maximum_quantity",
+     "weekday_open", "weekday_fixed", "weekday_minimum", "weekday"].includes(type)
+  ) return ["allow_empty", "maximum_value"]
+  // outlet details text fields
+  return ["allow_empty"]
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function isFieldInUse(field: AvailableField, elements: ImportTemplateElementResponse[]): boolean {
+  if (field.type === "unused") return false
+  return elements.some(
+    (e) =>
+      e.type === field.type &&
+      (field.weekdayStart === undefined || e.weekday_start === field.weekdayStart)
+  )
+}
 
 function buildPaginationPages(current: number, total: number): (number | "ellipsis")[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -85,9 +195,26 @@ function buildPaginationPages(current: number, total: number): (number | "ellips
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[180px_1fr] items-start gap-4">
-      <label className="text-xs font-medium text-[var(--muted-foreground)] pt-2.5">{label}</label>
-      <div>{children}</div>
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      {children}
+    </div>
+  )
+}
+
+function SwitchRow({
+  label,
+  checked,
+  onCheckedChange,
+}: {
+  label: string
+  checked: boolean
+  onCheckedChange: (c: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
     </div>
   )
 }
@@ -103,7 +230,6 @@ function saveItJson(cid: string, k: string, v: unknown) { if (typeof window !== 
 export default function ImportTemplatesPage() {
   const t = useTranslations("importTemplates")
   const { activeCustomer } = useCustomer()
-  const { isLocked } = useLock()
   const queryClient = useQueryClient()
   const cid = activeCustomer?.id ?? ""
 
@@ -119,12 +245,21 @@ export default function ImportTemplatesPage() {
   // ── Detail pane state (persisted)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(() => loadItJson<string | null>(cid, "selectedTemplate", null))
   const [selected, setSelected] = useState<ImportTemplateResponse | null>(null)
-  const [activeTab, setActiveTab] = useState(() => loadItJson<string>(cid, "activeTab", "details"))
+  const [activeTab, setActiveTab] = useState(() => loadItJson<string>(cid, "activeTab", "overall"))
+  const [detailMaximized, setDetailMaximized] = useState(() => loadItJson<boolean>(cid, "detailMaximized", false))
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
 
-  // ── Draft state
+  // ── Draft state for Overall tab
   const [draft, setDraft] = useState<ImportTemplateUpdate>({})
+
+  // ── Import Fields divider
+  const [leftWidthPct, setLeftWidthPct] = useState<number>(() => loadItJson<number>(cid, "leftWidthPct", 50))
+  const fieldsContainerRef = useRef<HTMLDivElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+
+  // ── User-defined key input
+  const [udfKey, setUdfKey] = useState("")
 
   // ── Create dialog
   const [createOpen, setCreateOpen] = useState(false)
@@ -140,6 +275,14 @@ export default function ImportTemplatesPage() {
   const [bulkDeleteUnderstood, setBulkDeleteUnderstood] = useState(false)
   const [bulkDeleteConfirmText, setBulkDeleteConfirmText] = useState("")
 
+  // ── Clone dialog
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [cloneName, setCloneName] = useState("")
+
+  // ── Element config / constraint dialogs
+  const [configElement, setConfigElement] = useState<ImportTemplateElementResponse | null>(null)
+  const [constrainElement, setConstrainElement] = useState<ImportTemplateElementResponse | null>(null)
+
   // ── Data fetching ──────────────────────────────────────────────────────────
 
   const { data: templates = [], isLoading } = useQuery({
@@ -154,6 +297,8 @@ export default function ImportTemplatesPage() {
   useEffect(() => { if (cid) saveItJson(cid, "starred", [...starredIds]) }, [cid, starredIds])
   useEffect(() => { if (cid) saveItJson(cid, "activeTab", activeTab) }, [cid, activeTab])
   useEffect(() => { if (cid) saveItJson(cid, "selectedTemplate", selected?.id ?? null) }, [cid, selected?.id])
+  useEffect(() => { if (cid) saveItJson(cid, "leftWidthPct", leftWidthPct) }, [cid, leftWidthPct])
+  useEffect(() => { if (cid) saveItJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
 
   useEffect(() => {
     if (!templates.length || selected) return
@@ -167,7 +312,9 @@ export default function ImportTemplatesPage() {
       setStarredIds(new Set(loadItJson<string[]>(cid, "starred", [])))
       setSelectedTemplateId(loadItJson<string | null>(cid, "selectedTemplate", null))
       setSelected(null)
-      setActiveTab(loadItJson<string>(cid, "activeTab", "details"))
+      setActiveTab(loadItJson<string>(cid, "activeTab", "overall"))
+      setLeftWidthPct(loadItJson<number>(cid, "leftWidthPct", 50))
+      setDetailMaximized(loadItJson<boolean>(cid, "detailMaximized", false))
     }
     prevCidRef.current = cid
   }, [cid])
@@ -209,12 +356,33 @@ export default function ImportTemplatesPage() {
     onError: () => toast.error(t("toastDeleteError")),
   })
 
+  const cloneMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => importTemplatesApi.clone(id, name),
+    onSuccess: (cloned) => {
+      queryClient.invalidateQueries({ queryKey: ["import-templates"] })
+      toast.success(t("toastCloned"))
+      setCloneOpen(false)
+      setCloneName("")
+      setSelected(cloned)
+    },
+    onError: () => toast.error(t("toastCloneError")),
+  })
+
   const addElementMutation = useMutation({
-    mutationFn: ({ templateId, data }: { templateId: string; data: { name: string; type: string; element_index: number } }) =>
+    mutationFn: ({ templateId, data }: { templateId: string; data: ImportTemplateElementCreate }) =>
       importTemplatesApi.addElement(templateId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["import-templates"] })
       toast.success(t("toastElementAdded"))
+    },
+  })
+
+  const updateElementMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: ImportTemplateElementUpdate }) =>
+      importTemplatesApi.updateElement(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["import-templates"] })
+      toast.success(t("toastElementUpdated"))
     },
   })
 
@@ -234,6 +402,18 @@ export default function ImportTemplatesPage() {
       else setSelected(null)
     }
   }, [templates]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep open config/constrain dialogs in sync with refreshed data
+  useEffect(() => {
+    if (configElement && selected) {
+      const refreshed = selected.elements.find((e) => e.id === configElement.id)
+      if (refreshed) setConfigElement(refreshed)
+    }
+    if (constrainElement && selected) {
+      const refreshed = selected.elements.find((e) => e.id === constrainElement.id)
+      if (refreshed) setConstrainElement(refreshed)
+    }
+  }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Filtering & sorting ────────────────────────────────────────────────────
 
@@ -285,7 +465,7 @@ export default function ImportTemplatesPage() {
   function handleRowClick(tpl: ImportTemplateResponse) {
     setSelected(tpl)
     setDraft({})
-    setActiveTab("details")
+    setActiveTab("overall")
   }
 
   function SortHeader({ field, label }: { field: SortField; label: string }) {
@@ -335,20 +515,72 @@ export default function ImportTemplatesPage() {
       })
   }
 
+  // ── Clone
+  function handleOpenClone() {
+    if (!selected) return
+    setCloneName(`${selected.name} (copy)`)
+    setCloneOpen(true)
+  }
+
+  function handleConfirmClone() {
+    if (!selected || !cloneName.trim()) return
+    cloneMutation.mutate({ id: selected.id, name: cloneName.trim() })
+  }
+
   // ── Add element from palette ───────────────────────────────────────────────
 
-  function handleAddElement(elem: AvailableElement) {
+  function handleAddField(field: AvailableField) {
     if (!selected) return
     const nextIndex = selected.elements.length
     addElementMutation.mutate({
       templateId: selected.id,
-      data: { name: t(elem.labelKey as Parameters<typeof t>[0]), type: elem.type, element_index: nextIndex },
+      data: {
+        name: t(field.labelKey as Parameters<typeof t>[0]),
+        type: field.type,
+        element_index: nextIndex,
+        ...(field.weekdayStart !== undefined ? { weekday_start: field.weekdayStart } : {}),
+      },
     })
+  }
+
+  function handleAddUserDefined() {
+    if (!selected || !udfKey.trim()) return
+    const key = udfKey.trim()
+    addElementMutation.mutate({
+      templateId: selected.id,
+      data: {
+        name: key,
+        description: key,
+        type: "outlet_info",
+        element_index: selected.elements.length,
+      },
+    })
+    setUdfKey("")
   }
 
   function handleRemoveElement(elementId: string) {
     removeElementMutation.mutate(elementId)
   }
+
+  // ── Divider drag ───────────────────────────────────────────────────────────
+
+  const onDividerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setIsDragging(true)
+  }, [])
+
+  const onDividerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || !fieldsContainerRef.current) return
+    const rect = fieldsContainerRef.current.getBoundingClientRect()
+    const pct = ((e.clientX - rect.left) / rect.width) * 100
+    setLeftWidthPct(Math.max(25, Math.min(75, pct)))
+  }, [isDragging])
+
+  const onDividerPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.releasePointerCapture(e.pointerId)
+    setIsDragging(false)
+  }, [])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -356,30 +588,19 @@ export default function ImportTemplatesPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && "hidden")}>
 
         {/* Toolbar */}
-        <div className="flex items-center justify-end gap-2 px-4 py-2 shrink-0 bg-background">
-          {selectedIds.size > 0 && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => setShowOnlySelected(!showOnlySelected)}
-              >
-                {showOnlySelected ? t("showAll") : t("showSelected")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-[var(--destructive)]"
-                onClick={() => setBulkDeleteDialogOpen(true)}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </>
-          )}
+        <div className="flex items-center justify-between gap-2 px-4 py-2 shrink-0 bg-background">
+          <Button
+            variant="default"
+            size="sm"
+            className="h-7 text-xs gap-1.5"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="h-3 w-3" />
+            {t("newButton")}
+          </Button>
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--muted-foreground)]" />
             <Input
@@ -389,15 +610,6 @@ export default function ImportTemplatesPage() {
               className="h-7 pl-8 w-52 text-xs"
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1.5"
-            onClick={() => setCreateOpen(true)}
-          >
-            <Plus className="h-3 w-3" />
-            {t("newButton")}
-          </Button>
         </div>
 
         {/* Table */}
@@ -490,88 +702,143 @@ export default function ImportTemplatesPage() {
           )}
         </div>
 
-        {/* Pagination + status */}
-        {filtered.length > 0 && (
-          <div className="flex items-center justify-between px-4 py-1.5 text-xs text-[var(--muted-foreground)] shrink-0">
-            <span>
-              {t("showing", {
-                from: (safePage - 1) * ITEMS_PER_PAGE + 1,
-                to: Math.min(safePage * ITEMS_PER_PAGE, filtered.length),
-                total: filtered.length,
-              })}
-            </span>
-            {totalPages > 1 && (
-              <Pagination>
-                <PaginationContent className="gap-0.5">
-                  <PaginationItem>
-                    <PaginationPrevious
-                      onClick={() => setCurrentPage(Math.max(1, safePage - 1))}
-                      className={cn("h-7 text-xs", safePage === 1 && "pointer-events-none opacity-50")}
-                    />
-                  </PaginationItem>
-                  {paginationPages.map((p, i) =>
-                    p === "ellipsis" ? (
-                      <PaginationItem key={`e${i}`}><PaginationEllipsis /></PaginationItem>
-                    ) : (
-                      <PaginationItem key={p}>
-                        <PaginationLink
-                          onClick={() => setCurrentPage(p)}
-                          isActive={p === safePage}
-                          className="h-7 w-7 text-xs"
-                        >
-                          {p}
-                        </PaginationLink>
-                      </PaginationItem>
-                    ),
-                  )}
-                  <PaginationItem>
-                    <PaginationNext
-                      onClick={() => setCurrentPage(Math.min(totalPages, safePage + 1))}
-                      className={cn("h-7 text-xs", safePage === totalPages && "pointer-events-none opacity-50")}
-                    />
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
-            )}
-          </div>
-        )}
+        {/* Bottom: pagination + selection bar */}
+        <div className="shrink-0 border-t bg-background mt-4">
+          {filtered.length > 0 && (
+            <div className="flex items-center justify-between px-4 py-1.5">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {t("showing", {
+                  from: (safePage - 1) * ITEMS_PER_PAGE + 1,
+                  to: Math.min(safePage * ITEMS_PER_PAGE, filtered.length),
+                  total: filtered.length,
+                })}
+              </span>
+              {totalPages > 1 && (
+                <Pagination className="w-auto mx-0">
+                  <PaginationContent className="gap-0.5">
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage(Math.max(1, safePage - 1))}
+                        className={cn("h-7 text-xs", safePage === 1 && "pointer-events-none opacity-50")}
+                      />
+                    </PaginationItem>
+                    {paginationPages.map((p, i) =>
+                      p === "ellipsis" ? (
+                        <PaginationItem key={`e${i}`}><PaginationEllipsis /></PaginationItem>
+                      ) : (
+                        <PaginationItem key={p}>
+                          <PaginationLink
+                            onClick={() => setCurrentPage(p)}
+                            isActive={p === safePage}
+                            className="h-7 w-7 text-xs"
+                          >
+                            {p}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ),
+                    )}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage(Math.min(totalPages, safePage + 1))}
+                        className={cn("h-7 text-xs", safePage === totalPages && "pointer-events-none opacity-50")}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              )}
+            </div>
+          )}
+
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {t("selectedCount", { selected: selectedIds.size, total: filtered.length })}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 cursor-pointer"
+                  onClick={() => setShowOnlySelected((v) => !v)}
+                  title={showOnlySelected ? t("showAll") : t("showSelected")}
+                >
+                  <Focus className={cn("h-4 w-4", showOnlySelected && "text-primary")} />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-destructive hover:text-destructive cursor-pointer"
+                  onClick={() => setBulkDeleteDialogOpen(true)}
+                  title="Delete selected"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Detail pane ── */}
       {selected && (
-        <div className="flex-1 min-h-0 overflow-y-auto border-t border-[var(--border)]">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-            <div className="shrink-0 border-b border-[var(--border)] px-4 pt-3">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-semibold truncate">{selected.name}</h2>
-              </div>
-              <div className="relative">
-                <TabsList ref={tabsListRef} className="bg-transparent p-0 h-auto gap-4 relative">
-                  <TabsTrigger value="details" className="bg-transparent px-0 pb-2 text-xs data-[state=active]:shadow-none cursor-pointer">
-                    {t("tabDetails")}
-                  </TabsTrigger>
-                  <TabsTrigger value="elements" className="bg-transparent px-0 pb-2 text-xs data-[state=active]:shadow-none cursor-pointer">
-                    {t("tabElements")}
-                  </TabsTrigger>
-                  <TabsTrigger value="actions" className="bg-transparent px-0 pb-2 text-xs data-[state=active]:shadow-none cursor-pointer">
-                    {t("tabActions")}
-                  </TabsTrigger>
-                </TabsList>
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          {!detailMaximized && <hr className="my-8" />}
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0 gap-0">
+            <div className="relative w-full shrink-0">
+              <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+                <TabsTrigger value="overall" className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer">
+                  {t("tabOverall")}
+                </TabsTrigger>
+                <TabsTrigger value="fields" className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer">
+                  {t("tabImportFields")}
+                </TabsTrigger>
+                <TabsTrigger value="verification" className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer">
+                  {t("tabVerificationRules")}
+                </TabsTrigger>
+                <TabsTrigger value="actions" className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer">
+                  {t("tabActions")}
+                </TabsTrigger>
                 <div
-                  className="absolute bottom-0 h-0.5 bg-[var(--foreground)] transition-all duration-200"
-                  style={indicatorStyle}
-                />
-              </div>
+                  className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setDetailMaximized((v) => !v)}
+                  aria-label={detailMaximized ? "Minimize" : "Maximize"}
+                >
+                  {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                </div>
+              </TabsList>
+              <div
+                className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
+                style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
+              />
             </div>
 
-            {/* Details tab */}
-            <TabsContent value="details" className="flex-1 overflow-y-auto p-4 space-y-4 mt-0">
+            {/* ── Overall tab ── */}
+            <TabsContent value="overall" className="flex-1 overflow-y-auto mt-0">
+              <div className="space-y-6 max-w-2xl mt-6 px-4">
+              <FieldRow label={t("fieldId")}>
+                <div className="relative">
+                  <Input
+                    value={selected.id}
+                    readOnly
+                    className="pr-9 opacity-50 cursor-default select-all font-mono text-xs"
+                  />
+                  <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                    <CopyIcon
+                      size={16}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selected.id)
+                        toast.success(t("toastCopied"))
+                      }}
+                    />
+                  </AnimateIcon>
+                </div>
+              </FieldRow>
               <FieldRow label={t("fieldName")}>
                 <Input
                   value={draft.name ?? selected.name}
                   onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                   className="h-9 text-sm"
-                  disabled={isLocked}
                 />
               </FieldRow>
               <FieldRow label={t("fieldDescription")}>
@@ -579,7 +846,24 @@ export default function ImportTemplatesPage() {
                   value={draft.description ?? selected.description ?? ""}
                   onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value || null }))}
                   className="text-sm min-h-[60px]"
-                  disabled={isLocked}
+                />
+              </FieldRow>
+              <FieldRow label={t("fieldHeaderLines")}>
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.header_lines ?? selected.header_lines}
+                  onChange={(e) => setDraft((d) => ({ ...d, header_lines: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="h-9 text-sm w-24"
+                />
+              </FieldRow>
+              <FieldRow label={t("fieldFooterLines")}>
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.footer_lines ?? selected.footer_lines}
+                  onChange={(e) => setDraft((d) => ({ ...d, footer_lines: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="h-9 text-sm w-24"
                 />
               </FieldRow>
               <FieldRow label={t("fieldSeparator")}>
@@ -587,65 +871,37 @@ export default function ImportTemplatesPage() {
                   value={draft.separator ?? selected.separator}
                   onChange={(e) => setDraft((d) => ({ ...d, separator: e.target.value }))}
                   className="h-9 text-sm w-24 font-mono"
-                  disabled={isLocked}
                 />
               </FieldRow>
-              <FieldRow label={t("fieldHeaderLines")}>
-                <Input
-                  type="number"
-                  value={draft.header_lines ?? selected.header_lines}
-                  onChange={(e) => setDraft((d) => ({ ...d, header_lines: parseInt(e.target.value) || 0 }))}
-                  className="h-9 text-sm w-24"
-                  disabled={isLocked}
-                />
-              </FieldRow>
-              <FieldRow label={t("fieldFooterLines")}>
-                <Input
-                  type="number"
-                  value={draft.footer_lines ?? selected.footer_lines}
-                  onChange={(e) => setDraft((d) => ({ ...d, footer_lines: parseInt(e.target.value) || 0 }))}
-                  className="h-9 text-sm w-24"
-                  disabled={isLocked}
-                />
-              </FieldRow>
-              <FieldRow label={t("fieldMoveFile")}>
-                <Checkbox
-                  checked={draft.move_file ?? selected.move_file}
-                  onCheckedChange={(c) => setDraft((d) => ({ ...d, move_file: !!c }))}
-                  disabled={isLocked}
-                />
-              </FieldRow>
-              <FieldRow label={t("fieldResetProductionGroup")}>
-                <Checkbox
-                  checked={draft.reset_production_group ?? selected.reset_production_group}
-                  onCheckedChange={(c) => setDraft((d) => ({ ...d, reset_production_group: !!c }))}
-                  disabled={isLocked}
-                />
-              </FieldRow>
-              <FieldRow label={t("fieldAddToProductionGroup")}>
-                <Checkbox
-                  checked={draft.add_to_production_group ?? selected.add_to_production_group}
-                  onCheckedChange={(c) => setDraft((d) => ({ ...d, add_to_production_group: !!c }))}
-                  disabled={isLocked}
-                />
-              </FieldRow>
+              <SwitchRow
+                label={t("fieldMoveFile")}
+                checked={draft.move_file ?? selected.move_file}
+                onCheckedChange={(c) => setDraft((d) => ({ ...d, move_file: c }))}
+              />
+              <SwitchRow
+                label={t("fieldResetProductionGroup")}
+                checked={draft.reset_production_group ?? selected.reset_production_group}
+                onCheckedChange={(c) => setDraft((d) => ({ ...d, reset_production_group: c }))}
+              />
+              <SwitchRow
+                label={t("fieldAddToProductionGroup")}
+                checked={draft.add_to_production_group ?? selected.add_to_production_group}
+                onCheckedChange={(c) => setDraft((d) => ({ ...d, add_to_production_group: c }))}
+              />
 
-              {draftDirty && !isLocked && (
-                <div className="flex justify-end pt-2">
-                  <Button size="sm" onClick={handleSaveDraft} disabled={updateMutation.isPending}>
-                    Save
-                  </Button>
-                </div>
-              )}
+              </div>
             </TabsContent>
 
-            {/* Elements tab — left: assigned, right: available palette */}
-            <TabsContent value="elements" className="flex-1 overflow-hidden mt-0">
-              <div className="flex h-full">
-                {/* Left: assigned elements */}
-                <div className="flex-1 overflow-y-auto p-4 border-r border-[var(--border)]">
+            {/* ── Import Fields tab ── */}
+            <TabsContent value="fields" className="flex-1 overflow-hidden mt-0">
+              <div ref={fieldsContainerRef} className="flex h-full w-full relative">
+                {/* Left: selected fields */}
+                <div
+                  className="overflow-y-auto p-4 border-r border-[var(--border)]"
+                  style={{ width: `${leftWidthPct}%` }}
+                >
                   <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wide mb-3">
-                    {t("assignedElements")}
+                    {t("selectedFields")}
                   </h3>
                   {selected.elements.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-32 gap-2 text-[var(--muted-foreground)]">
@@ -659,90 +915,161 @@ export default function ImportTemplatesPage() {
                           key={elem.id}
                           className="flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--card)] text-sm group"
                         >
-                          <GripVertical className="h-3.5 w-3.5 text-[var(--muted-foreground)] shrink-0" />
-                          <span className="text-xs text-[var(--muted-foreground)] w-6 tabular-nums">{idx + 1}</span>
+                          <span className="text-xs text-[var(--muted-foreground)] w-6 tabular-nums shrink-0">{idx + 1}</span>
                           <span className="flex-1 truncate">{elem.name}</span>
-                          <span className="text-xs text-[var(--muted-foreground)] font-mono">{elem.type}</span>
-                          {!isLocked && (
-                            <button
-                              onClick={() => handleRemoveElement(elem.id)}
-                              className="opacity-0 group-hover:opacity-100 text-[var(--destructive)] hover:text-[var(--destructive)] transition-opacity cursor-pointer"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
+                          <button
+                            onClick={() => setConfigElement(elem)}
+                            className="text-[var(--muted-foreground)] hover:text-foreground transition-colors cursor-pointer"
+                            aria-label="Configure"
+                            title="Configure"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setConstrainElement(elem)}
+                            className="text-[var(--muted-foreground)] hover:text-foreground transition-colors cursor-pointer"
+                            aria-label="Constrain"
+                            title="Constrain"
+                          >
+                            <ListFilter className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleRemoveElement(elem.id)}
+                            className="text-[var(--muted-foreground)] hover:text-[var(--destructive)] transition-colors cursor-pointer"
+                            aria-label="Remove"
+                            title="Remove"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* Right: available element palette */}
-                <div className="w-72 shrink-0 overflow-y-auto p-4">
+                {/* Divider */}
+                <div
+                  onPointerDown={onDividerPointerDown}
+                  onPointerMove={onDividerPointerMove}
+                  onPointerUp={onDividerPointerUp}
+                  className={cn(
+                    "w-1.5 cursor-col-resize bg-[var(--border)] hover:bg-[var(--accent)] transition-colors relative group shrink-0",
+                    isDragging && "bg-[var(--accent)]"
+                  )}
+                >
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    <GripVertical className="h-4 w-4 text-[var(--muted-foreground)]" />
+                  </div>
+                </div>
+
+                {/* Right: available fields palette */}
+                <div
+                  className="overflow-y-auto p-4 flex-1"
+                >
                   <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wide mb-3">
-                    {t("availableElements")}
+                    {t("availableFields")}
                   </h3>
                   <div className="space-y-4">
-                    {/* Miscellaneous */}
-                    <div>
-                      <h4 className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("colMiscellaneous")}</h4>
-                      <div className="space-y-0.5">
-                        {AVAILABLE_ELEMENTS.filter((e) => e.column === "miscellaneous").map((elem) => (
-                          <button
-                            key={elem.type}
-                            onClick={() => handleAddElement(elem)}
-                            disabled={isLocked}
-                            className="flex items-center gap-2 w-full px-3 py-1.5 rounded text-sm hover:bg-[var(--accent)] transition-colors text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Plus className="h-3 w-3 text-[var(--muted-foreground)]" />
-                            {t(elem.labelKey as Parameters<typeof t>[0])}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Distribution */}
-                    <div>
-                      <h4 className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("colDistribution")}</h4>
-                      <div className="space-y-0.5">
-                        {AVAILABLE_ELEMENTS.filter((e) => e.column === "distribution").map((elem) => (
-                          <button
-                            key={elem.type}
-                            onClick={() => handleAddElement(elem)}
-                            disabled={isLocked}
-                            className="flex items-center gap-2 w-full px-3 py-1.5 rounded text-sm hover:bg-[var(--accent)] transition-colors text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Plus className="h-3 w-3 text-[var(--muted-foreground)]" />
-                            {t(elem.labelKey as Parameters<typeof t>[0])}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Account Info */}
-                    <div>
-                      <h4 className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("colAccountInfo")}</h4>
-                      <div className="space-y-0.5">
-                        {AVAILABLE_ELEMENTS.filter((e) => e.column === "accountInfo").map((elem) => (
-                          <button
-                            key={elem.type}
-                            onClick={() => handleAddElement(elem)}
-                            disabled={isLocked}
-                            className="flex items-center gap-2 w-full px-3 py-1.5 rounded text-sm hover:bg-[var(--accent)] transition-colors text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Plus className="h-3 w-3 text-[var(--muted-foreground)]" />
-                            {t(elem.labelKey as Parameters<typeof t>[0])}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    {SECTION_ORDER.map((section) => {
+                      const fields = AVAILABLE_FIELDS.filter((f) => f.section === section)
+                      if (section === "userDefined") {
+                        return (
+                          <div key={section}>
+                            <h4 className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">
+                              {t(SECTION_LABEL_KEY[section] as Parameters<typeof t>[0])}
+                            </h4>
+                            <div className="rounded-md border border-[var(--border)] p-3 space-y-2">
+                              <p className="text-xs text-[var(--muted-foreground)]">{t("userDefinedTitle")}</p>
+                              <label className="text-xs font-medium text-[var(--muted-foreground)] block">
+                                {t("userDefinedKeyLabel")}
+                              </label>
+                              <Input
+                                value={udfKey}
+                                onChange={(e) => setUdfKey(e.target.value)}
+                                placeholder={t("userDefinedKeyPlaceholder")}
+                                className="h-8 text-sm"
+                                            />
+                              {(() => {
+                                const trimmed = udfKey.trim()
+                                const dup = !!trimmed && selected.elements.some(
+                                  (e) => e.type === "outlet_info" && e.name === trimmed
+                                )
+                                return (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleAddUserDefined}
+                                    disabled={!trimmed || dup}
+                                    className="w-full h-7 text-xs gap-1.5"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    {dup ? t("userDefinedDuplicate") : t("userDefinedAddButton")}
+                                  </Button>
+                                )
+                              })()}
+                            </div>
+                          </div>
+                        )
+                      }
+                      if (fields.length === 0) return null
+                      return (
+                        <div key={section}>
+                          <h4 className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">
+                            {t(SECTION_LABEL_KEY[section] as Parameters<typeof t>[0])}
+                          </h4>
+                          <div className="grid grid-cols-2 gap-1">
+                            {fields.map((field) => {
+                              const inUse = isFieldInUse(field, selected.elements)
+                              return (
+                                <button
+                                  key={`${field.type}-${field.weekdayStart ?? ""}-${field.labelKey}`}
+                                  onClick={() => handleAddField(field)}
+                                  disabled={inUse}
+                                  className={cn(
+                                    "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition-colors text-left border",
+                                    inUse
+                                      ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 cursor-not-allowed"
+                                      : "border-[var(--border)] hover:bg-[var(--accent)] cursor-pointer"
+                                  )}
+                                >
+                                  <Plus className={cn("h-3 w-3 shrink-0", inUse ? "opacity-0" : "text-[var(--muted-foreground)]")} />
+                                  <span className="truncate">{t(field.labelKey as Parameters<typeof t>[0])}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               </div>
             </TabsContent>
 
-            {/* Actions tab */}
-            <TabsContent value="actions" className="flex-1 overflow-y-auto p-4 mt-0">
+            {/* ── Verification Rules tab ── */}
+            <TabsContent value="verification" className="flex-1 overflow-y-auto p-4 mt-0">
+              <div className="flex flex-col items-center justify-center h-full gap-2 text-[var(--muted-foreground)]">
+                <p className="text-sm font-medium">{t("verificationPlaceholder")}</p>
+                <p className="text-xs opacity-60 max-w-md text-center">{t("verificationPlaceholderHint")}</p>
+              </div>
+            </TabsContent>
+
+            {/* ── Actions tab ── */}
+            <TabsContent value="actions" className="flex-1 overflow-y-auto p-4 mt-0 space-y-4">
+              <div className="rounded-lg border border-[var(--border)] p-4">
+                <h3 className="text-sm font-semibold mb-1">{t("cloneAction")}</h3>
+                <p className="text-xs text-[var(--muted-foreground)] mb-3">{t("cloneActionDescription")}</p>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleOpenClone}
+                  className="gap-1.5"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {t("cloneActionButton")}
+                </Button>
+              </div>
+
               <div className="rounded-lg border border-[var(--destructive)]/20 p-4">
                 <h3 className="text-sm font-semibold text-[var(--destructive)] mb-1">{t("deleteAction")}</h3>
                 <p className="text-xs text-[var(--muted-foreground)] mb-3">{t("deleteActionDescription")}</p>
@@ -750,13 +1077,23 @@ export default function ImportTemplatesPage() {
                   variant="destructive"
                   size="sm"
                   onClick={() => setDeleteDialogOpen(true)}
-                  disabled={isLocked}
                 >
                   {t("deleteActionButton")}
                 </Button>
               </div>
             </TabsContent>
           </Tabs>
+
+          {draftDirty && (
+            <div className="shrink-0 border-t flex items-center justify-end gap-2 px-4 py-2 bg-background">
+              <Button variant="secondary" size="sm" onClick={() => setDraft({})}>
+                {t("cancelButton")}
+              </Button>
+              <Button size="sm" onClick={handleSaveDraft} disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? t("saving") : t("saveChanges")}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -805,6 +1142,32 @@ export default function ImportTemplatesPage() {
               disabled={!newName.trim() || createMutation.isPending}
             >
               {t("createButton")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Clone dialog ── */}
+      <Dialog open={cloneOpen} onOpenChange={setCloneOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("cloneTitle")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("cloneNameLabel")}</label>
+              <Input
+                value={cloneName}
+                onChange={(e) => setCloneName(e.target.value)}
+                className="mt-1"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCloneOpen(false)}>{t("cancelButton")}</Button>
+            <Button onClick={handleConfirmClone} disabled={!cloneName.trim() || cloneMutation.isPending}>
+              {t("cloneButton")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -869,6 +1232,251 @@ export default function ImportTemplatesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Element config dialog ── */}
+      <ElementConfigDialog
+        element={configElement}
+        onClose={() => setConfigElement(null)}
+        onSave={(data) => {
+          if (!configElement) return
+          updateElementMutation.mutate(
+            { id: configElement.id, data },
+            { onSuccess: () => setConfigElement(null) }
+          )
+        }}
+        isSaving={updateElementMutation.isPending}
+      />
+
+      {/* ── Element constraint dialog ── */}
+      <ElementConstraintDialog
+        element={constrainElement}
+        onClose={() => setConstrainElement(null)}
+        onSave={(data) => {
+          if (!constrainElement) return
+          updateElementMutation.mutate(
+            { id: constrainElement.id, data },
+            { onSuccess: () => setConstrainElement(null) }
+          )
+        }}
+        isSaving={updateElementMutation.isPending}
+      />
     </div>
+  )
+}
+
+// ─── ElementConfigDialog ─────────────────────────────────────────────────────
+
+function ElementConfigDialog({
+  element,
+  onClose,
+  onSave,
+  isSaving,
+}: {
+  element: ImportTemplateElementResponse | null
+  onClose: () => void
+  onSave: (data: ImportTemplateElementUpdate) => void
+  isSaving: boolean
+}) {
+  const t = useTranslations("importTemplates")
+  const [draft, setDraft] = useState<ImportTemplateElementUpdate>({})
+
+  useEffect(() => {
+    if (element) setDraft({})
+  }, [element?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!element) return null
+
+  const fields = configFieldsForType(element.type)
+
+  const allowEmpty = draft.allow_empty ?? element.allow_empty
+  const maxValue = draft.maximum_value ?? element.maximum_value
+  const dateFormat = draft.date_format ?? element.date_format
+  const emptyIsZero = draft.empty_is_zero ?? element.empty_is_zero
+  const allowPositive = draft.allow_positive ?? element.allow_positive
+  const allowNegative = draft.allow_negative ?? element.allow_negative
+  const valueType = draft.value_type ?? element.value_type
+
+  return (
+    <Dialog open={!!element} onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("configureElementTitle")}</DialogTitle>
+          <DialogDescription>{element.name}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          {fields.length === 0 && (
+            <p className="text-xs text-[var(--muted-foreground)]">No configuration available for this field.</p>
+          )}
+          {fields.includes("value_type") && (
+            <div className="flex items-center justify-between gap-4">
+              <label className="text-xs font-medium text-muted-foreground">{t("fieldType")}</label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-36 justify-between">
+                    {valueType === "number" ? t("typeNumber") : t("typeString")}
+                    <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setDraft((d) => ({ ...d, value_type: "string" }))}>
+                    {t("typeString")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDraft((d) => ({ ...d, value_type: "number" }))}>
+                    {t("typeNumber")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+          {fields.includes("allow_empty") && (
+            <SwitchRow
+              label={t("fieldAllowEmpty")}
+              checked={allowEmpty}
+              onCheckedChange={(c) => setDraft((d) => ({ ...d, allow_empty: c }))}
+            />
+          )}
+          {fields.includes("maximum_value") && (
+            <FieldRow label={t("fieldMaximumValue")}>
+              <Input
+                type="number"
+                value={maxValue}
+                onChange={(e) => setDraft((d) => ({ ...d, maximum_value: parseInt(e.target.value) || 0 }))}
+                className="h-9 text-sm w-32"
+              />
+            </FieldRow>
+          )}
+          {fields.includes("date_format") && (
+            <FieldRow label={t("fieldDateFormat")}>
+              <Input
+                value={dateFormat}
+                onChange={(e) => setDraft((d) => ({ ...d, date_format: e.target.value }))}
+                className="h-9 text-sm w-40 font-mono"
+              />
+            </FieldRow>
+          )}
+          {fields.includes("add_subtract") && (
+            <div className="flex items-center justify-between gap-4">
+              <label className="text-xs font-medium text-muted-foreground">{t("fieldAddSubtract")}</label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-36 justify-between">
+                    {allowNegative ? t("addSubtractSubtract") : t("addSubtractAdd")}
+                    <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setDraft((d) => ({ ...d, allow_negative: false }))}>
+                    {t("addSubtractAdd")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDraft((d) => ({ ...d, allow_negative: true }))}>
+                    {t("addSubtractSubtract")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+          {fields.includes("empty_is_zero") && (
+            <SwitchRow
+              label={t("fieldEmptyIsZero")}
+              checked={emptyIsZero}
+              onCheckedChange={(c) => setDraft((d) => ({ ...d, empty_is_zero: c }))}
+            />
+          )}
+          {fields.includes("allow_positive") && (
+            <SwitchRow
+              label={t("fieldAllowPositive")}
+              checked={allowPositive}
+              onCheckedChange={(c) => setDraft((d) => ({ ...d, allow_positive: c }))}
+            />
+          )}
+          {fields.includes("allow_negative") && !fields.includes("add_subtract") && (
+            <SwitchRow
+              label={t("fieldAllowNegative")}
+              checked={allowNegative}
+              onCheckedChange={(c) => setDraft((d) => ({ ...d, allow_negative: c }))}
+            />
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t("cancelButton")}</Button>
+          <Button onClick={() => onSave(draft)} disabled={isSaving || Object.keys(draft).length === 0}>
+            {t("okButton")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── ElementConstraintDialog ─────────────────────────────────────────────────
+
+function ElementConstraintDialog({
+  element,
+  onClose,
+  onSave,
+  isSaving,
+}: {
+  element: ImportTemplateElementResponse | null
+  onClose: () => void
+  onSave: (data: ImportTemplateElementUpdate) => void
+  isSaving: boolean
+}) {
+  const t = useTranslations("importTemplates")
+  const [allowed, setAllowed] = useState("")
+  const [disallowed, setDisallowed] = useState("")
+
+  useEffect(() => {
+    if (element) {
+      setAllowed(element.allow ?? "")
+      setDisallowed(element.disallow ?? "")
+    }
+  }, [element?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!element) return null
+
+  const dirty = allowed !== (element.allow ?? "") || disallowed !== (element.disallow ?? "")
+
+  return (
+    <Dialog open={!!element} onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("constrainElementTitle")}</DialogTitle>
+          <DialogDescription>{element.name}</DialogDescription>
+        </DialogHeader>
+        <p className="text-xs text-[var(--muted-foreground)] whitespace-pre-line">
+          {t("constrainElementHint")}
+        </p>
+        <div className="space-y-3 py-2">
+          <div>
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("allowedValues")}</label>
+            <Textarea
+              value={allowed}
+              onChange={(e) => setAllowed(e.target.value)}
+              className="mt-1 min-h-[100px] font-mono text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("disallowedValues")}</label>
+            <Textarea
+              value={disallowed}
+              onChange={(e) => setDisallowed(e.target.value)}
+              className="mt-1 min-h-[100px] font-mono text-sm"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t("cancelButton")}</Button>
+          <Button
+            onClick={() => onSave({
+              allow: allowed.trim() ? allowed.trim() : null,
+              disallow: disallowed.trim() ? disallowed.trim() : null,
+            })}
+            disabled={isSaving || !dirty}
+          >
+            {t("okButton")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

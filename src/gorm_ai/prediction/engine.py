@@ -97,6 +97,12 @@ class EngineCapabilities:
     min_history_length: int = 7
     max_history_length: int | None = None  # None = no limit
     max_horizon: int = 365
+    # Architectural sweet spot — horizon at which this engine was trained or
+    # evaluated (typically the patch size for patched models, or the training
+    # horizon for direct forecasters). Short requested horizons are padded up
+    # to this value and results sliced back, so day-1 predictions match the
+    # quality of day-1-within-a-long-forecast predictions.
+    optimal_horizon: int = 1
     patch_size: int = 1  # time steps per patch (1 = no patching)
     supported_frequencies: list[str] | None = None
 
@@ -171,6 +177,24 @@ class PredictionEngine(ABC):
             )
             results.append(result)
         return results
+
+    def _resolve_horizon(self, requested_horizon: int) -> int:
+        """Pad short horizons up to the engine's architectural sweet spot.
+
+        Many foundation models generate in fixed patches (e.g. TimesFM=32,
+        Sundial=16) or were trained at a specific direct-forecast horizon
+        (e.g. Chronos/Moirai=64). Asking for a horizon below that sweet
+        spot produces lower-quality day-1 predictions than the same model
+        would produce if asked for its full trained horizon — callers should
+        use the returned horizon internally and slice results back to the
+        originally-requested length with ``[:requested_horizon]``.
+        """
+        capabilities = self.get_capabilities()
+        optimal = max(1, capabilities.optimal_horizon)
+        padded = max(requested_horizon, optimal)
+        if capabilities.max_horizon:
+            padded = min(padded, capabilities.max_horizon)
+        return padded
 
     def apply_parameters(self, params: dict[str, str]) -> None:
         """Apply engine-specific parameters from the database.
@@ -264,6 +288,7 @@ class PredictionEngine(ABC):
         pad_dates: dict[str, set[date]] | None,
         active_covariate_types: set | list | None = None,
         baseline_window_days: int = 56,
+        history_days: int = 730,
     ) -> np.ndarray:
         """Compute per-date PAD adjustments as trend-scaled historical bumps.
 
@@ -303,10 +328,18 @@ class PredictionEngine(ABC):
         if not relevant_pads:
             return adj
 
-        # Build a date→value lookup from historical data
+        # Build a date→value lookup from historical data, restricted to the
+        # configured back-history window. Older historical occurrences of the
+        # PAD event are discarded so bumps reflect only recent history.
+        max_hist_date_all = max(r["date"] for r in historical_data)
+        history_cutoff = max_hist_date_all - timedelta(days=max(1, history_days))
         hist_by_date: dict[date, float] = {}
         for record in historical_data:
+            if record["date"] < history_cutoff:
+                continue
             hist_by_date[record["date"]] = float(record["value"])
+        if not hist_by_date:
+            return adj
 
         # All PAD-event dates across all pad types — excluded from baselines
         # so unrelated holidays (e.g. Black Friday) don't pollute the

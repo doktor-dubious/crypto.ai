@@ -1790,7 +1790,10 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pymysql" },
+    { name = "python-multipart" },
     { name = "redis" },
+    { name = "scipy", version = "1.11.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-gorm-ai-moirai' or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-flowstate') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-kairos' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-toto' and extra == 'extra-7-gorm-ai-yinglong') or (extra == 'extra-7-gorm-ai-autogluon' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong')" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-gorm-ai-autogluon' or extra == 'extra-7-gorm-ai-kairos' or extra != 'extra-7-gorm-ai-moirai' or (extra == 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong')" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1871,10 +1874,12 @@ requires-dist = [
     { name = "pymysql", specifier = ">=1.1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "redis", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.2.0" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.4.0" },
     { name = "scikit-learn", marker = "extra == 'moirai'", specifier = ">=1.4.0" },
+    { name = "scipy", specifier = ">=1.11.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.25" },
     { name = "statsmodels", marker = "extra == 'ml'", specifier = ">=0.14.0" },
     { name = "structlog", specifier = ">=25.5.0" },
@@ -5719,6 +5724,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.26"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/71/b145a380824a960ebd60e1014256dbb7d2253f2316ff2d73dfd8928ec2c3/python_multipart-0.0.26.tar.gz", hash = "sha256:08fadc45918cd615e26846437f50c5d6d23304da32c341f289a617127b081f17", size = 43501, upload-time = "2026-04-10T14:09:59.473Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/22/f1925cdda983ab66fc8ec6ec8014b959262747e58bdca26a4e3d1da29d56/python_multipart-0.0.26-py3-none-any.whl", hash = "sha256:c0b169f8c4484c13b0dcf2ef0ec3a4adb255c4b7d18d8e420477d2b1dd03f185", size = 28847, upload-time = "2026-04-10T14:09:58.131Z" },
+]
+
+[[package]]
 name = "pytorch-lightning"
 version = "2.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -7428,7 +7442,7 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "filelock", marker = "extra == 'extra-7-gorm-ai-moirai' or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-flowstate') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-kairos' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-toto' and extra == 'extra-7-gorm-ai-yinglong') or (extra == 'extra-7-gorm-ai-autogluon' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong')" },
+    { name = "filelock", marker = "(python_full_version < '3.13' and extra == 'extra-7-gorm-ai-moirai') or (python_full_version >= '3.13' and extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-toto') or (python_full_version >= '3.13' and extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-yinglong') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-flowstate') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-moirai') or (extra == 'extra-7-gorm-ai-autogluon' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-kairos') or (extra == 'extra-7-gorm-ai-kairos' and extra == 'extra-7-gorm-ai-moirai') or (extra == 'extra-7-gorm-ai-kairos' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra == 'extra-7-gorm-ai-flowstate' and extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-yinglong') or (extra != 'extra-7-gorm-ai-flowstate' and extra == 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto') or (extra != 'extra-7-gorm-ai-moirai' and extra == 'extra-7-gorm-ai-toto' and extra == 'extra-7-gorm-ai-yinglong')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/3e/a2f59384587eff6aeb7d37b6780de7fedd2214935e27520430ca9f5b7975/triton-3.0.0-1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5ce8520437c602fb633f1324cc3871c47bee3b67acf9756c1a66309b60e3216c", size = 209438883, upload-time = "2024-07-19T20:56:52.275Z" },

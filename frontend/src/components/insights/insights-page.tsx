@@ -17,6 +17,17 @@ import { useCustomer } from "@/components/providers/customer-provider"
 import { InsightsChart } from "@/components/insights/insights-chart"
 import { OutletDetailModal } from "@/components/insights/outlet-detail-modal"
 
+function errorMessageKey(err: string): "rateLimitError" | "accessDeniedError" | "sendError" {
+  const lower = err.toLowerCase()
+  if (lower.includes("429") || lower.includes("rate limit") || lower.includes("busy")) {
+    return "rateLimitError"
+  }
+  if (lower.includes("403") || lower.includes("insight access") || lower.includes("access denied")) {
+    return "accessDeniedError"
+  }
+  return "sendError"
+}
+
 // ── Message bubble ───────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
@@ -353,9 +364,7 @@ export function InsightsPage({ initialSessionId }: { initialSessionId?: string }
               </div>
               {streamError && (
                 <p className="mt-1 text-xs text-[var(--destructive)]">
-                  {streamError.includes("429") ? t("rateLimitError")
-                    : streamError.includes("403") ? t("accessDeniedError")
-                    : t("sendError")}
+                  {t(errorMessageKey(streamError))}
                 </p>
               )}
             </form>

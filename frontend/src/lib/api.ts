@@ -14,9 +14,15 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const prefix = base ? "" : "/backend"
   const url = `${base}${prefix}/api/v1${path}`
 
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData
+  const headers: Record<string, string> = { ...(options?.headers as Record<string, string> | undefined) }
+  if (!isFormData && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json"
+  }
+
   const res = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
+    headers,
   })
 
   if (!res.ok) {
@@ -688,6 +694,7 @@ export interface ConfigurationResponse {
   variation_adjustment: boolean
   variation_history_days: number
   pad_baseline_window_days: number
+  pad_history_days: number
   eo_methodology: number
   eo_extrapolation: number
   open_monday: boolean
@@ -740,6 +747,7 @@ export interface CustomerConfigurationResponse {
   variation_adjustment: boolean | null
   variation_history_days: number | null
   pad_baseline_window_days: number | null
+  pad_history_days: number | null
   eo_methodology: number | null
   eo_extrapolation: number | null
   fallback_engine: boolean | null
@@ -754,6 +762,11 @@ export interface CustomerConfigurationResponse {
   open_friday: boolean | null
   open_saturday: boolean | null
   open_sunday: boolean | null
+  home_directory: string | null
+  upload_directory: string | null
+  upload_directory_storage: string | null
+  forecast_directory: string | null
+  forecast_directory_storage: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -1150,6 +1163,141 @@ export interface SegmentationResponse {
   correlation_clusters: CorrelationCluster[]
 }
 
+// ─── Cohort Audit ─────────────────────────────────────────────────────────
+
+export interface CohortAuditRequest {
+  customer_id: string
+  outlet_info_key: string
+  start_date: string
+  end_date: string
+  outlet_info_values?: string[] | null
+  sequenced?: boolean
+  shared_driver?: boolean
+  skip_threshold_pct?: number
+  min_baseline?: number
+  delivery_floor?: number
+}
+
+export interface CohortOutletStat {
+  outlet_id: string
+  outlet_name: string
+  ext_id: string
+  skip_count: number
+  above_floor_skip_count: number
+  skip_rate: number
+  active_open_days: number
+  rank: number
+  inferred_sequence_rank: number | null
+  no_report_count: number
+}
+
+export interface CohortSkipEvent {
+  date: string
+  weekday: number
+  skipped_outlet_ids: string[]
+  skipped_count: number
+}
+
+export interface CohortResult {
+  cohort_value: string
+  outlet_count: number
+  skip_event_count: number
+  total_skip_observations: number
+  overall_skip_rate: number
+  tcs: number | null
+  tcs_p_value: number | null
+  no_report_count: number
+  weekday_distribution: number[]
+  top_weekday: number | null
+  outlets: CohortOutletStat[]
+  skip_events: CohortSkipEvent[]
+  inferred_tail_outlets: string[] | null
+  sequence_confidence: "high" | "medium" | "low" | null
+}
+
+export interface CohortAuditResponse {
+  cohorts: CohortResult[]
+  universe_size: number
+  cohorts_with_signal: number
+  skip_detection_window: { start_date: string; end_date: string }
+  notes: string[]
+}
+
+export interface OutletInfoKeyEntry {
+  key: string
+  outlet_count: number
+}
+
+export interface OutletInfoKeysResponse {
+  keys: OutletInfoKeyEntry[]
+}
+
+export interface OutletInfoValueEntry {
+  value: string
+  outlet_count: number
+}
+
+export interface OutletInfoValuesResponse {
+  key: string
+  values: OutletInfoValueEntry[]
+}
+
+export interface CohortInvestigateParams {
+  customer_id: string
+  cohort_key: string
+  cohort: CohortResult
+  sequenced?: boolean
+  shared_driver?: boolean
+  start_date: string
+  end_date: string
+}
+
+export const cohortAuditApi = {
+  audit: (params: CohortAuditRequest) =>
+    apiFetch<CohortAuditResponse>("/analysis/cohort-audit", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  keys: (customerId: string) =>
+    apiFetch<OutletInfoKeysResponse>(
+      `/analysis/outlet-info/keys?customer_id=${encodeURIComponent(customerId)}`,
+    ),
+  values: (customerId: string, key: string) =>
+    apiFetch<OutletInfoValuesResponse>(
+      `/analysis/outlet-info/values?customer_id=${encodeURIComponent(customerId)}&key=${encodeURIComponent(key)}`,
+    ),
+  investigate: async (
+    params: CohortInvestigateParams,
+    onChunk: (text: string) => void,
+    signal?: AbortSignal,
+  ) => {
+    const base = typeof window === "undefined"
+      ? (process.env.BACKEND_INTERNAL_URL ?? "http://localhost:8000")
+      : ""
+    const prefix = base ? "" : "/backend"
+    const url = `${base}${prefix}/api/v1/analysis/cohort-investigate`
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+      signal,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`API ${res.status}: ${text}`)
+    }
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("No response body")
+    const decoder = new TextDecoder()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = decoder.decode(value, { stream: true })
+      if (chunk) onChunk(chunk)
+    }
+  },
+}
+
 export const analysisApi = {
   dataQuality: (params: AnalysisRequest) =>
     apiFetch<DataQualityResponse>("/analysis/data-quality", {
@@ -1218,7 +1366,10 @@ export const analysisApi = {
 export interface TokenLlmResponse {
   llm_id: string
   llm_name: string
+  model_name: string | null
   used: number
+  input_used: number
+  output_used: number
   available: number
 }
 
@@ -1364,6 +1515,7 @@ export interface ConfigurationUpdate {
   variation_adjustment?: boolean | null
   variation_history_days?: number | null
   pad_baseline_window_days?: number | null
+  pad_history_days?: number | null
   open_monday?: boolean | null
   open_tuesday?: boolean | null
   open_wednesday?: boolean | null
@@ -1655,6 +1807,8 @@ export const outletsApi = {
     return apiFetch<OutletResponse[]>(`/outlets?${qs}`)
   },
 
+  get: (id: string) => apiFetch<OutletResponse>(`/outlets/${id}`),
+
   update: (id: string, data: OutletUpdate) =>
     apiFetch<OutletResponse>(`/outlets/${id}`, {
       method: "PATCH",
@@ -1730,6 +1884,7 @@ export interface CompletedSimulationResponse {
   engine: string | null
   actual_engine: string | null
   engine_params: Record<string, unknown> | null
+  simulation_params: Record<string, unknown> | null
   delay: number | null
   outlet_count: number
   outlet_group_id: string | null
@@ -1786,6 +1941,17 @@ export interface CompletedSimulationListResponse {
   total: number
 }
 
+export interface SimulationParametersOverride {
+  variation_adjustment?: boolean
+  eo_methodology?: number
+  eo_extrapolation?: number
+  weekday_profile_correction?: boolean
+  covariate_handling?: "none" | "native" | "external"
+  covariate_weekday?: boolean
+  covariate_price?: boolean
+  covariate_pad?: boolean
+}
+
 export interface SimulationRunRequest {
   customer_id: string
   name?: string | null
@@ -1799,6 +1965,7 @@ export interface SimulationRunRequest {
   outlet_group_id?: string | null
   batch_size?: number
   worker?: string | null
+  parameters?: SimulationParametersOverride | null
 }
 
 export interface SimulationTaskResponse {
@@ -1934,10 +2101,12 @@ export const simulationsApi = {
     return apiFetch<ModelFitResponse>(`/simulations/${simulationId}/model-fit${q ? `?${q}` : ""}`)
   },
 
-  getOverview: (simulationId: string, column = "delivered", weekdays?: number[], outletIds?: string[]) => {
+  getOverview: (simulationId: string, column = "delivered", weekdays?: number[], outletIds?: string[], fromDate?: string, toDate?: string) => {
     const qs = new URLSearchParams({ column })
     weekdays?.forEach((d) => qs.append("weekdays", String(d)))
     outletIds?.forEach((id) => qs.append("outlet_ids", id))
+    if (fromDate) qs.set("from_date", fromDate)
+    if (toDate) qs.set("to_date", toDate)
     return apiFetch<FilteredOverviewResponse>(`/simulations/${simulationId}/overview?${qs}`)
   },
 
@@ -2014,6 +2183,7 @@ export interface ImportTemplateElementResponse {
   description: string | null
   element_index: number
   type: string
+  value_type: string
   allow: string | null
   disallow: string | null
   allow_empty: boolean
@@ -2078,6 +2248,42 @@ export interface ImportTemplateElementCreate {
   description?: string | null
   element_index?: number
   type: string
+  value_type?: string
+  allow?: string | null
+  disallow?: string | null
+  allow_empty?: boolean
+  allow_negative?: boolean
+  allow_positive?: boolean
+  allow_zero?: boolean
+  date_format?: string
+  decimal_separator?: string
+  maximum_value?: number
+  empty_is_zero?: boolean
+  negative_parenthesis?: boolean
+  sequence_separator?: string
+  weekday_start?: number | null
+  strip?: string | null
+}
+
+export interface ImportTemplateElementUpdate {
+  name?: string | null
+  description?: string | null
+  element_index?: number | null
+  value_type?: string | null
+  allow?: string | null
+  disallow?: string | null
+  allow_empty?: boolean | null
+  allow_negative?: boolean | null
+  allow_positive?: boolean | null
+  allow_zero?: boolean | null
+  date_format?: string | null
+  decimal_separator?: string | null
+  maximum_value?: number | null
+  empty_is_zero?: boolean | null
+  negative_parenthesis?: boolean | null
+  sequence_separator?: string | null
+  weekday_start?: number | null
+  strip?: string | null
 }
 
 export const importTemplatesApi = {
@@ -2102,9 +2308,21 @@ export const importTemplatesApi = {
   delete: (id: string) =>
     apiFetch<void>(`/import-templates/${id}`, { method: "DELETE" }),
 
+  clone: (id: string, name: string) =>
+    apiFetch<ImportTemplateResponse>(`/import-templates/${id}/clone`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
   addElement: (templateId: string, data: ImportTemplateElementCreate) =>
     apiFetch<ImportTemplateElementResponse>(`/import-templates/${templateId}/elements`, {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateElement: (elementId: string, data: ImportTemplateElementUpdate) =>
+    apiFetch<ImportTemplateElementResponse>(`/import-templates/elements/${elementId}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     }),
 
@@ -2115,6 +2333,62 @@ export const importTemplatesApi = {
     apiFetch<void>(`/import-templates/${templateId}/elements/reorder`, {
       method: "PUT",
       body: JSON.stringify(elementIds),
+    }),
+}
+
+// ─── Imports (file listing + upload) ─────────────────────────────────────────
+
+export interface ImportFileInfo {
+  name: string
+  size_bytes: number
+  modified_at: string
+  imported: boolean
+}
+
+export interface ImportFileListResponse {
+  directory: string | null
+  files: ImportFileInfo[]
+  error: string | null
+}
+
+export interface VerificationIssue {
+  line_number: number
+  severity: string
+  message_group: string
+  message: string
+}
+
+export interface VerificationGroup {
+  name: string
+  severity: string
+  count: number
+}
+
+export interface VerificationResponse {
+  filename: string
+  total_lines: number
+  error_count: number
+  filter_count: number
+  issues_truncated: boolean
+  groups: VerificationGroup[]
+  issues: VerificationIssue[]
+}
+
+export const importsApi = {
+  listFiles: (customerId: string) =>
+    apiFetch<ImportFileListResponse>(`/imports/files?customer_id=${customerId}`),
+
+  uploadFile: (customerId: string, file: File) => {
+    const form = new FormData()
+    form.append("customer_id", customerId)
+    form.append("file", file)
+    return apiFetch<ImportFileInfo>("/imports/upload", { method: "POST", body: form })
+  },
+
+  verify: (customerId: string, templateId: string, filename: string) =>
+    apiFetch<VerificationResponse>("/imports/verify", {
+      method: "POST",
+      body: JSON.stringify({ customer_id: customerId, template_id: templateId, filename }),
     }),
 }
 
@@ -2695,4 +2969,393 @@ export const configurationCovariatesApi = {
     apiFetch<ConfigurationCovariateResponse[]>(`/configuration-covariates/ensure/${customerId}`, {
       method: "POST",
     }),
+}
+
+// -- Pricing Analytics -------------------------------------------------------
+
+export type ElasticityConfidence = "high" | "medium" | "low" | "insufficient_data"
+export type PriceVariationViability = "adequate" | "marginal" | "insufficient"
+export type ProjectionMode = "constant_elasticity" | "linear"
+
+export interface OutletElasticity {
+  outlet_id: string
+  outlet_name: string | null
+  beta_price: number | null
+  elasticity: number | null
+  mean_price: number | null
+  mean_demand: number | null
+  price_cv: number | null
+  within_weekday_cv: number | null
+  n_distinct_prices: number
+  n_days_observed: number
+  window_days: number
+  confidence: ElasticityConfidence
+  reason: string | null
+  computed_at: string | null
+}
+
+export interface CustomerElasticitySummary {
+  customer_id: string
+  window_days: number
+  n_outlets: number
+  n_outlets_with_elasticity: number
+  median_elasticity: number | null
+  p10_elasticity: number | null
+  p90_elasticity: number | null
+  outlets: OutletElasticity[]
+}
+
+export interface OutletPriceVariation {
+  outlet_id: string
+  outlet_name: string | null
+  window_days: number
+  n_days_observed: number
+  n_distinct_prices: number
+  min_price: number | null
+  max_price: number | null
+  mean_price: number | null
+  price_cv: number | null
+  within_weekday_cv: number | null
+  first_change_date: string | null
+  last_change_date: string | null
+  viability: PriceVariationViability
+  reason: string | null
+}
+
+export interface CustomerPriceVariation {
+  customer_id: string
+  window_days: number
+  n_outlets: number
+  n_adequate: number
+  n_marginal: number
+  n_insufficient: number
+  overall_viability: PriceVariationViability
+  outlets: OutletPriceVariation[]
+  deep_last_change_date: string | null
+  deep_n_distinct_prices: number
+}
+
+export interface OutletScenarioOutcome {
+  adjustment_pct: number
+  new_price: number | null
+  scenario_daily_demand: number | null
+  scenario_daily_revenue: number | null
+  scenario_daily_profit: number | null
+  demand_delta_pct: number | null
+  revenue_delta_pct: number | null
+  profit_delta_pct: number | null
+  extrapolation: boolean
+}
+
+export interface OutletPriceScenario {
+  outlet_id: string
+  outlet_name: string | null
+  window_days: number
+  projection: ProjectionMode
+  elasticity: number | null
+  confidence: ElasticityConfidence
+  mean_price: number | null
+  mean_demand: number | null
+  mean_cost: number | null
+  baseline_daily_revenue: number | null
+  baseline_daily_profit: number | null
+  min_observed_price: number | null
+  max_observed_price: number | null
+  scenarios: OutletScenarioOutcome[]
+  reason: string | null
+}
+
+export interface CustomerScenarioOutcome {
+  adjustment_pct: number
+  scenario_daily_demand: number
+  scenario_daily_revenue: number
+  scenario_daily_profit: number | null
+  demand_delta_pct: number
+  revenue_delta_pct: number
+  profit_delta_pct: number | null
+  n_outlets_included: number
+}
+
+export interface CustomerPriceScenario {
+  customer_id: string
+  window_days: number
+  projection: ProjectionMode
+  adjustment_pcts: number[]
+  n_outlets: number
+  n_outlets_included: number
+  n_outlets_excluded: number
+  baseline_daily_demand: number
+  baseline_daily_revenue: number
+  baseline_daily_profit: number | null
+  scenarios: CustomerScenarioOutcome[]
+  outlets: OutletPriceScenario[] | null
+}
+
+export type RecommendationStatus =
+  | "recommended"
+  | "boundary_high"
+  | "boundary_low"
+  | "no_change"
+  | "insufficient_data"
+
+export interface OutletPriceRecommendation {
+  outlet_id: string
+  outlet_name: string | null
+  window_days: number
+  status: RecommendationStatus
+  elasticity: number | null
+  confidence: ElasticityConfidence
+  mean_price: number | null
+  mean_cost: number | null
+  recommended_adjustment_pct: number | null
+  recommended_price: number | null
+  baseline_daily_profit: number | null
+  projected_daily_profit: number | null
+  profit_uplift_pct: number | null
+  safe_range_min_adjustment: number | null
+  safe_range_max_adjustment: number | null
+  reason: string | null
+}
+
+export interface CustomerPriceRecommendation {
+  customer_id: string
+  window_days: number
+  status: RecommendationStatus
+  n_outlets: number
+  n_outlets_included: number
+  n_outlets_excluded: number
+  baseline_daily_revenue: number
+  baseline_daily_profit: number | null
+  recommended_adjustment_pct: number | null
+  projected_daily_revenue: number | null
+  projected_daily_profit: number | null
+  profit_uplift_pct: number | null
+  safe_range_min_adjustment: number | null
+  safe_range_max_adjustment: number | null
+  reason: string | null
+  outlets: OutletPriceRecommendation[] | null
+}
+
+export type CoverageState =
+  | "with_log"
+  | "with_legacy"
+  | "missing_viable"
+  | "missing_not_viable"
+
+export type RidgeCapableEngine =
+  | "flowstate"
+  | "yinglong"
+  | "toto"
+  | "moirai2"
+  | "timesfm"
+  | "timesfm_finetuned"
+  | "chronos2"
+  | "chronos-bolt"
+  | "sundial"
+  | "kairos"
+  | "tirex"
+  | "gluon-chronos-bolt"
+  | "gluon-chronos2"
+  | "gluon-toto"
+
+export interface OutletCoverage {
+  outlet_id: string
+  outlet_name: string | null
+  state: CoverageState
+  viability: PriceVariationViability
+  n_days_observed: number
+  price_cv: number | null
+  within_weekday_cv: number | null
+  computed_at: string | null
+}
+
+export interface CustomerCoverageSummary {
+  customer_id: string
+  window_days: number
+  n_outlets: number
+  n_with_log: number
+  n_with_legacy: number
+  n_missing_viable: number
+  n_missing_not_viable: number
+  outlets: OutletCoverage[]
+}
+
+export interface CoverageBackfillRequest {
+  engine?: RidgeCapableEngine
+  prediction_days?: number
+  window_days?: number
+  batch_size?: number
+  worker?: string | null
+}
+
+export interface CoverageBackfillResponse {
+  customer_id: string
+  task_id: string | null
+  n_outlets_dispatched: number
+  engine: string
+  message: string
+}
+
+export const pricingAnalyticsApi = {
+  customerViability: (customerId: string, windowDays = 90) =>
+    apiFetch<CustomerPriceVariation>(
+      `/analytics/pricing/viability/customer/${customerId}?window_days=${windowDays}`
+    ),
+  customerElasticity: (customerId: string, windowDays = 90) =>
+    apiFetch<CustomerElasticitySummary>(
+      `/analytics/elasticity/customer/${customerId}?window_days=${windowDays}`
+    ),
+  customerScenario: (
+    customerId: string,
+    adjustmentPcts: number[],
+    windowDays = 90,
+    includeOutlets = false,
+    projection: ProjectionMode = "constant_elasticity"
+  ) => {
+    const qs = new URLSearchParams()
+    for (const p of adjustmentPcts) qs.append("adjustment_pcts", String(p))
+    qs.set("window_days", String(windowDays))
+    qs.set("include_outlets", String(includeOutlets))
+    qs.set("projection", projection)
+    return apiFetch<CustomerPriceScenario>(
+      `/analytics/pricing/scenario/customer/${customerId}?${qs}`
+    )
+  },
+  customerRecommendation: (
+    customerId: string,
+    windowDays = 90,
+    includeOutlets = false
+  ) => {
+    const qs = new URLSearchParams()
+    qs.set("window_days", String(windowDays))
+    qs.set("include_outlets", String(includeOutlets))
+    return apiFetch<CustomerPriceRecommendation>(
+      `/analytics/pricing/recommendation/customer/${customerId}?${qs}`
+    )
+  },
+  customerCoverage: (customerId: string, windowDays = 90) =>
+    apiFetch<CustomerCoverageSummary>(
+      `/analytics/elasticity/coverage/customer/${customerId}?window_days=${windowDays}`
+    ),
+  customerBackfill: (customerId: string, body: CoverageBackfillRequest = {}) =>
+    apiFetch<CoverageBackfillResponse>(
+      `/analytics/elasticity/backfill/customer/${customerId}`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    ),
+}
+
+// -- Event-based elasticity --------------------------------------------------
+
+export type EventConfidence = "high" | "medium" | "low" | "insufficient"
+
+export interface PriceChangeEventOut {
+  id: string
+  customer_id: string
+  outlet_id: string
+  outlet_name: string | null
+  weekday: number  // 1=Mon..7=Sun
+  change_date: string
+  price_before: number
+  price_after: number
+  pct_change: number
+}
+
+export interface ElasticityEventOut {
+  id: string
+  price_change_event_id: string
+  outlet_id: string
+  outlet_name: string | null
+  engine: string
+  post_days: number
+  task_id: string | null
+  forecast_mean: number | null
+  actual_mean: number | null
+  n_post_days: number
+  epsilon: number | null
+  confidence: EventConfidence
+  reason: string | null
+  computed_at: string | null
+}
+
+export interface EventWithEstimate {
+  event: PriceChangeEventOut
+  estimate: ElasticityEventOut | null
+}
+
+export interface OutletEventTimeline {
+  outlet_id: string
+  outlet_name: string | null
+  events: EventWithEstimate[]
+  median_epsilon: number | null
+  n_events_with_estimate: number
+  drift_slope: number | null
+}
+
+export interface CustomerEventSummary {
+  customer_id: string
+  engine: string
+  post_days: number
+  n_outlets: number
+  n_events_total: number
+  n_events_with_estimate: number
+  median_epsilon: number | null
+  p10_epsilon: number | null
+  p90_epsilon: number | null
+  drift_slope: number | null
+  outlets: OutletEventTimeline[]
+}
+
+export interface EventBuildRequest {
+  engine?: RidgeCapableEngine
+  post_days?: number
+  rebuild_existing?: boolean
+}
+
+export interface EventBuildResponse {
+  customer_id: string
+  n_events_detected: number
+  n_events_dispatched: number
+  task_ids: string[]
+  engine: string
+  post_days: number
+  message: string
+}
+
+export const elasticityEventsApi = {
+  customerSummary: (
+    customerId: string,
+    engine: string = "flowstate",
+    postDays: number = 30,
+  ) =>
+    apiFetch<CustomerEventSummary>(
+      `/analytics/elasticity-events/customer/${customerId}?engine=${engine}&post_days=${postDays}`,
+    ),
+  listEvents: (
+    customerId: string,
+    engine: string = "flowstate",
+    postDays: number = 30,
+  ) =>
+    apiFetch<EventWithEstimate[]>(
+      `/analytics/elasticity-events/customer/${customerId}/events?engine=${engine}&post_days=${postDays}`,
+    ),
+  build: (customerId: string, body: EventBuildRequest = {}) =>
+    apiFetch<EventBuildResponse>(
+      `/analytics/elasticity-events/build/customer/${customerId}`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+  recompute: (
+    eventId: string,
+    engine: string = "flowstate",
+    postDays: number = 30,
+  ) =>
+    apiFetch<ElasticityEventOut>(
+      `/analytics/elasticity-events/event/${eventId}/recompute?engine=${engine}&post_days=${postDays}`,
+      { method: "POST" },
+    ),
 }

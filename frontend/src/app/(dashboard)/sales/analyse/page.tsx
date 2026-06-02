@@ -20,6 +20,7 @@ import { PatternsTab } from "@/components/analysis/patterns-tab"
 import { DeliveryTab } from "@/components/analysis/delivery-tab"
 import { SegmentationTab } from "@/components/analysis/segmentation-tab"
 import { HealthCheckTab } from "@/components/analysis/health-check-tab"
+import { CohortTab } from "@/components/analysis/cohort-tab"
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -302,6 +303,12 @@ export default function SalesAnalysePage() {
           >
             {t("tabHealthCheck")}
           </TabsTrigger>
+          <TabsTrigger
+            value="cohorts"
+            className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
+          >
+            {t("tabCohorts")}
+          </TabsTrigger>
           <div
             className="absolute bottom-0 h-0.5 bg-[var(--foreground)] transition-all duration-300 ease-in-out z-0"
             style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
@@ -358,6 +365,12 @@ export default function SalesAnalysePage() {
             customerId={cid}
             outletIds={outletIds}
             active={ready && activeTab === "health-check"}
+          />
+        </TabsContent>
+        <TabsContent value="cohorts">
+          <CohortTab
+            customerId={cid}
+            active={!!cid && activeTab === "cohorts"}
           />
         </TabsContent>
       </Tabs>

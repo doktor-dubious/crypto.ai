@@ -12,6 +12,7 @@ class ImportTemplateElementCreate(BaseModel):
     description: str | None = None
     element_index: int = 0
     type: str
+    value_type: str = "string"
     allow: str | None = None
     disallow: str | None = None
     allow_empty: bool = False
@@ -39,6 +40,7 @@ class ImportTemplateElementResponse(BaseModel):
     description: str | None
     element_index: int
     type: str
+    value_type: str
     allow: str | None
     disallow: str | None
     allow_empty: bool
@@ -56,6 +58,35 @@ class ImportTemplateElementResponse(BaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ImportTemplateElementUpdate(BaseModel):
+    """Schema for updating an import template element. Type is immutable."""
+
+    name: str | None = None
+    description: str | None = None
+    element_index: int | None = None
+    value_type: str | None = None
+    allow: str | None = None
+    disallow: str | None = None
+    allow_empty: bool | None = None
+    allow_negative: bool | None = None
+    allow_positive: bool | None = None
+    allow_zero: bool | None = None
+    date_format: str | None = None
+    decimal_separator: str | None = None
+    maximum_value: int | None = None
+    empty_is_zero: bool | None = None
+    negative_parenthesis: bool | None = None
+    sequence_separator: str | None = None
+    weekday_start: int | None = None
+    strip: str | None = None
+
+
+class ImportTemplateClone(BaseModel):
+    """Schema for cloning an import template."""
+
+    name: str
 
 
 class ImportTemplateCreate(BaseModel):

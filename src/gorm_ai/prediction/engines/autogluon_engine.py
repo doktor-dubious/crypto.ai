@@ -140,12 +140,18 @@ class AutoGluonEngine(PredictionEngine):
             fallback = StatisticalEngine()
             return await fallback.predict_batch(items, horizon, prediction_from, batch_size)
 
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        output = await loop.run_in_executor(
             None,
             self._run_autogluon_batch,
             items, horizon, prediction_from, batch_size, holding_rate, protection_days,
         )
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
+        return output
 
     def _run_autogluon_batch(
         self,
@@ -241,6 +247,7 @@ class AutoGluonEngine(PredictionEngine):
                 "pad_dates": item.get("pad_dates"),
                 "active_covariate_types": item.get("active_covariate_types"),
                 "pad_baseline_window_days": item.get("pad_baseline_window_days", 56),
+                "pad_history_days": item.get("pad_history_days", 730),
             })
 
         # --- Step 2: assemble training TimeSeriesDataFrame ---
@@ -355,6 +362,7 @@ class AutoGluonEngine(PredictionEngine):
                 p.get("pad_dates"),
                 active_covariate_types=p.get("active_covariate_types"),
                 baseline_window_days=p.get("pad_baseline_window_days", 56),
+                history_days=p.get("pad_history_days", 730),
             )
 
             day_results = []

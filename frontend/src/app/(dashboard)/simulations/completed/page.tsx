@@ -131,7 +131,7 @@ function formatCurrency(n: number | null | undefined, symbol: string): string {
   return `${symbol}${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)}`
 }
 
-function StatRow({ label, value }: { label: string; value: ReactNode }) {
+function StatRow({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
     <div className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0">
       <span className="text-xs text-[var(--muted-foreground)]">{label}</span>
@@ -1580,6 +1580,10 @@ export default function SimulationsCompletedPage() {
   const [ovOutletSearch, setOvOutletSearch] = useState("")
   const [ovOutletPage, setOvOutletPage] = useState(1)
 
+  // ── Overview date range filter
+  const [ovFromDate, setOvFromDate] = useState("")
+  const [ovToDate, setOvToDate] = useState("")
+
   // ── Delete dialogs
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteUnderstood, setDeleteUnderstood] = useState(false)
@@ -1642,11 +1646,15 @@ export default function SimulationsCompletedPage() {
   const ovPagedOutlets = ovFilteredOutlets.slice((ovSafePage - 1) * OUTLET_PAGE_SIZE, ovSafePage * OUTLET_PAGE_SIZE)
 
   const sharedActiveOutletIds = sharedAllOutlets ? undefined : Array.from(sharedOutletIds)
-  const needsOverviewApi = weekdayDays != null || sharedActiveOutletIds != null
+  const ovSimFrom = selected?.simulation_from ?? null
+  const ovSimTo = selected?.simulation_to ?? null
+  const ovActiveFrom = ovFromDate && ovFromDate !== (ovSimFrom ?? "") ? ovFromDate : undefined
+  const ovActiveTo = ovToDate && ovToDate !== (ovSimTo ?? "") ? ovToDate : undefined
+  const needsOverviewApi = weekdayDays != null || sharedActiveOutletIds != null || ovActiveFrom != null || ovActiveTo != null
 
   const { data: overviewFiltered } = useQuery({
-    queryKey: ["simulation-overview-filtered", selected?.simulation_id, scenario, weekday, sharedActiveOutletIds],
-    queryFn: () => simulationsApi.getOverview(selected!.simulation_id!, scenario, weekdayDays ?? undefined, sharedActiveOutletIds),
+    queryKey: ["simulation-overview-filtered", selected?.simulation_id, scenario, weekday, sharedActiveOutletIds, ovActiveFrom, ovActiveTo],
+    queryFn: () => simulationsApi.getOverview(selected!.simulation_id!, scenario, weekdayDays ?? undefined, sharedActiveOutletIds, ovActiveFrom, ovActiveTo),
     enabled: !!selected?.simulation_id && activeTab === "tab2",
     staleTime: 30_000,
   })
@@ -1660,6 +1668,12 @@ export default function SimulationsCompletedPage() {
   useEffect(() => { if (cid) saveSimJson(cid, "activeTab", activeTab) }, [cid, activeTab])
   useEffect(() => { if (cid) saveSimJson(cid, "selectedSim", selected?.id ?? null) }, [cid, selected?.id])
   useEffect(() => { if (cid) saveSimJson(cid, "detailMaximized", detailMaximized) }, [cid, detailMaximized])
+
+  // ── Reset overview date range when selected simulation changes ────────────
+  useEffect(() => {
+    setOvFromDate(selected?.simulation_from ?? "")
+    setOvToDate(selected?.simulation_to ?? "")
+  }, [selected?.simulation_id])
 
   // ── Restore selected simulation from persisted ID when list loads ──────────
 
@@ -2043,6 +2057,7 @@ export default function SimulationsCompletedPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 text-destructive data-[state=active]:text-destructive" value="tab0">{t("tabError")}</TabsTrigger>
                 )}
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+                <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tabParameters">{t("tabParameters")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tabSpecs">{t("tabSpecs")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabStats")}</TabsTrigger>
                 <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabZeroShot")}</TabsTrigger>
@@ -2154,6 +2169,47 @@ export default function SimulationsCompletedPage() {
                 <StatRow label={t("fieldOutlets")} value={selected.outlet_count} />
               </TabsContent>
 
+              {/* ─ Parameters ─ */}
+              <TabsContent value="tabParameters" className="space-y-3 max-w-2xl mt-6 px-4">
+                {(() => {
+                  const sp = selected.simulation_params as Record<string, unknown> | null
+                  if (!sp) {
+                    return (
+                      <p className="text-sm italic text-[var(--muted-foreground)]">
+                        {t("paramsNone")}
+                      </p>
+                    )
+                  }
+                  const overridden = Array.isArray(sp._overridden) ? (sp._overridden as string[]) : []
+                  const fmtBool = (v: unknown) => (v ? "✓" : "—")
+                  const eoMethodLabel = (v: unknown) =>
+                    v === 1 ? t("eoMethodInterpolate") : v === 2 ? t("eoMethodSnap") : String(v ?? "—")
+                  const eoExtrapLabel = (v: unknown) =>
+                    v === 1 ? t("eoExtrapE99") : v === 2 ? t("eoExtrapE95") : v === 3 ? t("eoExtrapE90") : String(v ?? "—")
+                  const covHandlingLabel = (v: unknown) =>
+                    v === "none" ? t("covHandlingNone") : v === "native" ? t("covHandlingNative") : v === "external" ? t("covHandlingExternal") : String(v ?? "—")
+                  const ovMarker = (k: string) =>
+                    overridden.includes(k) ? <span className="ml-2 text-amber-400 text-xs">(override)</span> : null
+                  return (
+                    <>
+                      <p className="text-xs text-[var(--muted-foreground)]">
+                        {overridden.length
+                          ? t("paramsOverridden", { keys: overridden.join(", ") })
+                          : t("paramsNoOverrides")}
+                      </p>
+                      <StatRow label={<>{t("paramVariationAdjustment")}{ovMarker("variation_adjustment")}</>} value={fmtBool(sp.variation_adjustment)} />
+                      <StatRow label={<>{t("paramEoMethodology")}{ovMarker("eo_methodology")}</>} value={eoMethodLabel(sp.eo_methodology)} />
+                      <StatRow label={<>{t("paramEoExtrapolation")}{ovMarker("eo_extrapolation")}</>} value={eoExtrapLabel(sp.eo_extrapolation)} />
+                      <StatRow label={<>{t("paramWeekdayProfileCorrection")}{ovMarker("weekday_profile_correction")}</>} value={fmtBool(sp.weekday_profile_correction)} />
+                      <StatRow label={<>{t("paramCovariateHandling")}{ovMarker("covariate_handling")}</>} value={covHandlingLabel(sp.covariate_handling)} />
+                      <StatRow label={<>{t("paramCovariateWeekday")}{ovMarker("covariate_weekday")}</>} value={fmtBool(sp.covariate_weekday)} />
+                      <StatRow label={<>{t("paramCovariatePrice")}{ovMarker("covariate_price")}</>} value={fmtBool(sp.covariate_price)} />
+                      <StatRow label={<>{t("paramCovariatePad")}{ovMarker("covariate_pad")}</>} value={fmtBool(sp.covariate_pad)} />
+                    </>
+                  )
+                })()}
+              </TabsContent>
+
               {/* ─ Specs ─ */}
               <TabsContent value="tabSpecs" className="space-y-3 max-w-2xl mt-6 px-4">
                 <StatRow label={t("fieldEngine")} value={selected.actual_engine ?? selected.engine ?? "—"} />
@@ -2240,9 +2296,18 @@ export default function SimulationsCompletedPage() {
                       )}
                     </div>
 
-                    {/* ── Right: scenario + weekday + overview table ── */}
+                    {/* ── Right: date range + scenario + weekday + overview table ── */}
                     <div className="flex-1 min-w-0 space-y-4">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                          <label className="shrink-0">From</label>
+                          <Input type="date" value={ovFromDate} onChange={(e) => setOvFromDate(e.target.value)} className="h-7 w-36 text-xs" />
+                          <label className="shrink-0">To</label>
+                          <Input type="date" value={ovToDate} onChange={(e) => setOvToDate(e.target.value)} className="h-7 w-36 text-xs" />
+                          {(ovFromDate !== (selected.simulation_from ?? "") || ovToDate !== (selected.simulation_to ?? "")) && (
+                            <button onClick={() => { setOvFromDate(selected.simulation_from ?? ""); setOvToDate(selected.simulation_to ?? "") }} className="text-xs text-[var(--muted-foreground)] hover:text-foreground underline">Reset</button>
+                          )}
+                        </div>
                         <ScenarioCombobox value={scenario} onChange={setScenario} />
                         <WeekdayCombobox value={weekday} onChange={setWeekday} />
                       </div>

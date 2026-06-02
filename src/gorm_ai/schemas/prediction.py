@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from gorm_ai.schemas.simulation import SimulationParameters
+
 
 class PredictionEngine(StrEnum):
     """Available prediction engines."""
@@ -64,6 +66,7 @@ class PredictionRequest(BaseModel):
     ignore_minimum: bool = False     # ignore outlet delivery minimum constraint
     ignore_maximum: bool = False     # ignore outlet delivery maximum constraint
     worker: str | None = None        # route to a specific worker queue; None = any available
+    parameters: SimulationParameters | None = None   # overrides for configuration settings
 
 
 class PredictionResult(BaseModel):

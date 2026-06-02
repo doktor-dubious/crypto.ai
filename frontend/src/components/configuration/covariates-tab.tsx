@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { configurationCovariatesApi, type ConfigurationCovariateResponse } from "@/lib/api"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -252,6 +253,55 @@ export function CovariatesTab({ customerId, draft, setDraft, isGorm, t }: Covari
                         </div>
                       )
                     })}
+                  </div>
+                </div>
+              ) : selected.type === 3 ? (
+                <div>
+                  <h4 className="text-sm font-semibold mb-1">{t("covariatePadDetailsTitle")}</h4>
+                  <p className="text-xs text-muted-foreground mb-3">{t("covariatePadDetailsDesc")}</p>
+                  <div className="space-y-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">{t("padHistoryDays")}</label>
+                      <p className="text-xs text-muted-foreground">{t("padHistoryDaysInfo")}</p>
+                      <Input
+                        type="number"
+                        min={30}
+                        max={3650}
+                        step={1}
+                        value={draft.pad_history_days != null ? String(draft.pad_history_days) : (isGorm ? "730" : "")}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setDraft((d) => ({
+                            ...d,
+                            pad_history_days: v === "" ? null : Math.max(30, Math.min(3650, parseInt(v, 10) || 730)),
+                          }))
+                        }}
+                        placeholder={isGorm ? undefined : "—"}
+                        disabled={!selected.active}
+                        className="h-8 text-sm max-w-[140px]"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">{t("padBaselineWindowDays")}</label>
+                      <p className="text-xs text-muted-foreground">{t("padBaselineWindowDaysInfo")}</p>
+                      <Input
+                        type="number"
+                        min={7}
+                        max={365}
+                        step={1}
+                        value={draft.pad_baseline_window_days != null ? String(draft.pad_baseline_window_days) : (isGorm ? "56" : "")}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setDraft((d) => ({
+                            ...d,
+                            pad_baseline_window_days: v === "" ? null : Math.max(7, Math.min(365, parseInt(v, 10) || 56)),
+                          }))
+                        }}
+                        placeholder={isGorm ? undefined : "—"}
+                        disabled={!selected.active}
+                        className="h-8 text-sm max-w-[140px]"
+                      />
+                    </div>
                   </div>
                 </div>
               ) : (

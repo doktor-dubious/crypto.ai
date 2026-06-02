@@ -8,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gorm_ai.database.connection import get_session
 from gorm_ai.services.analysis import AnalysisService
+from gorm_ai.services.cohort_audit import CohortAuditService
 from gorm_ai.services.configuration import ConfigurationService
 from gorm_ai.services.configuration_covariate import ConfigurationCovariateService
 from gorm_ai.services.customer import CustomerService
 from gorm_ai.services.customer_configuration import CustomerConfigurationService
+from gorm_ai.services.elasticity import ElasticityService
+from gorm_ai.services.elasticity_events import ElasticityEventService
 from gorm_ai.services.financial_date import FinancialDateService
 from gorm_ai.services.health_check import HealthCheckService
 from gorm_ai.services.import_template import ImportTemplateService
@@ -46,6 +49,11 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 def get_analysis_service(session: DbSession) -> AnalysisService:
     """Get analysis service."""
     return AnalysisService(session)
+
+
+def get_cohort_audit_service(session: DbSession) -> CohortAuditService:
+    """Get cohort audit service."""
+    return CohortAuditService(session)
 
 
 def get_health_check_service(session: DbSession) -> HealthCheckService:
@@ -128,6 +136,16 @@ def get_price_history_service(session: DbSession) -> PriceHistoryService:
     return PriceHistoryService(session)
 
 
+def get_elasticity_service(session: DbSession) -> ElasticityService:
+    """Get elasticity analytics service."""
+    return ElasticityService(session)
+
+
+def get_elasticity_event_service(session: DbSession) -> ElasticityEventService:
+    """Get event-based elasticity service."""
+    return ElasticityEventService(session)
+
+
 def get_prediction_engine_service(session: DbSession) -> PredictionEngineService:
     """Get prediction engine service."""
     return PredictionEngineService(session)
@@ -165,6 +183,7 @@ def get_user_customer_service(session: DbSession) -> UserCustomerService:
 
 # Type aliases for service injection
 AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
+CohortAuditServiceDep = Annotated[CohortAuditService, Depends(get_cohort_audit_service)]
 HealthCheckServiceDep = Annotated[HealthCheckService, Depends(get_health_check_service)]
 ConfigurationCovariateServiceDep = Annotated[
     ConfigurationCovariateService, Depends(get_configuration_covariate_service)
@@ -188,6 +207,10 @@ SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_s
 SalesServiceDep = Annotated[SalesService, Depends(get_sales_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 PriceHistoryServiceDep = Annotated[PriceHistoryService, Depends(get_price_history_service)]
+ElasticityServiceDep = Annotated[ElasticityService, Depends(get_elasticity_service)]
+ElasticityEventServiceDep = Annotated[
+    ElasticityEventService, Depends(get_elasticity_event_service)
+]
 PredictionEngineServiceDep = Annotated[PredictionEngineService, Depends(get_prediction_engine_service)]
 PredictionEngineParameterServiceDep = Annotated[
     PredictionEngineParameterService, Depends(get_prediction_engine_parameter_service)

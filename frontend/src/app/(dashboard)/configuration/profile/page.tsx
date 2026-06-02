@@ -90,27 +90,45 @@ export default function ProfilePage() {
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
                       <TableHead className="text-xs">{t("provider")}</TableHead>
+                      <TableHead className="text-xs">{t("model")}</TableHead>
+                      <TableHead className="text-xs text-right">{t("inputUsed")}</TableHead>
+                      <TableHead className="text-xs text-right">{t("outputUsed")}</TableHead>
                       <TableHead className="text-xs text-right">{t("used")}</TableHead>
                       <TableHead className="text-xs text-right">{t("available")}</TableHead>
                       <TableHead className="text-xs text-right">{t("remaining")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {token.llms.map((llm) => (
-                      <TableRow key={llm.llm_id}>
-                        <TableCell className="text-xs font-medium">
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-                            {llm.llm_name}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-xs text-right tabular-nums">{llm.used.toLocaleString()}</TableCell>
-                        <TableCell className="text-xs text-right tabular-nums">{llm.available.toLocaleString()}</TableCell>
-                        <TableCell className="text-xs text-right tabular-nums">
-                          {(llm.available - llm.used).toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {token.llms.map((llm, i) => {
+                      // Legacy rows (written before the split) only have
+                      // `used`, with input_used = output_used = 0. Show a
+                      // dash rather than a misleading "0".
+                      const hasSplit = llm.input_used > 0 || llm.output_used > 0
+                      return (
+                        <TableRow key={`${llm.llm_id}-${llm.model_name ?? "legacy"}-${i}`}>
+                          <TableCell className="text-xs font-medium">
+                            <div className="flex items-center gap-2">
+                              <Sparkles className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                              {llm.llm_name}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-[var(--muted-foreground)]">
+                            {llm.model_name ?? t("modelLegacy")}
+                          </TableCell>
+                          <TableCell className="text-xs text-right tabular-nums text-[var(--muted-foreground)]">
+                            {hasSplit ? llm.input_used.toLocaleString() : <>&mdash;</>}
+                          </TableCell>
+                          <TableCell className="text-xs text-right tabular-nums text-[var(--muted-foreground)]">
+                            {hasSplit ? llm.output_used.toLocaleString() : <>&mdash;</>}
+                          </TableCell>
+                          <TableCell className="text-xs text-right tabular-nums">{llm.used.toLocaleString()}</TableCell>
+                          <TableCell className="text-xs text-right tabular-nums">{llm.available.toLocaleString()}</TableCell>
+                          <TableCell className="text-xs text-right tabular-nums">
+                            {(llm.available - llm.used).toLocaleString()}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>

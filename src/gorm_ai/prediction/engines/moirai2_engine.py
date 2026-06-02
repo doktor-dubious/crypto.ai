@@ -238,11 +238,17 @@ class Moirai2Engine(PredictionEngine):
                     items, horizon, prediction_from, batch_size
                 )
 
-        return await loop.run_in_executor(
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
+        output = await loop.run_in_executor(
             None,
             self._run_moirai_batch,
             items, horizon, prediction_from, holding_rate, protection_days,
         )
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
+        return output
 
     def _run_moirai_batch(
         self,
@@ -410,6 +416,7 @@ class Moirai2Engine(PredictionEngine):
                 items[int(p["key"])].get("pad_dates"),
                 active_covariate_types=items[int(p["key"])].get("active_covariate_types"),
                 baseline_window_days=items[int(p["key"])].get("pad_baseline_window_days", 56),
+                history_days=items[int(p["key"])].get("pad_history_days", 730),
             )
             if pad_adj.any():
                 mean_vals = mean_vals + pad_adj

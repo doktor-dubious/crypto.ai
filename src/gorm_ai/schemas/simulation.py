@@ -15,6 +15,23 @@ class SimulationGroup(IntEnum):
     GOOD_INCREASE = 4   # predicted > delivered, outlet was sold out
 
 
+class SimulationParameters(BaseModel):
+    """Optional per-run overrides for configuration-level settings.
+
+    Any field left as None falls back to the resolved customer/global
+    Configuration value at run time.
+    """
+
+    variation_adjustment: bool | None = None
+    eo_methodology: int | None = None            # 1=interpolate, 2=snap
+    eo_extrapolation: int | None = None          # 1=E99, 2=E95, 3=E90
+    weekday_profile_correction: bool | None = None
+    covariate_handling: str | None = None        # none / native / external
+    covariate_weekday: bool | None = None        # ConfigurationCovariate type=1
+    covariate_price: bool | None = None          # ConfigurationCovariate type=2
+    covariate_pad: bool | None = None            # ConfigurationCovariate type=3
+
+
 class SimulationRequest(BaseModel):
     """Request schema for a historic simulation run."""
 
@@ -44,6 +61,7 @@ class SimulationRequest(BaseModel):
     ignore_minimum: bool = False     # ignore outlet delivery minimum constraint
     ignore_maximum: bool = False     # ignore outlet delivery maximum constraint
     worker: str | None = None        # route to a specific worker queue; None = any available
+    parameters: SimulationParameters | None = None   # overrides for configuration settings
 
 
 class SimulationDayResult(BaseModel):
@@ -226,6 +244,7 @@ class CompletedSimulationResponse(BaseModel):
     engine: str | None = None
     actual_engine: str | None = None
     engine_params: dict | None = None
+    simulation_params: dict | None = None
     delay: int | None = None
     outlet_count: int = 0
     outlet_group_id: str | None = None

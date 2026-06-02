@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useSession } from "@/lib/auth-client"
 import { customersApi, usersApi, type CustomerResponse } from "@/lib/api"
 
@@ -24,7 +24,6 @@ const CustomerContext = createContext<CustomerContextValue>({
 const STORAGE_KEY = "gorm:activeCustomerId"
 
 export function CustomerProvider({ children }: { children: React.ReactNode }) {
-  const queryClient = useQueryClient()
   const { data: session } = useSession()
   const userId = session?.user?.id
 
@@ -67,12 +66,13 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
   )
 
   function setActiveCustomer(customer: CustomerResponse) {
-    setActiveCustomerId(customer.id)
+    if (customer.id === activeCustomerId) return
     localStorage.setItem(STORAGE_KEY, customer.id)
-    // Fire-and-forget: update last_opened_at on backend
-    customersApi.opened(customer.id).then(() => {
-      queryClient.invalidateQueries({ queryKey: ["customers", userId] })
-    }).catch(() => {})
+    // Fire-and-forget: update last_opened_at on backend (don't await — we're reloading)
+    customersApi.opened(customer.id).catch(() => {})
+    // Full reload so per-customer form state (e.g. new-simulation outlet group)
+    // re-initializes from the new customer's defaults instead of the previous one's.
+    window.location.reload()
   }
 
   return (

@@ -155,9 +155,9 @@ export default function StatisticsSalesPage() {
   // Resolve effective group: selected or production default
   const effectiveGroupId = useMemo(() => {
     if (selectedGroupId !== null) return selectedGroupId
-    if (customerConfig?.production_group_id) return customerConfig.production_group_id
+    if (customerConfig?.group_id) return customerConfig.group_id
     return groups[0]?.id ?? null
-  }, [selectedGroupId, customerConfig?.production_group_id, groups])
+  }, [selectedGroupId, customerConfig?.group_id, groups])
 
   // Outlets in group
   const { data: groupOutlets = [] } = useQuery({

@@ -4,9 +4,11 @@ from fastapi import APIRouter, HTTPException
 
 from gorm_ai.api.deps import ImportTemplateServiceDep
 from gorm_ai.schemas.import_template import (
+    ImportTemplateClone,
     ImportTemplateCreate,
     ImportTemplateElementCreate,
     ImportTemplateElementResponse,
+    ImportTemplateElementUpdate,
     ImportTemplateResponse,
     ImportTemplateUpdate,
 )
@@ -83,6 +85,19 @@ async def add_element(
     return ImportTemplateElementResponse.model_validate(element)
 
 
+@router.patch("/elements/{element_id}", response_model=ImportTemplateElementResponse)
+async def update_element(
+    element_id: str,
+    data: ImportTemplateElementUpdate,
+    service: ImportTemplateServiceDep,
+) -> ImportTemplateElementResponse:
+    """Update an element's configuration."""
+    element = await service.update_element(element_id, data)
+    if not element:
+        raise HTTPException(status_code=404, detail="Element not found")
+    return ImportTemplateElementResponse.model_validate(element)
+
+
 @router.delete("/elements/{element_id}", status_code=204)
 async def remove_element(
     element_id: str,
@@ -92,6 +107,19 @@ async def remove_element(
     deleted = await service.remove_element(element_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Element not found")
+
+
+@router.post("/{template_id}/clone", response_model=ImportTemplateResponse, status_code=201)
+async def clone_import_template(
+    template_id: str,
+    data: ImportTemplateClone,
+    service: ImportTemplateServiceDep,
+) -> ImportTemplateResponse:
+    """Clone an import template with all of its elements."""
+    template = await service.clone(template_id, data.name)
+    if not template:
+        raise HTTPException(status_code=404, detail="Import template not found")
+    return ImportTemplateResponse.model_validate(template)
 
 
 @router.put("/{template_id}/elements/reorder", status_code=204)

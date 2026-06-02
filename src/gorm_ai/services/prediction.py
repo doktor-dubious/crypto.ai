@@ -169,7 +169,29 @@ class PredictionService:
         active_covariate_types = await self._resolve_active_covariate_types(request.customer_id)
         variation_params = await self._resolve_variation_adjustment(request.customer_id)
         pad_baseline_window_days = await self._resolve_pad_baseline_window_days(request.customer_id)
+        pad_history_days = await self._resolve_pad_history_days(request.customer_id)
         eo_params = await self._resolve_eo_params(request.customer_id)
+
+        # --- Apply request.parameters overrides (user-supplied, optional) ---
+        if getattr(request, "parameters", None) is not None:
+            _rp = request.parameters.model_dump(exclude_none=True)
+            if "variation_adjustment" in _rp:
+                variation_params["enabled"] = _rp["variation_adjustment"]
+            if "eo_methodology" in _rp:
+                eo_params["methodology"] = _rp["eo_methodology"]
+            if "eo_extrapolation" in _rp:
+                eo_params["extrapolation"] = _rp["eo_extrapolation"]
+            if "weekday_profile_correction" in _rp:
+                weekday_profile_params["enabled"] = _rp["weekday_profile_correction"]
+            if "covariate_handling" in _rp:
+                covariate_handling = _rp["covariate_handling"]
+            _cov_map = {"covariate_weekday": 1, "covariate_price": 2, "covariate_pad": 3}
+            if any(k in _rp for k in _cov_map):
+                _flags = {t: (t in active_covariate_types) for t in (1, 2, 3)}
+                for _k, _t in _cov_map.items():
+                    if _k in _rp:
+                        _flags[_t] = bool(_rp[_k])
+                active_covariate_types = {t for t, on in _flags.items() if on}
 
         # Filter closed-day data from historical series so that engines don't
         # see artificial zeros on days the customer is closed.
@@ -240,6 +262,7 @@ class PredictionService:
                 "active_covariate_types": active_covariate_types,
                 "variation_adjustment": variation_params,
                 "pad_baseline_window_days": pad_baseline_window_days,
+                "pad_history_days": pad_history_days,
                 "eo_params": eo_params,
                 **(request.engine_params or {}),
             })
@@ -280,6 +303,7 @@ class PredictionService:
                         "pad_dates": pad_covariates,
                         "weekday_correction": [False] * 7,
                         "pad_baseline_window_days": pad_baseline_window_days,
+                        "pad_history_days": pad_history_days,
                         "eo_params": eo_params,
                     })
                     wo_ids.append(outlet_id)
@@ -1340,6 +1364,28 @@ class PredictionService:
             return gc.pad_baseline_window_days
         return 56
 
+    async def _resolve_pad_history_days(self, customer_id: str) -> int:
+        """Resolve PAD back-history window (days), customer → global → 730."""
+        result = await self.session.execute(
+            select(CustomerConfiguration).where(
+                CustomerConfiguration.customer_id == customer_id,
+                CustomerConfiguration.active.is_(True),
+            )
+        )
+        cc = result.scalar_one_or_none()
+        if cc and cc.pad_history_days is not None:
+            return cc.pad_history_days
+
+        result = await self.session.execute(
+            select(Configuration).where(
+                Configuration.id == _CONFIGURATION_SINGLETON_ID,
+            )
+        )
+        gc = result.scalar_one_or_none()
+        if gc is not None and gc.pad_history_days is not None:
+            return gc.pad_history_days
+        return 730
+
     async def _resolve_covariate_handling(self, customer_id: str) -> str:
         """Resolve covariate handling mode.
 
@@ -1669,7 +1715,15 @@ class PredictionService:
 
         covariates: dict[str, dict[date, float]] = {}
         if price_map:
-            covariates["price_per_unit"] = price_map
+            # Log-price feature: Ridge fits a coefficient that is interpretable
+            # directly as a semi-elasticity (units of demand per 1% price change).
+            # Compared to level price, this is scale-invariant across customers
+            # with very different price points and avoids regularisation bias on
+            # low-price outlets. Dates with non-positive prices are skipped
+            # because log(p) is undefined there.
+            log_price_map = {d: math.log(p) for d, p in price_map.items() if p > 0}
+            if log_price_map:
+                covariates["log_price_per_unit"] = log_price_map
         if cost_map:
             covariates["cost_per_unit"] = cost_map
         if profit_map:
@@ -1827,7 +1881,10 @@ class PredictionService:
 
             covariates: dict[str, dict[date, float]] = {}
             if price_map:
-                covariates["price_per_unit"] = price_map
+                # See note on log-price covariate in _build_covariates above.
+                log_price_map = {d: math.log(p) for d, p in price_map.items() if p > 0}
+                if log_price_map:
+                    covariates["log_price_per_unit"] = log_price_map
             if cost_map:
                 covariates["cost_per_unit"] = cost_map
             if profit_map:
@@ -2725,6 +2782,11 @@ def _classify_covariate(name: str) -> tuple[str, str | None, str | None]:
         dow = int(name.split("_")[1])
         day_names = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday", 6: "Saturday"}
         return "weekday", None, f"{day_names.get(dow, f'Weekday {dow}')} vs Sunday baseline"
+    if name == "log_price_per_unit":
+        return "financial", None, (
+            "Log of selling price per unit — coefficient is the semi-elasticity "
+            "of demand to price (units per 1% price change)."
+        )
     if name == "cost_per_unit":
         return "financial", None, "End-user price per unit — demand signal via price elasticity"
     if "_dow_" in name:

@@ -16,7 +16,7 @@ log = structlog.get_logger()
 from gorm_ai.database.models.configuration import Configuration
 from gorm_ai.database.models.customer_configuration import CustomerConfiguration
 from gorm_ai.database.models.outlet import Outlet
-from gorm_ai.database.models.outlet_group import OutletGroupMember
+from gorm_ai.database.models.outlet_group import OutletGroup, OutletGroupMember
 from gorm_ai.database.models.prediction import Prediction as PredictionModel
 from gorm_ai.database.models.prediction_outlet import PredictionOutlet
 from gorm_ai.database.models.sales import Sales
@@ -380,11 +380,36 @@ class SimulationService:
         weekday_profile_params = await self._prediction_service._resolve_weekday_profile_correction(request.customer_id)
         variation_params = await self._prediction_service._resolve_variation_adjustment(request.customer_id)
         pad_baseline_window_days = await self._prediction_service._resolve_pad_baseline_window_days(request.customer_id)
+        pad_history_days = await self._prediction_service._resolve_pad_history_days(request.customer_id)
         covariate_handling = await self._prediction_service._resolve_covariate_handling(request.customer_id)
         active_covariate_types = await self._prediction_service._resolve_active_covariate_types(request.customer_id)
         eo_params = await self._prediction_service._resolve_eo_params(request.customer_id)
         weekday_only_flags = await self._prediction_service._resolve_weekday_only(request.customer_id)
         open_days_flags = await self._prediction_service._resolve_open_days(request.customer_id)
+
+        # --- Merge request.parameters (user overrides) into config_overrides ---
+        if request.parameters is not None:
+            req_params = request.parameters.model_dump(exclude_none=True)
+            merged: dict = {}
+            for key in (
+                "variation_adjustment", "eo_methodology", "eo_extrapolation",
+                "weekday_profile_correction", "covariate_handling",
+            ):
+                if key in req_params:
+                    merged[key] = req_params[key]
+            cov_map = {"covariate_weekday": 1, "covariate_price": 2, "covariate_pad": 3}
+            cov_flags = {t: (t in active_covariate_types) for t in (1, 2, 3)}
+            cov_touched = False
+            for field, type_id in cov_map.items():
+                if field in req_params:
+                    cov_flags[type_id] = bool(req_params[field])
+                    cov_touched = True
+            if cov_touched:
+                merged["active_covariate_types"] = [t for t, on in cov_flags.items() if on]
+            # optimizer's config_overrides take precedence over user params
+            if config_overrides:
+                merged.update(config_overrides)
+            config_overrides = merged
 
         # --- Apply config overrides (used by optimization grid search) ---
         if config_overrides:
@@ -406,6 +431,31 @@ class SimulationService:
                 covariate_handling = config_overrides["covariate_handling"]
             if "active_covariate_types" in config_overrides:
                 active_covariate_types = set(config_overrides["active_covariate_types"])
+
+        # --- Persist the resolved (effective) simulation parameters snapshot ---
+        resolved_params_snapshot = {
+            "variation_adjustment": bool(variation_params.get("enabled")),
+            "variation_history_days": variation_params.get("history_days"),
+            "eo_methodology": eo_params.get("methodology"),
+            "eo_extrapolation": eo_params.get("extrapolation"),
+            "weekday_profile_correction": bool(weekday_profile_params.get("enabled")),
+            "weekday_profile_correction_strength": weekday_profile_params.get("strength"),
+            "weekday_profile_correction_threshold": weekday_profile_params.get("threshold"),
+            "covariate_handling": covariate_handling,
+            "covariate_weekday": 1 in active_covariate_types,
+            "covariate_price": 2 in active_covariate_types,
+            "covariate_pad": 3 in active_covariate_types,
+        }
+        overridden_keys = sorted(
+            request.parameters.model_dump(exclude_none=True).keys()
+            if request.parameters is not None else []
+        )
+        resolved_params_snapshot["_overridden"] = overridden_keys
+        sim_record_obj = await self.session.get(SimulationModel, sim_record_id)
+        if sim_record_obj is not None:
+            sim_record_obj.simulation_params = resolved_params_snapshot
+            await self.session.flush()
+            await self.session.commit()
 
         # --- Per-outlet closed days (same logic as in PredictionService) ---
         # Build a set of python weekdays (0-6) that are closed for each outlet,
@@ -552,6 +602,7 @@ class SimulationService:
                     "active_covariate_types": active_covariate_types,
                     "variation_adjustment": variation_params,
                     "pad_baseline_window_days": pad_baseline_window_days,
+                    "pad_history_days": pad_history_days,
                     "eo_params": eo_params,
                 })
                 batch_outlet_ids.append(outlet_id)
@@ -587,6 +638,7 @@ class SimulationService:
                             "covariate_handling": covariate_handling,
                             "active_covariate_types": active_covariate_types,
                             "pad_baseline_window_days": pad_baseline_window_days,
+                            "pad_history_days": pad_history_days,
                             "eo_params": eo_params,
                         })
                         wo_ids.append(outlet_id)
@@ -1482,6 +1534,7 @@ class SimulationService:
                 "engine": sim.engine if sim else None,
                 "actual_engine": sim.actual_engine if sim else None,
                 "engine_params": sim.engine_params if sim else None,
+                "simulation_params": sim.simulation_params if sim else None,
                 "delay": sim.delay if sim else None,
                 "outlet_count": outlet_count,
                 "outlet_group_id": sim.outlet_group_id if sim else None,
@@ -1752,8 +1805,10 @@ class SimulationService:
         column: str = "delivered",
         weekdays: list[int] | None = None,
         outlet_ids: list[str] | None = None,
+        from_date: date | None = None,
+        to_date: date | None = None,
     ) -> dict | None:
-        """Re-aggregate overview stats for a simulation, optionally filtered by weekday.
+        """Re-aggregate overview stats for a simulation, optionally filtered by weekday/date range.
 
         Includes actual totals and profit group (g1-g4) data computed via classification.
         """
@@ -1786,6 +1841,10 @@ class SimulationService:
             filters.append(extract("isodow", PredictionModel.date).in_(weekdays))
         if outlet_ids:
             filters.append(PredictionOutlet.outlet_id.in_(outlet_ids))
+        if from_date:
+            filters.append(PredictionModel.date >= from_date)
+        if to_date:
+            filters.append(PredictionModel.date <= to_date)
 
         # Load all relevant rows with actual delivery from sales
         rows_result = await self.session.execute(
@@ -2781,8 +2840,30 @@ class SimulationService:
         outlet_group_id: str | None,
     ) -> list[str]:
         if outlet_ids:
+            mismatched = await self.session.execute(
+                select(Outlet.id).where(
+                    Outlet.id.in_(outlet_ids),
+                    Outlet.customer_id != customer_id,
+                )
+            )
+            bad = list(mismatched.scalars().all())
+            if bad:
+                raise ValueError(
+                    f"{len(bad)} outlet(s) do not belong to customer {customer_id}: "
+                    f"{', '.join(bad[:5])}{'…' if len(bad) > 5 else ''}"
+                )
             return outlet_ids
         if outlet_group_id:
+            group_customer_id = await self.session.scalar(
+                select(OutletGroup.customer_id).where(OutletGroup.id == outlet_group_id)
+            )
+            if group_customer_id is None:
+                raise ValueError(f"Outlet group {outlet_group_id} not found")
+            if group_customer_id != customer_id:
+                raise ValueError(
+                    f"Outlet group {outlet_group_id} belongs to customer "
+                    f"{group_customer_id}, not {customer_id}"
+                )
             result = await self.session.execute(
                 select(OutletGroupMember.outlet_id).where(
                     OutletGroupMember.group_id == outlet_group_id,

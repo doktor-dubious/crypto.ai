@@ -133,6 +133,7 @@ const PADS_SUBNAV_ITEMS = [
 const FINANCIALS_SUBNAV_ITEMS = [
   { href: "/financials/date-override", icon: CalendarClock, labelKey: "financialsDateOverride" },
   { href: "/financials/price-history", icon: TrendingUp, labelKey: "financialsPriceHistory" },
+  { href: "/financials/pricing-analytics", icon: LineChart, labelKey: "financialsPricingAnalytics" },
   { href: "/financials/bulk-update", icon: RefreshCw, labelKey: "financialsBulkUpdate" },
 ] as const
 

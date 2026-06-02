@@ -401,22 +401,6 @@ function CoreTab({
         </div>
       )}
 
-      <FieldRow label={t("padBaselineWindowDays")} info={t("padBaselineWindowDaysInfo")}>
-        <Input
-          type="number"
-          min={7}
-          max={365}
-          step={1}
-          value={draft.pad_baseline_window_days != null ? String(draft.pad_baseline_window_days) : (isGorm ? "56" : "")}
-          onChange={(e) => {
-            const v = e.target.value
-            set("pad_baseline_window_days", v === "" ? null : Math.max(7, Math.min(365, parseInt(v, 10) || 56)))
-          }}
-          placeholder={isGorm ? undefined : "—"}
-          className="h-8 text-sm max-w-[140px]"
-        />
-      </FieldRow>
-
       <FieldRow label={t("eoMethodology")} info={t("eoMethodologyInfo")}>
         <select
           value={String(draft.eo_methodology ?? (isGorm ? 1 : ""))}
@@ -804,6 +788,37 @@ function InsightsTab({
   )
 }
 
+function DirectoriesTab({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: Record<string, unknown>
+  setDraft: (d: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations<"configuration">>
+}) {
+  const fields: Array<{ key: string; label: string; info: string }> = [
+    { key: "home_directory", label: t("fieldHomeDirectory"), info: t("fieldHomeDirectoryInfo") },
+    { key: "upload_directory", label: t("fieldUploadDirectory"), info: t("fieldUploadDirectoryInfo") },
+    { key: "upload_directory_storage", label: t("fieldUploadDirectoryStorage"), info: t("fieldUploadDirectoryStorageInfo") },
+    { key: "forecast_directory", label: t("fieldForecastDirectory"), info: t("fieldForecastDirectoryInfo") },
+    { key: "forecast_directory_storage", label: t("fieldForecastDirectoryStorage"), info: t("fieldForecastDirectoryStorageInfo") },
+  ]
+  return (
+    <div className="space-y-6">
+      {fields.map((f) => (
+        <FieldRow key={f.key} label={f.label} info={f.info}>
+          <Input
+            value={(draft[f.key] as string) ?? ""}
+            onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value || null })}
+            className="font-mono text-xs"
+          />
+        </FieldRow>
+      ))}
+    </div>
+  )
+}
+
 function GormInsightsTab({
   draft,
   setDraft,
@@ -1175,6 +1190,7 @@ export default function ConfigurationPage() {
                 { value: "weekday", label: t("tabWeekday") },
                 { value: "covariates", label: t("tabCovariates") },
                 { value: "insights", label: t("tabInsights") },
+                { value: "directories", label: t("tabDirectories") },
               ],
               <>
                 <TabsContent value="details" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
@@ -1199,6 +1215,9 @@ export default function ConfigurationPage() {
                 </TabsContent>
                 <TabsContent value="insights" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
                   <InsightsTab draft={configDraft} setDraft={setConfigDraft} engines={engines} strategies={strategies} workers={workers} llms={llms} llmSubmodels={llmSubmodels} t={t} />
+                </TabsContent>
+                <TabsContent value="directories" className="space-y-6 max-w-2xl mt-6 pl-[2px] overflow-visible">
+                  <DirectoriesTab draft={configDraft} setDraft={setConfigDraft} t={t} />
                 </TabsContent>
               </>
             )
