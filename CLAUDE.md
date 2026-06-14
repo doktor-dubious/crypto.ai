@@ -1,7 +1,7 @@
 # CLAUDE.md - Project Context for Claude Code
 
 ## Project Overview
-Gorm AI is a time series prediction system with pluggable prediction engines, supporting custom models and AI foundation models (e.g., Google TimesFM).
+Crypto AI is a set of functionality that works with crypto currency
 
 ## Tech Stack
 - **Python 3.11+** with **uv** for package management
@@ -66,9 +66,13 @@ docker compose up -d
 
 ### Database Models
 - All models inherit from `Base` (defined in `database/base.py`)
-- Common columns: `id` (UUID), `active` (bool), `created_at`, `updated_at`
+- Common columns: 
+`id` (integer generated always as identity primary key), 
+`ext_id` UUID `NIQUE DEFAULT gen_random_uuid()
+`active` (bool),
+`created_at`,
+`updated_at`
 - Use soft deletes by default (set `active=False`)
-- Foreign keys use `UUID(as_uuid=False)` for string representation
 
 ### API Layer
 - Routes in `api/routes/` organized by resource

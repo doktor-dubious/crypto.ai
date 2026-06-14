@@ -37,7 +37,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 // ─── Types (mirrored from FastAPI schemas) ────────────────────────────────────
 
 export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued" | "stopped"
-export type TaskType = "prediction" | "simulation" | "finetune" | "optimization"
+export type TaskType = "prediction" | "simulation" | "kline_simulation" | "import" | "finetune" | "optimization"
 
 export interface TaskRecordResponse {
   id: string
@@ -1546,6 +1546,35 @@ export interface CurrencyResponse {
 
 export const currenciesApi = {
   list: () => apiFetch<CurrencyResponse[]>("/currencies"),
+}
+
+export interface CoinResponse {
+  id: string
+  symbol: string
+  name: string
+  description: string | null
+  type: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type CoinCreate = { symbol: string; name: string; description?: string | null; type?: string | null }
+export type CoinUpdate = { symbol?: string; name?: string; description?: string | null; type?: string | null }
+
+export const coinsApi = {
+  list: (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    qs.set("limit", String(params?.limit ?? 100))
+    qs.set("offset", String(params?.offset ?? 0))
+    return apiFetch<CoinResponse[]>(`/coins?${qs}`)
+  },
+  get: (id: string) => apiFetch<CoinResponse>(`/coins/${id}`),
+  create: (data: CoinCreate) =>
+    apiFetch<CoinResponse>(`/coins`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: CoinUpdate) =>
+    apiFetch<CoinResponse>(`/coins/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: string) => apiFetch<boolean>(`/coins/${id}`, { method: "DELETE" }),
 }
 
 export interface LlmResponse {
@@ -3358,4 +3387,264 @@ export const elasticityEventsApi = {
       `/analytics/elasticity-events/event/${eventId}/recompute?engine=${engine}&post_days=${postDays}`,
       { method: "POST" },
     ),
+}
+
+export interface KlineData {
+  id: string
+  coin_id: string
+  quote_asset: string
+  interval: string
+  open_time: number
+  close_time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  quote_asset_volume: number
+  number_of_trades: number
+  taker_buy_base_asset_volume: number
+  taker_buy_quote_asset_volume: number
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PredictionEngine {
+  name: string
+  description?: string
+}
+
+export type ImportStatus = "pending" | "started" | "success" | "failure" | "stopped"
+
+export const binanceImportApi = {
+  // Enqueue a Binance import as a background task; returns a task_id.
+  startAsync: (params: { symbol: string; interval: string; coin_id: string; quote_asset: string; start_date?: string; end_date?: string }) => {
+    const qs = new URLSearchParams()
+    qs.set("symbol", params.symbol)
+    qs.set("interval", params.interval)
+    qs.set("coin_id", params.coin_id)
+    qs.set("quote_asset", params.quote_asset)
+    if (params.start_date) qs.set("start_date", params.start_date)
+    if (params.end_date) qs.set("end_date", params.end_date)
+    return apiFetch<{ task_id: string; status: string; name: string }>(`/binance-import/binance-async?${qs}`, { method: "POST" })
+  },
+  status: (taskId: string) =>
+    apiFetch<{
+      task_id: string
+      status: ImportStatus
+      progress: number
+      progress_message: string | null
+      error: string | null
+      imported_count: number | null
+    }>(`/binance-import/tasks/${taskId}`),
+}
+
+export const klinesApi = {
+  list: (params?: {
+    coin_id?: string
+    interval?: string
+    quote_asset?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const qs = new URLSearchParams()
+    if (params?.coin_id) qs.set("coin_id", params.coin_id)
+    if (params?.interval) qs.set("interval", params.interval)
+    if (params?.quote_asset) qs.set("quote_asset", params.quote_asset)
+    qs.set("limit", String(params?.limit ?? 100))
+    if (params?.offset) qs.set("offset", String(params.offset))
+    return apiFetch<KlineData[]>(`/klines?${qs}`)
+  },
+
+  getTradingPairs: (coinId: string) =>
+    apiFetch<{ pairs: string[] }>(`/klines/pairs/${coinId}`),
+
+  getTimeframes: (coinId: string, quoteAsset: string) =>
+    apiFetch<{ timeframes: string[] }>(`/klines/timeframes/${coinId}/${quoteAsset}`),
+
+  deleteAll: (coinId: string, quoteAsset: string, interval: string) =>
+    apiFetch<{ deleted_count: number }>(`/klines?coin_id=${coinId}&quote_asset=${quoteAsset}&interval=${interval}`, { method: "DELETE" }),
+
+  getEngines: () =>
+    apiFetch<string[]>("/predictions/engines").then((names) =>
+      names.map((name) => ({ name })) as PredictionEngine[]
+    ),
+
+  simulate: (params: {
+    coin_id: string
+    quote_asset: string
+    interval: string
+    start_date: string
+    end_date: string
+    models: string[]
+  }) => {
+    const qs = new URLSearchParams()
+    qs.set("coin_id", params.coin_id)
+    qs.set("quote_asset", params.quote_asset)
+    qs.set("interval", params.interval)
+    qs.set("start_date", params.start_date)
+    qs.set("end_date", params.end_date)
+    params.models.forEach((m) => qs.append("models", m))
+    return apiFetch<any>(`/klines/simulate?${qs}`, { method: "POST" })
+  },
+
+  // Enqueue a walk-forward simulation as a background task; returns a task_id.
+  simulateAsync: (params: {
+    coin_id: string
+    quote_asset: string
+    interval: string
+    start_date: string
+    end_date: string
+    models: string[]
+  }) => {
+    const qs = new URLSearchParams()
+    qs.set("coin_id", params.coin_id)
+    qs.set("quote_asset", params.quote_asset)
+    qs.set("interval", params.interval)
+    qs.set("start_date", params.start_date)
+    qs.set("end_date", params.end_date)
+    params.models.forEach((m) => qs.append("models", m))
+    return apiFetch<{ task_id: string; status: string }>(
+      `/klines/simulate-async?${qs}`,
+      { method: "POST" },
+    )
+  },
+
+  // Poll a background simulation; `result` is populated once status is success.
+  simulateStatus: (taskId: string) =>
+    apiFetch<{
+      task_id: string
+      status: "pending" | "started" | "success" | "failure" | "stopped"
+      progress: number
+      progress_message: string | null
+      error: string | null
+      result: any | null
+    }>(`/klines/simulate-tasks/${taskId}`),
+}
+
+// ── Persisted kline simulations (master/detail) ─────────────────────────────
+export type KlineSimulationStatus = "pending" | "started" | "success" | "failure" | "stopped"
+
+export interface KlineSimulationResponse {
+  id: string
+  coin_id: string
+  coin_symbol: string | null
+  quote_asset: string
+  interval: string
+  start_date: string
+  end_date: string
+  models: string[]
+  name: string | null
+  description: string | null
+  strategy: string
+  config: Record<string, unknown> | null
+  task_id: string | null
+  status: KlineSimulationStatus
+  finished_at: string | null
+  result: any | null
+  error: string | null
+  starred: boolean
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export const klineSimulationsApi = {
+  list: (params?: { search?: string; sort_field?: string; sort_dir?: "asc" | "desc"; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    qs.set("sort_field", params?.sort_field ?? "created_at")
+    qs.set("sort_dir", params?.sort_dir ?? "desc")
+    qs.set("limit", String(params?.limit ?? 100))
+    qs.set("offset", String(params?.offset ?? 0))
+    return apiFetch<{ items: KlineSimulationResponse[]; total: number }>(`/kline-simulations?${qs}`)
+  },
+  get: (id: string) => apiFetch<KlineSimulationResponse>(`/kline-simulations/${id}`),
+  create: (data: {
+    coin_id: string
+    quote_asset: string
+    interval: string
+    start_date: string
+    end_date: string
+    models: string[]
+    name?: string | null
+    description?: string | null
+    strategy?: string
+    config?: Record<string, unknown> | null
+    forecast_vol?: boolean
+  }) => apiFetch<KlineSimulationResponse>(`/kline-simulations`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: { starred?: boolean }) =>
+    apiFetch<KlineSimulationResponse>(`/kline-simulations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: string) => apiFetch<{ success: boolean }>(`/kline-simulations/${id}`, { method: "DELETE" }),
+  status: (id: string) =>
+    apiFetch<{
+      id: string
+      task_id: string | null
+      status: KlineSimulationStatus
+      progress: number
+      progress_message: string | null
+      error: string | null
+      result: any | null
+    }>(`/kline-simulations/${id}/status`),
+  predictions: (id: string, params?: { model?: string; sort_field?: string; sort_dir?: "asc" | "desc"; limit?: number; offset?: number; direction?: "correct" | "faulty"; forecast?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.model) qs.set("model", params.model)
+    if (params?.direction) qs.set("direction", params.direction)
+    if (params?.forecast && params.forecast !== "prediction") qs.set("forecast", params.forecast)
+    qs.set("sort_field", params?.sort_field ?? "timestamp")
+    qs.set("sort_dir", params?.sort_dir ?? "asc")
+    qs.set("limit", String(params?.limit ?? 50))
+    qs.set("offset", String(params?.offset ?? 0))
+    return apiFetch<{ items: KlineSimulationPredictionResponse[]; total: number; models: string[]; coverage_inside: number; coverage_total: number; mape: number | null }>(
+      `/kline-simulations/${id}/predictions?${qs}`,
+    )
+  },
+  backtest: (id: string, params: { model?: string; threshold?: number; fee_bps?: number; min_edge_pct?: number; vol_mode?: string }) => {
+    const qs = new URLSearchParams()
+    if (params.model) qs.set("model", params.model)
+    qs.set("threshold", String(params.threshold ?? 0.6))
+    qs.set("fee_bps", String(params.fee_bps ?? 15))
+    qs.set("min_edge_pct", String(params.min_edge_pct ?? 0))
+    if (params.vol_mode) qs.set("vol_mode", params.vol_mode)
+    return apiFetch<BacktestResponse>(`/kline-simulations/${id}/backtest?${qs}`)
+  },
+}
+
+export interface KlineSimulationPredictionResponse {
+  id: string
+  model_name: string
+  timestamp: string
+  actual: number
+  predicted: number
+  error: number
+  pct_error: number
+  prev_close: number | null
+  quantiles: number[] | null
+  prob_up: number | null
+  in_interval: boolean | null
+  pred_vol: number | null
+  realized_vol: number | null
+}
+
+export interface BacktestResponse {
+  model: string
+  strategy?: string
+  vol_mode?: string | null
+  vol_source?: string | null
+  threshold: number
+  fee_bps: number
+  min_edge_pct: number
+  periods_per_year: number
+  n_bars: number
+  n_trades: number
+  long_bars: number
+  exposure_pct: number
+  win_rate_pct: number
+  total_return_pct: number
+  buy_hold_return_pct: number
+  avg_return_per_trade_pct: number
+  sharpe: number
+  max_drawdown_pct: number
+  equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
 }

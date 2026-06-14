@@ -518,11 +518,10 @@ function Metric({ label, value, hint, tone, info }: { label: string; value: stri
   )
 }
 
-function BacktestTab({ sim, models }: { sim: KlineSimulationResponse; models: string[] }) {
+function BacktestTab({ sim }: { sim: KlineSimulationResponse }) {
   const [threshold, setThreshold] = useState(0.6)
   const [feeBps, setFeeBps] = useState(15)
   const [minEdge, setMinEdge] = useState(0)
-  const [model, setModel] = useState<string>("")
   const [volMode, setVolMode] = useState<string>("")
   // Whether this run stored a genuine volatility forecast (the "Forecast
   // volatility" box at creation). If not, the vol strategies fall back to the
@@ -530,8 +529,8 @@ function BacktestTab({ sim, models }: { sim: KlineSimulationResponse; models: st
   const hasVolForecast = sim.config?.["forecast_vol"] === true
 
   const { data, isFetching, error } = useQuery({
-    queryKey: ["simBacktest", sim.id, threshold, feeBps, minEdge, model, volMode],
-    queryFn: () => klineSimulationsApi.backtest(sim.id, { threshold, fee_bps: feeBps, min_edge_pct: minEdge, model: model || undefined, vol_mode: volMode || undefined }),
+    queryKey: ["simBacktest", sim.id, threshold, feeBps, minEdge, volMode],
+    queryFn: () => klineSimulationsApi.backtest(sim.id, { threshold, fee_bps: feeBps, min_edge_pct: minEdge, vol_mode: volMode || undefined }),
     retry: false,
   })
 
@@ -550,7 +549,7 @@ function BacktestTab({ sim, models }: { sim: KlineSimulationResponse; models: st
   return (
     <div className="space-y-4">
       {/* Controls */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 rounded-md border p-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 rounded-md border p-4">
         <div>
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">Confidence threshold (P(up) ≥)</label>
@@ -574,17 +573,6 @@ function BacktestTab({ sim, models }: { sim: KlineSimulationResponse; models: st
             <InfoIcon text="Only trade when the point forecast clears the previous close by at least this percentage. Raising it filters out low-conviction bars whose edge can't cover fees (0 = no filter)." />
           </div>
           <Input type="number" value={minEdge} min={0} max={20} step={0.1} onChange={(e) => setMinEdge(Number(e.target.value))} className="h-9 mt-1" />
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground">Model</label>
-          {models.length > 1 ? (
-            <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full h-9 mt-1 px-3 border border-input rounded-md bg-background text-sm">
-              <option value="">{models[0]} (default)</option>
-              {models.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          ) : (
-            <Input value={models[0] ?? "—"} readOnly className="h-9 mt-1 opacity-70" />
-          )}
         </div>
         <div>
           <div className="flex items-center gap-1.5">
@@ -906,9 +894,9 @@ export default function SimulationsPage() {
                 )}
               </TabsContent>
 
-              <TabsContent value="backtest" className="max-w-5xl mt-6 pl-[2px] pb-8">
+              <TabsContent value="backtest" className="mt-6 pl-[2px] pb-8 overflow-x-auto">
                 {selectedSim.status === "success" || selectedSim.status === "stopped" ? (
-                  <BacktestTab sim={selectedSim} models={selectedSim.models} />
+                  <BacktestTab sim={selectedSim} />
                 ) : (
                   <p className="text-sm text-muted-foreground py-8">Backtest will be available once the simulation completes.</p>
                 )}

@@ -29,7 +29,7 @@ export default async function DashboardLayout({
                 <Topbar />
                 <main className="flex-1 overflow-y-auto p-6 flex flex-col min-h-0">{children}</main>
                 <footer className="flex items-center justify-center border-t border-[var(--border)] px-4 py-2">
-                  <p className="text-xs text-[var(--muted-foreground)]">&copy; 2026 Gorm AI. All rights reserved.</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">&copy; 2026 Crypt AI. All rights reserved.</p>
                 </footer>
               </div>
             </div>

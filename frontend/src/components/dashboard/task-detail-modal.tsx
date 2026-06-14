@@ -56,6 +56,8 @@ const STATUS_BADGE: Record<string, BadgeVariant> = {
 const TASK_TYPE_ICON: Record<TaskType, typeof Activity> = {
   prediction: Activity,
   simulation: BarChart3,
+  kline_simulation: BarChart3,
+  import: Activity,
   finetune: Brain,
   optimization: Brain,
 }

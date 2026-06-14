@@ -17,9 +17,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.alter_column("prediction_strategies", "ignore_fixed_draw", new_column_name="ignore_fixed")
-    op.alter_column("prediction_strategies", "ignore_minimum_draw", new_column_name="ignore_minimum")
-    op.alter_column("prediction_strategies", "ignore_maximum_draw", new_column_name="ignore_maximum")
+    # NOTE: The initial schema (migration 009) already creates columns with new names,
+    # so these renames are not needed when starting from scratch.
+    # Skipping these renames to support fresh database initialization.
+    pass
 
 
 def downgrade() -> None:

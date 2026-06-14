@@ -83,58 +83,16 @@ function getInitials(name: string): string {
 
 const NAV_ITEMS = [
   { href: "/", icon: Home, labelKey: "home" },
-  { href: "/insights", icon: Sparkles, labelKey: "insights" },
 ] as const
 
-const CUSTOMER_SUBNAV_ITEMS = [
-  { href: "/customers/new", icon: Plus, labelKey: "customersNew" },
-  { href: "/customers", icon: List, labelKey: "customersList" },
+const COINS_SUBNAV_ITEMS = [
+  { href: "/coins/new", icon: Plus, labelKey: "coinsNew" },
+  { href: "/coins", icon: List, labelKey: "coinsList" },
 ] as const
 
-const SALES_SUBNAV_ITEMS = [
-  { href: "/sales", icon: CreditCard, labelKey: "salesList" },
-  { href: "/sales/analyse", icon: LineChart, labelKey: "salesAnalyse" },
-] as const
-
-const OUTLET_SUBNAV_ITEMS = [
-  { href: "/outlets", icon: List, labelKey: "outletsList" },
-  { href: "/outlets/analytics", icon: LineChart, labelKey: "outletsAnalytics" },
-  { href: "/outlet-groups", icon: FolderOpen, labelKey: "outletGroups" },
-  { href: "/outlets/bulk-update", icon: Upload, labelKey: "outletsBulkUpdate" },
-] as const
-
-const PREDICTION_SUBNAV_TOP = [
-  { href: "/predictions/new", icon: Plus, labelKey: "predictionsNew" },
-  { href: "/predictions/strategies", icon: Sparkles, labelKey: "predictionsStrategies" },
-  { href: "/predictions/completed", icon: CheckCircle, labelKey: "predictionsCompleted" },
-] as const
-
-const PREDICTION_SUBNAV_MID = [
-  { href: "/predictions/analytics", icon: TrendingUp, labelKey: "predictionsAnalytics" },
-] as const
-
-const PREDICTION_SUBNAV_BOT = [
-  { href: "/prediction-adjustments", icon: Sliders, labelKey: "predictionsAdjustments" },
-  { href: "/predictions/configuration", icon: Cpu, labelKey: "predictionsConfiguration" },
-] as const
-
-const SIMULATION_SUBNAV_ITEMS = [
+const SIMULATIONS_SUBNAV_ITEMS = [
   { href: "/simulations/new", icon: Plus, labelKey: "simulationsNew" },
-  { href: "/simulations/strategies", icon: Sparkles, labelKey: "simulationsStrategies" },
-  { href: "/simulations/completed", icon: CheckCircle, labelKey: "simulationsCompleted" },
-  { href: "/simulations/filter", icon: Filter, labelKey: "simulationsFilter" },
-] as const
-
-const PADS_SUBNAV_ITEMS = [
-  { href: "/pads", icon: Filter, labelKey: "padsFilters" },
-  { href: "/pads/predefined", icon: BookMarked, labelKey: "predefinedPads" },
-] as const
-
-const FINANCIALS_SUBNAV_ITEMS = [
-  { href: "/financials/date-override", icon: CalendarClock, labelKey: "financialsDateOverride" },
-  { href: "/financials/price-history", icon: TrendingUp, labelKey: "financialsPriceHistory" },
-  { href: "/financials/pricing-analytics", icon: LineChart, labelKey: "financialsPricingAnalytics" },
-  { href: "/financials/bulk-update", icon: RefreshCw, labelKey: "financialsBulkUpdate" },
+  { href: "/simulations", icon: LineChart, labelKey: "simulationsList" },
 ] as const
 
 const STATISTICS_SUBNAV_ITEMS = [
@@ -345,7 +303,7 @@ export function AppSidebar() {
           </a>
           {isExpanded && (
             <span className="font-semibold text-sm text-[var(--sidebar-foreground)] whitespace-nowrap overflow-hidden">
-              Gorm AI
+              Crypt AI
             </span>
           )}
         </div>
@@ -408,28 +366,14 @@ export function AppSidebar() {
 
             <DropdownMenuSeparator />
 
-            {/* Predictions */}
+            {/* Coins */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <Activity className="h-4 w-4" />
-                {t("nav.predictions")}
+                <Coins className="h-4 w-4" />
+                {t("nav.coins")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {PREDICTION_SUBNAV_TOP.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                {PREDICTION_SUBNAV_MID.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                {PREDICTION_SUBNAV_BOT.map((item) => (
+                {COINS_SUBNAV_ITEMS.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
@@ -445,91 +389,7 @@ export function AppSidebar() {
                 {t("nav.simulations")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {SIMULATION_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            <DropdownMenuSeparator />
-
-            {/* Customers */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Users className="h-4 w-4" />
-                {t("nav.customers")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {CUSTOMER_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Sales */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <CreditCard className="h-4 w-4" />
-                {t("nav.sales")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {SALES_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Outlets */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <ShoppingCart className="h-4 w-4" />
-                {t("nav.outlets")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {OUTLET_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            <DropdownMenuSeparator />
-
-            {/* Pads & Filters */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Filter className="h-4 w-4" />
-                {t("nav.padsFilters")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {PADS_SUBNAV_ITEMS.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Financials */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <DollarSign className="h-4 w-4" />
-                {t("nav.financials")}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {FINANCIALS_SUBNAV_ITEMS.map((item) => (
+                {SIMULATIONS_SUBNAV_ITEMS.map((item) => (
                   <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
                     <item.icon className="h-4 w-4" />
                     {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}

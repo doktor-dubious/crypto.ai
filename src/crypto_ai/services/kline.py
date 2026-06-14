@@ -1,0 +1,163 @@
+"""Service for kline (OHLCV) data operations."""
+
+from datetime import datetime
+
+from sqlalchemy import and_, desc, distinct, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from crypto_ai.database.models.kline import Kline
+from crypto_ai.schemas.kline import KlineCreate, KlineUpdate
+
+
+class KlineService:
+    """Service for managing kline data."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(self, data: KlineCreate) -> Kline:
+        """Create a new kline."""
+        kline = Kline(**data.model_dump())
+        self.session.add(kline)
+        await self.session.flush()
+        return kline
+
+    async def create_many(self, klines: list[KlineCreate]) -> list[Kline]:
+        """Create multiple klines."""
+        objs = [Kline(**k.model_dump()) for k in klines]
+        self.session.add_all(objs)
+        await self.session.flush()
+        return objs
+
+    async def get(self, kline_id: str) -> Kline | None:
+        """Get a kline by ID."""
+        result = await self.session.execute(
+            select(Kline).where(Kline.id == kline_id)
+        )
+        return result.scalars().first()
+
+    async def get_all(
+        self,
+        coin_id: str | None = None,
+        quote_asset: str | None = None,
+        interval: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Kline]:
+        """Get klines with optional filtering by coin, quote asset, interval, and time range."""
+        stmt = select(Kline).where(Kline.active == True)
+
+        if coin_id:
+            stmt = stmt.where(Kline.coin_id == coin_id)
+        if quote_asset:
+            stmt = stmt.where(Kline.quote_asset == quote_asset)
+        if interval:
+            stmt = stmt.where(Kline.interval == interval)
+        if start_time:
+            stmt = stmt.where(Kline.open_time >= start_time)
+        if end_time:
+            stmt = stmt.where(Kline.open_time <= end_time)
+
+        stmt = stmt.order_by(Kline.open_time).limit(limit).offset(offset)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def get_by_coin_and_interval(
+        self,
+        coin_id: str,
+        interval: str,
+        limit: int = 500,
+    ) -> list[Kline]:
+        """Get klines for a specific coin and interval, ordered by time."""
+        stmt = (
+            select(Kline)
+            .where(and_(Kline.coin_id == coin_id, Kline.interval == interval, Kline.active == True))
+            .order_by(Kline.open_time)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def get_latest(self, coin_id: str, interval: str) -> Kline | None:
+        """Get the latest kline for a coin and interval."""
+        stmt = (
+            select(Kline)
+            .where(and_(Kline.coin_id == coin_id, Kline.interval == interval, Kline.active == True))
+            .order_by(desc(Kline.open_time))
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
+    async def update(self, kline_id: str, data: KlineUpdate) -> Kline | None:
+        """Update a kline."""
+        kline = await self.get(kline_id)
+        if not kline:
+            return None
+
+        update_data = data.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(kline, key, value)
+
+        self.session.add(kline)
+        await self.session.flush()
+        return kline
+
+    async def delete(self, kline_id: str, hard_delete: bool = False) -> bool:
+        """Delete a kline (soft delete by default)."""
+        kline = await self.get(kline_id)
+        if not kline:
+            return False
+
+        if hard_delete:
+            await self.session.delete(kline)
+        else:
+            kline.active = False
+            self.session.add(kline)
+
+        await self.session.flush()
+        return True
+
+    async def delete_by_filters(self, coin_id: str, quote_asset: str, interval: str) -> int:
+        """Delete all klines matching the given filters."""
+        stmt = (
+            select(Kline)
+            .where(
+                and_(
+                    Kline.coin_id == coin_id,
+                    Kline.quote_asset == quote_asset,
+                    Kline.interval == interval,
+                )
+            )
+        )
+        result = await self.session.execute(stmt)
+        klines = result.scalars().all()
+
+        for kline in klines:
+            kline.active = False
+            self.session.add(kline)
+
+        await self.session.flush()
+        return len(klines)
+
+    async def get_quote_assets_by_coin(self, coin_id: str) -> list[str]:
+        """Get all unique quote assets for a coin."""
+        stmt = select(distinct(Kline.quote_asset)).where(
+            and_(Kline.coin_id == coin_id, Kline.active == True)
+        )
+        result = await self.session.execute(stmt)
+        return sorted(result.scalars().all())
+
+    async def get_intervals_by_coin_and_quote(self, coin_id: str, quote_asset: str) -> list[str]:
+        """Get all unique intervals for a trading pair."""
+        stmt = select(distinct(Kline.interval)).where(
+            and_(
+                Kline.coin_id == coin_id,
+                Kline.quote_asset == quote_asset,
+                Kline.active == True,
+            )
+        )
+        result = await self.session.execute(stmt)
+        return sorted(result.scalars().all())

@@ -13,9 +13,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column("prediction_adjustment", "start_date", new_column_name="date")
-    op.drop_column("prediction_adjustment", "end_date")
-
+    # Disabled: columns already have correct names in fresh databases
+    pass
 
 def downgrade() -> None:
     import sqlalchemy as sa

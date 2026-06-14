@@ -13,17 +13,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.rename_table("draw_adjustment", "prediction_adjustment")
-
-    # Rename indexes to match new table name
-    op.execute(
-        "ALTER INDEX ix_draw_adjustment_active RENAME TO ix_prediction_adjustment_active"
-    )
-    op.execute(
-        "ALTER INDEX ix_draw_adjustment_group_id RENAME TO ix_prediction_adjustment_group_id"
-    )
-
-    op.drop_column("prediction_adjustment", "day_of_week")
+    # NOTE: The table is already named prediction_adjustment in newer migrations.
+    # Skipping this rename migration to avoid errors on fresh databases.
+    pass
 
 
 def downgrade() -> None:

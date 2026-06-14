@@ -7,11 +7,11 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from gorm_ai.config import get_settings
-from gorm_ai.database.base import Base
+from crypto_ai.config import get_settings
+from crypto_ai.database.base import Base
 
 # Import all models to register them with Base.metadata
-from gorm_ai.database.models import (  # noqa: F401
+from crypto_ai.database.models import (  # noqa: F401
     Customer,
     Outlet,
     OutletDelivery,

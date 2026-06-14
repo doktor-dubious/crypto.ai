@@ -32,6 +32,8 @@ export function CustomerProvider({ children }: { children: React.ReactNode }) {
     queryFn: () => usersApi.customers(userId!),
     enabled: !!userId,
     staleTime: 5 * 60 * 1000,
+    retry: false,
+    throwOnError: false,
   })
 
   const [activeCustomerId, setActiveCustomerId] = useState<string | null>(null)

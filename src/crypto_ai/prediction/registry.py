@@ -1,0 +1,199 @@
+"""Registry for prediction engines."""
+
+from crypto_ai.prediction.engine import EngineCapabilities, PredictionEngine
+from crypto_ai.schemas.prediction import PredictionEngine as PredictionEngineEnum
+
+
+class EngineRegistry:
+    """Registry for managing prediction engines."""
+
+    def __init__(self):
+        self._engines: dict[PredictionEngineEnum, type[PredictionEngine]] = {}
+        self._instances: dict[PredictionEngineEnum, PredictionEngine] = {}
+        self._register_default_engines()
+
+    def _register_default_engines(self) -> None:
+        """Register default prediction engines."""
+        from crypto_ai.prediction.engines.statistical import StatisticalEngine
+
+        self.register(PredictionEngineEnum.STATISTICAL, StatisticalEngine)
+
+        # Register TimesFM stub (interface only)
+        try:
+            from crypto_ai.prediction.engines.timesfm import TimesFMEngine
+
+            self.register(PredictionEngineEnum.TIMESFM, TimesFMEngine)
+        except ImportError:
+            pass  # TimesFM not available
+
+        # Register fine-tuned TimesFM engine
+        try:
+            from crypto_ai.prediction.engines.timesfm_finetuned import TimesFMFinetunedEngine
+
+            self.register(PredictionEngineEnum.TIMESFM_FINETUNED, TimesFMFinetunedEngine)
+        except ImportError:
+            pass  # TimesFM not available
+
+        # Register custom engine
+        try:
+            from crypto_ai.prediction.engines.custom import CustomEngine
+
+            self.register(PredictionEngineEnum.CUSTOM, CustomEngine)
+        except ImportError:
+            pass  # Custom engine not available
+
+        # Register AutoGluon Chronos-Bolt engine
+        try:
+            from crypto_ai.prediction.engines.autogluon_engine import AutoGluonEngine
+
+            self.register(PredictionEngineEnum.GLUON_CHRONOS_BOLT, AutoGluonEngine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+        # Register AutoGluon Chronos-2 engine
+        try:
+            from crypto_ai.prediction.engines.chronos2_engine import Chronos2Engine
+
+            self.register(PredictionEngineEnum.GLUON_CHRONOS2, Chronos2Engine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+        # Register AutoGluon Toto engine
+        try:
+            from crypto_ai.prediction.engines.toto_engine import TotoEngine
+
+            self.register(PredictionEngineEnum.GLUON_TOTO, TotoEngine)
+        except ImportError:
+            pass  # AutoGluon not available
+
+        # Register direct Chronos 2.0 engine (no AutoGluon wrapper)
+        try:
+            from crypto_ai.prediction.engines.chronos2_direct_engine import Chronos2DirectEngine
+
+            self.register(PredictionEngineEnum.CHRONOS2, Chronos2DirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
+        # Register direct Chronos-Bolt engine (no AutoGluon wrapper)
+        try:
+            from crypto_ai.prediction.engines.chronos_bolt_direct_engine import ChronosBoltDirectEngine
+
+            self.register(PredictionEngineEnum.CHRONOS_BOLT, ChronosBoltDirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
+        # Register Sundial engine (THU-ML)
+        try:
+            from crypto_ai.prediction.engines.sundial_engine import SundialEngine
+
+            self.register(PredictionEngineEnum.SUNDIAL, SundialEngine)
+        except ImportError:
+            pass  # transformers not available
+
+        # Register MOIRAI-2 engine (Salesforce)
+        try:
+            from crypto_ai.prediction.engines.moirai2_engine import Moirai2Engine
+
+            self.register(PredictionEngineEnum.MOIRAI2, Moirai2Engine)
+        except ImportError:
+            pass  # uni2ts not available
+
+        # Register direct Toto engine (Datadog, no AutoGluon wrapper)
+        try:
+            from crypto_ai.prediction.engines.toto_direct_engine import TotoDirectEngine
+
+            self.register(PredictionEngineEnum.TOTO, TotoDirectEngine)
+        except ImportError:
+            pass  # chronos-forecasting not available
+
+        # Register YingLong engine (Alibaba)
+        try:
+            from crypto_ai.prediction.engines.yinglong_engine import YingLongEngine
+
+            self.register(PredictionEngineEnum.YINGLONG, YingLongEngine)
+        except ImportError:
+            pass  # transformers not available
+
+        # Register Kairos engine (ShanghaiTech)
+        try:
+            from crypto_ai.prediction.engines.kairos_engine import KairosEngine
+
+            self.register(PredictionEngineEnum.KAIROS, KairosEngine)
+        except ImportError:
+            pass  # tsfm (Kairos) not available
+
+        # Register TiRex engine (NX-AI)
+        try:
+            from crypto_ai.prediction.engines.tirex_engine import TiRexEngine
+
+            self.register(PredictionEngineEnum.TIREX, TiRexEngine)
+        except ImportError:
+            pass  # tirex-ts not available
+
+        # Register FlowState engine (IBM Research)
+        try:
+            from crypto_ai.prediction.engines.flowstate_engine import FlowStateEngine
+
+            self.register(PredictionEngineEnum.FLOWSTATE, FlowStateEngine)
+        except ImportError:
+            pass  # tsfm_public not available
+
+
+    def register(
+        self,
+        engine_type: PredictionEngineEnum,
+        engine_class: type[PredictionEngine],
+    ) -> None:
+        """
+        Register a prediction engine.
+
+        Args:
+            engine_type: Type of engine to register
+            engine_class: Engine class to register
+        """
+        self._engines[engine_type] = engine_class
+
+    def get_engine(self, engine_type: PredictionEngineEnum) -> PredictionEngine:
+        """
+        Get an instance of a prediction engine.
+
+        Args:
+            engine_type: Type of engine to get
+
+        Returns:
+            Instance of the requested engine
+
+        Raises:
+            ValueError: If engine type is not registered
+        """
+        if engine_type not in self._engines:
+            raise ValueError(f"Engine type '{engine_type}' is not registered")
+
+        if engine_type not in self._instances:
+            self._instances[engine_type] = self._engines[engine_type]()
+        return self._instances[engine_type]
+
+    def get_available_engines(self) -> list[PredictionEngineEnum]:
+        """
+        Get list of available engine types.
+
+        Returns:
+            List of registered engine types
+        """
+        return list(self._engines.keys())
+
+    def get_capabilities(self, engine_type: PredictionEngineEnum) -> EngineCapabilities:
+        """
+        Get capabilities of a specific engine.
+
+        Args:
+            engine_type: Type of engine
+
+        Returns:
+            EngineCapabilities for the specified engine
+
+        Raises:
+            ValueError: If engine type is not registered
+        """
+        engine = self.get_engine(engine_type)
+        return engine.get_capabilities()

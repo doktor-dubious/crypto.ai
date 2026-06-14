@@ -1,20 +1,11 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
 import {
-  SimulationParametersForm,
-  buildParametersPayload,
-  DEFAULT_PARAMS_STATE,
-  type ParametersState,
-} from "@/components/simulations/parameters-form"
-import { useMutation, useQuery } from "@tanstack/react-query"
-import { useTranslations } from "next-intl"
-import {
-  ChevronDown, ChevronLeft, ChevronRight, Check,
-} from "lucide-react"
-import {
-  addMonths, subMonths, addYears, subYears, subDays,
+  addMonths, subMonths, addYears, subYears,
   startOfMonth, endOfMonth, eachDayOfInterval,
   getDay, isSameDay, isToday, isBefore, isAfter,
   differenceInCalendarDays, format,
@@ -22,34 +13,24 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { useCustomer } from "@/components/providers/customer-provider"
-import { simulationsApi, predictionStrategiesApi, predictionEnginesApi, outletGroupsApi, customerConfigurationApi, salesApi, tasksApi, type SimulationRunRequest } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
+import { coinsApi, klinesApi, klineSimulationsApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
-// ─── Simulation type options ───────────────────────────────────────────────────
-
-const SIMULATION_TYPES = [
-  { value: 1, labelKey: "typeStrategy" },
-  { value: 3, labelKey: "typeSameDraw" },
-  { value: 4, labelKey: "typeSameSale" },
+// ─── Strategy options ───────────────────────────────────────────────────────
+// Volatility-aware trading is selected live on the Backtest tab, not here — the
+// forecast run is identical for these, so they only differ at backtest time.
+const STRATEGY_OPTIONS = [
+  { value: "price", label: "Price" },
+  { value: "kline", label: "Kline" },
 ] as const
 
-type SimType = (typeof SIMULATION_TYPES)[number]["value"]
-
-// ─── Inline calendar ───────────────────────────────────────────────────────────
-
-const YEARS = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i)
+// ─── Inline calendar (mirrors the gorm New Simulation date-range design) ──────
+const YEARS = Array.from({ length: 13 }, (_, i) => 2019 + i)
 
 function MiniCalendar({
-  selected,
-  onSelect,
-  minDate,
-  maxDate,
-  disabled,
+  selected, onSelect, minDate, maxDate, disabled,
 }: {
   selected: Date | undefined
   onSelect: (d: Date) => void
@@ -71,7 +52,6 @@ function MiniCalendar({
 
   return (
     <div className={cn("select-none w-full", disabled && "opacity-40 pointer-events-none")}>
-      {/* Month / year nav */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-0.5">
           <button onClick={() => setView(subYears(view, 1))} className="p-1 rounded hover:bg-[var(--muted)] transition-colors cursor-pointer" title="Previous year">
@@ -82,7 +62,6 @@ function MiniCalendar({
           </button>
         </div>
 
-        {/* Clickable month + year label → opens year picker */}
         <div className="relative">
           <button
             onClick={() => setYearPickerOpen((v) => !v)}
@@ -99,7 +78,7 @@ function MiniCalendar({
                   onClick={() => setYear(y)}
                   className={cn(
                     "w-full text-center text-xs px-2 py-1.5 hover:bg-[var(--muted)] transition-colors cursor-pointer",
-                    y === view.getFullYear() && "font-semibold text-white",
+                    y === view.getFullYear() && "font-semibold text-foreground",
                   )}
                 >
                   {y}
@@ -119,14 +98,12 @@ function MiniCalendar({
         </div>
       </div>
 
-      {/* Day-of-week headers */}
       <div className="grid grid-cols-7 mb-1">
         {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => (
           <div key={d} className="text-center text-xs text-[var(--muted-foreground)] font-medium py-1">{d}</div>
         ))}
       </div>
 
-      {/* Day cells */}
       <div className="grid grid-cols-7 gap-y-0.5">
         {Array.from({ length: startPad }).map((_, i) => <div key={`p${i}`} />)}
         {days.map((day) => {
@@ -142,8 +119,8 @@ function MiniCalendar({
               onClick={() => onSelect(day)}
               className={cn(
                 "text-xs rounded py-1.5 transition-colors text-center cursor-pointer",
-                isSelected ? "bg-white text-black font-semibold"
-                  : today ? "ring-1 ring-white/50"
+                isSelected ? "bg-primary text-primary-foreground font-semibold"
+                  : today ? "ring-1 ring-foreground/40"
                   : "hover:bg-[var(--muted)]",
                 isOff && "opacity-25 cursor-not-allowed",
               )}
@@ -157,487 +134,250 @@ function MiniCalendar({
   )
 }
 
-// ─── Step circle ──────────────────────────────────────────────────────────────
-
 function StepCircle({ n, active }: { n: number; active: boolean }) {
   return (
     <div className={cn(
       "h-10 w-10 rounded-full border-2 bg-background flex items-center justify-center text-sm font-semibold shrink-0 transition-colors",
-      active ? "border-white text-white" : "border-[var(--border)] text-[var(--muted-foreground)]",
+      active ? "border-primary text-foreground" : "border-[var(--border)] text-[var(--muted-foreground)]",
     )}>
       {n}
     </div>
   )
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+const SELECT_CLASS = "h-9 w-72 px-3 rounded-md border border-input bg-background text-sm disabled:opacity-50"
+const FORM_KEY = "crypt:newSimForm"
 
-// ─── localStorage helpers (scoped per customer) ─────────────────────────────
+export default function NewSimulationPage() {
+  const router = useRouter()
+  const queryClient = useQueryClient()
 
-const SIMN_STORAGE_PREFIX = "gorm:simNew:"
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
+  const [coinId, setCoinId] = useState<string | null>(null)
+  const [quoteAsset, setQuoteAsset] = useState<string | null>(null)
+  const [timeframe, setTimeframe] = useState<string | null>(null)
+  const [strategy, setStrategy] = useState<string>("price")
+  const [engine, setEngine] = useState<string>("")
+  const [forecastVol, setForecastVol] = useState(false)
+  const [startDate, setStartDate] = useState<Date | undefined>(undefined)
+  const [endDate, setEndDate] = useState<Date | undefined>(undefined)
 
-function loadSimNJson<T>(customerId: string, key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback
-  try {
-    const raw = localStorage.getItem(`${SIMN_STORAGE_PREFIX}${customerId}:${key}`)
-    return raw ? JSON.parse(raw) : fallback
-  } catch { return fallback }
-}
-
-function saveSimNJson(customerId: string, key: string, value: unknown) {
-  if (typeof window === "undefined") return
-  localStorage.setItem(`${SIMN_STORAGE_PREFIX}${customerId}:${key}`, JSON.stringify(value))
-}
-
-export default function SimulationsNewPage() {
-  const t = useTranslations("simulations.new")
-  const { activeCustomer } = useCustomer()
-  const cid = activeCustomer?.id ?? ""
-
-  const [name, setName] = useState(() => loadSimNJson<string>(cid, "name", ""))
-  const [description, setDescription] = useState(() => loadSimNJson<string>(cid, "description", ""))
-  const [simType, setSimType] = useState<SimType>(() => loadSimNJson<SimType>(cid, "simType", 1))
-  const [delay, setDelay] = useState(() => loadSimNJson<number>(cid, "delay", 14))
-  const [strategyId, setStrategyId] = useState<string | null>(() => loadSimNJson<string | null>(cid, "strategyId", null))
-  const [outletGroupId, setOutletGroupId] = useState<string | null>(() => loadSimNJson<string | null>(cid, "outletGroupId", null))
-  const [startDate, setStartDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "startDate", null); return v ? new Date(v) : undefined })
-  const [endDate, setEndDate] = useState<Date | undefined>(() => { const v = loadSimNJson<string | null>(cid, "endDate", null); return v ? new Date(v) : undefined })
-  const [worker, setWorker] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"simulation" | "parameters">("simulation")
-  const [parameters, setParameters] = useState<ParametersState>(
-    () => loadSimNJson<ParametersState>(cid, "parameters", DEFAULT_PARAMS_STATE),
-  )
-  const tabsListRef = useRef<HTMLDivElement>(null)
-  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
+  // Persist the whole form so it survives a refresh or navigating away and back.
+  const [loaded, setLoaded] = useState(false)
   useEffect(() => {
-    if (!tabsListRef.current) return
-    const el = tabsListRef.current.querySelector("[data-state='active']") as HTMLElement | null
-    if (el) setIndicatorStyle({ left: el.offsetLeft, width: el.offsetWidth })
-  }, [activeTab])
-
-  const { data: allWorkers = [] } = useQuery({
-    queryKey: ["workers"],
-    queryFn: () => tasksApi.listWorkers(),
-    staleTime: 30_000,
-  })
-
-  const { data: engines = [] } = useQuery({
-    queryKey: ["prediction-engines"],
-    queryFn: () => predictionEnginesApi.list(),
-    staleTime: 5 * 60_000,
-  })
-
-  const { data: strategies = [] } = useQuery({
-    queryKey: ["prediction-strategies", activeCustomer?.id],
-    queryFn: () => predictionStrategiesApi.list(activeCustomer!.id),
-    enabled: !!activeCustomer,
-  })
-
-  const { data: outletGroups = [] } = useQuery({
-    queryKey: ["outlet-groups", activeCustomer?.id],
-    queryFn: () => outletGroupsApi.list(activeCustomer!.id),
-    enabled: !!activeCustomer,
-  })
-
-  const { data: customerConfig } = useQuery({
-    queryKey: ["customer-configuration", activeCustomer?.id],
-    queryFn: () => customerConfigurationApi.get(activeCustomer!.id),
-    enabled: !!activeCustomer,
-  })
-
-  const { data: salesDateRange } = useQuery({
-    queryKey: ["sales-date-range", activeCustomer?.id],
-    queryFn: () => salesApi.getDateRange(activeCustomer!.id),
-    enabled: !!activeCustomer,
-    staleTime: 5 * 60_000,
-  })
-
-  const lastSalesDate = salesDateRange?.max_date ? new Date(salesDateRange.max_date) : undefined
-  // Start: must leave at least 1 day to simulate, so max = lastSalesDate - 1
-  const startMaxDate = lastSalesDate ? subDays(lastSalesDate, 1) : undefined
-  // End: cannot go beyond last day with sales data
-  const endMaxDate = lastSalesDate
-
-  // Default outlet group to customer configuration value when data loads
-  // ─── Persist state to localStorage ─────────────────────────────────────────
-
-  useEffect(() => { if (cid) saveSimNJson(cid, "name", name) }, [cid, name])
-  useEffect(() => { if (cid) saveSimNJson(cid, "description", description) }, [cid, description])
-  useEffect(() => { if (cid) saveSimNJson(cid, "simType", simType) }, [cid, simType])
-  useEffect(() => { if (cid) saveSimNJson(cid, "delay", delay) }, [cid, delay])
-  useEffect(() => { if (cid) saveSimNJson(cid, "strategyId", strategyId) }, [cid, strategyId])
-  useEffect(() => { if (cid) saveSimNJson(cid, "outletGroupId", outletGroupId) }, [cid, outletGroupId])
-  useEffect(() => { if (cid) saveSimNJson(cid, "startDate", startDate?.toISOString() ?? null) }, [cid, startDate])
-  useEffect(() => { if (cid) saveSimNJson(cid, "endDate", endDate?.toISOString() ?? null) }, [cid, endDate])
-  useEffect(() => { if (cid) saveSimNJson(cid, "parameters", parameters) }, [cid, parameters])
-
-  const prevCidRef = useRef(cid)
+    try {
+      const raw = localStorage.getItem(FORM_KEY)
+      if (raw) {
+        const s = JSON.parse(raw)
+        if (s.name != null) setName(s.name)
+        if (s.description != null) setDescription(s.description)
+        if (s.coinId != null) setCoinId(s.coinId)
+        if (s.quoteAsset != null) setQuoteAsset(s.quoteAsset)
+        if (s.timeframe != null) setTimeframe(s.timeframe)
+        if (s.strategy != null) setStrategy(s.strategy)
+        if (s.engine != null) setEngine(s.engine)
+        if (s.forecastVol != null) setForecastVol(s.forecastVol)
+        if (s.startDate) setStartDate(new Date(s.startDate))
+        if (s.endDate) setEndDate(new Date(s.endDate))
+      }
+    } catch { /* ignore malformed storage */ }
+    setLoaded(true)
+  }, [])
   useEffect(() => {
-    if (prevCidRef.current && cid && prevCidRef.current !== cid) {
-      setName(loadSimNJson<string>(cid, "name", ""))
-      setDescription(loadSimNJson<string>(cid, "description", ""))
-      setSimType(loadSimNJson<SimType>(cid, "simType", 1))
-      setDelay(loadSimNJson<number>(cid, "delay", 14))
-      setStrategyId(loadSimNJson<string | null>(cid, "strategyId", null))
-      setOutletGroupId(loadSimNJson<string | null>(cid, "outletGroupId", null))
-      const sd = loadSimNJson<string | null>(cid, "startDate", null)
-      setStartDate(sd ? new Date(sd) : undefined)
-      const ed = loadSimNJson<string | null>(cid, "endDate", null)
-      setEndDate(ed ? new Date(ed) : undefined)
-      setParameters(loadSimNJson<ParametersState>(cid, "parameters", DEFAULT_PARAMS_STATE))
-    }
-    prevCidRef.current = cid
-  }, [cid])
+    if (!loaded) return
+    try {
+      localStorage.setItem(FORM_KEY, JSON.stringify({
+        name, description, coinId, quoteAsset, timeframe, strategy, engine, forecastVol,
+        startDate: startDate ? startDate.toISOString() : null,
+        endDate: endDate ? endDate.toISOString() : null,
+      }))
+    } catch { /* quota / unavailable — ignore */ }
+  }, [loaded, name, description, coinId, quoteAsset, timeframe, strategy, engine, forecastVol, startDate, endDate])
 
-  const defaultGroupId = customerConfig?.group_id ?? null
-  const resolvedGroupId = outletGroupId === null && defaultGroupId ? defaultGroupId : outletGroupId
-
-  const selectedStrategy = strategies.find((s) => s.id === strategyId) ?? null
-
-  // Resolve strategy engine slug and filter workers by model support
-  const neededSlug = useMemo(() => {
-    if (!selectedStrategy?.prediction_engine_id) return null
-    return engines.find((e) => e.id === selectedStrategy.prediction_engine_id)?.slug ?? null
-  }, [selectedStrategy, engines])
-
-  const workers = useMemo(() => {
-    return allWorkers.filter((w) => {
-      if (w.models.length === 0) return true
-      if (!neededSlug) return true
-      return w.models.includes(neededSlug)
-    })
-  }, [allWorkers, neededSlug])
-
-  // Clear worker selection if it was filtered out
-  useEffect(() => {
-    if (worker && !workers.some((w) => w.name === worker)) setWorker(null)
-  }, [worker, workers])
-
-  const selectedTypeLabel = t(SIMULATION_TYPES.find((s) => s.value === simType)!.labelKey as Parameters<typeof t>[0])
-
-  const runMutation = useMutation({
-    mutationFn: (req: SimulationRunRequest) => simulationsApi.runAsync(req),
-    onSuccess: () => toast.success(t("toastQueued")),
-    onError: () => toast.error(t("toastError")),
+  const { data: coins = [] } = useQuery({ queryKey: ["coins"], queryFn: () => coinsApi.list({ limit: 1000 }) })
+  const { data: pairsResp } = useQuery({
+    queryKey: ["simFormPairs", coinId],
+    queryFn: () => klinesApi.getTradingPairs(coinId!),
+    enabled: !!coinId,
   })
+  const pairs = pairsResp?.pairs ?? []
+  const { data: tfResp } = useQuery({
+    queryKey: ["simFormTfs", coinId, quoteAsset],
+    queryFn: () => klinesApi.getTimeframes(coinId!, quoteAsset!),
+    enabled: !!coinId && !!quoteAsset,
+  })
+  const timeframes = tfResp?.timeframes ?? []
+  const { data: engines = [] } = useQuery({ queryKey: ["predictionEngines"], queryFn: () => klinesApi.getEngines() })
 
-  function handleGenerate() {
-    if (!activeCustomer) return void toast.error(t("errorNoCustomer"))
-    if (!startDate || !endDate) return void toast.error(t("errorNoDates"))
-    if (isBefore(endDate, startDate)) return void toast.error(t("errorDateOrder"))
-    const resolvedName = name.trim() ||
-      `${selectedTypeLabel} simulation ${format(startDate, "d MMM yyyy")} – ${format(endDate, "d MMM yyyy")}`
-    runMutation.mutate({
-      customer_id: activeCustomer.id,
-      name: resolvedName,
-      description: description.trim() || undefined,
-      simulation_from: format(startDate, "yyyy-MM-dd"),
-      simulation_to: format(endDate, "yyyy-MM-dd"),
-      simulation_type: simType,
-      delay,
-      prediction_strategy_id: strategyId,
-      outlet_group_id: resolvedGroupId || undefined,
-      worker: worker || undefined,
-      parameters: buildParametersPayload(parameters),
-    })
-    if (!name.trim()) setName(resolvedName)
-  }
+  const selectedCoin = coins.find((c) => c.id === coinId)
+  const dayCount = startDate && endDate ? differenceInCalendarDays(endDate, startDate) + 1 : null
+
+  const createMutation = useMutation({
+    mutationFn: () => klineSimulationsApi.create({
+      coin_id: coinId!,
+      quote_asset: quoteAsset!,
+      interval: timeframe!,
+      start_date: format(startDate!, "yyyy-MM-dd"),
+      end_date: format(endDate!, "yyyy-MM-dd"),
+      models: [engine],
+      name: name.trim() || null,
+      description: description.trim() || null,
+      strategy,
+      forecast_vol: forecastVol,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
+      // Keep the form persisted after a run so the user can return and tweak a
+      // selection to launch a variation; "Clear" still wipes it explicitly.
+      toast.success("Simulation queued")
+      router.push("/simulations")
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to start simulation"),
+  })
 
   function handleClear() {
-    setName("")
-    setDescription("")
-    setSimType(1)
-    setDelay(14)
-    setStrategyId(null)
-    setOutletGroupId(null) // null = restore to customer config default
-    setStartDate(undefined)
-    setEndDate(undefined)
-    setParameters(DEFAULT_PARAMS_STATE)
+    setName(""); setDescription(""); setCoinId(null); setQuoteAsset(null); setTimeframe(null)
+    setStrategy("price"); setEngine(""); setForecastVol(false)
+    setStartDate(undefined); setEndDate(undefined)
   }
 
   function handleStartSelect(d: Date) {
     setStartDate(d)
-    // Mirror to end date; keep end date if it's already after the new start and within sales range
-    if (!endDate || isBefore(endDate, d)) {
-      setEndDate(endMaxDate && isAfter(d, endMaxDate) ? endMaxDate : d)
-    }
+    if (endDate && isBefore(endDate, d)) setEndDate(undefined)
   }
 
-  const dayCount = startDate && endDate
-    ? differenceInCalendarDays(endDate, startDate) + 1
-    : null
-
-  const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
+  const valid = coinId && quoteAsset && timeframe && engine && startDate && endDate
+    && !isAfter(startDate, endDate)
 
   return (
-    <div className="max-w-5xl px-6 py-6 flex flex-col gap-6">
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "simulation" | "parameters")} className="flex flex-col gap-0">
-        <div className="relative w-full">
-          <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
-            <TabsTrigger value="simulation" className={TAB_CLASS}>{t("tabSimulation")}</TabsTrigger>
-            <TabsTrigger value="parameters" className={TAB_CLASS}>{t("tabParameters")}</TabsTrigger>
-          </TabsList>
-          <div
-            className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0"
-            style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
-          />
-        </div>
+    <div className="max-w-5xl px-6 py-6">
+      <h1 className="text-lg font-semibold mb-6">New Simulation</h1>
 
-        <TabsContent value="simulation" className="mt-6">
-
-      {/* ── Fields ─────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-4">
-
+      <div className="flex flex-col gap-5">
         {/* Name */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldName")}</label>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t("fieldNamePlaceholder")}
-            className="h-8 text-sm"
-          />
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. BTC 2025 Volatility Test" />
         </div>
 
         {/* Description */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldDescription")}</label>
-          <Textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder={t("fieldDescriptionPlaceholder")}
-            rows={2}
-            className="resize-none text-sm"
-          />
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Description</label>
+          <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional notes about this simulation" rows={3} />
         </div>
 
-        {/* Simulation Type */}
+        {/* Coin */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldType")}</label>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                <span>{selectedTypeLabel}</span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-72">
-              {SIMULATION_TYPES.map((s) => (
-                <DropdownMenuItem
-                  key={s.value}
-                  onClick={() => setSimType(s.value)}
-                  className="flex items-center justify-between"
-                >
-                  {t(s.labelKey as Parameters<typeof t>[0])}
-                  {simType === s.value && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Coin</label>
+          <select value={coinId ?? ""} onChange={(e) => { setCoinId(e.target.value || null); setQuoteAsset(null); setTimeframe(null) }} className={SELECT_CLASS}>
+            <option value="">Select coin...</option>
+            {coins.map((c) => <option key={c.id} value={c.id}>{c.symbol} — {c.name}</option>)}
+          </select>
         </div>
 
-        {/* Delay */}
+        {/* Trading Pair */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldDelay")}</label>
-          <Input
-            type="number"
-            min={0}
-            value={delay}
-            onChange={(e) => setDelay(Math.max(0, Number(e.target.value)))}
-            className="h-8 text-sm w-72"
-          />
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Trading Pair</label>
+          <select value={quoteAsset ?? ""} onChange={(e) => { setQuoteAsset(e.target.value || null); setTimeframe(null) }} disabled={!coinId} className={SELECT_CLASS}>
+            <option value="">Select pair...</option>
+            {pairs.map((p) => <option key={p} value={p}>{selectedCoin?.symbol}{p}</option>)}
+          </select>
         </div>
 
-        {/* Strategy */}
+        {/* Timeframe */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldStrategy")}</label>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                <span className={cn(!selectedStrategy && "text-[var(--muted-foreground)]")}>
-                  {selectedStrategy ? selectedStrategy.name : t("fieldStrategyNone")}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
-              <DropdownMenuItem
-                onClick={() => setStrategyId(null)}
-                className="flex items-center justify-between"
-              >
-                <span className="text-[var(--muted-foreground)]">{t("fieldStrategyNone")}</span>
-                {strategyId === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-              </DropdownMenuItem>
-              {strategies.map((s) => (
-                <DropdownMenuItem
-                  key={s.id}
-                  onClick={() => setStrategyId(s.id)}
-                  className="flex items-center justify-between"
-                >
-                  <span className="truncate">{s.name}</span>
-                  {strategyId === s.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Timeframe</label>
+          <select value={timeframe ?? ""} onChange={(e) => setTimeframe(e.target.value || null)} disabled={!quoteAsset} className={SELECT_CLASS}>
+            <option value="">Select timeframe...</option>
+            {timeframes.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+          </select>
         </div>
 
-        {/* Outlet Group */}
+        {/* Simulation Strategy */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldOutletGroup")}</label>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                <span className={cn(!resolvedGroupId && "text-[var(--muted-foreground)]")}>
-                  {resolvedGroupId
-                    ? (outletGroups.find((g) => g.id === resolvedGroupId)?.name ?? t("fieldOutletGroupNone"))
-                    : t("fieldOutletGroupNone")}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
-              <DropdownMenuItem
-                onClick={() => setOutletGroupId("")}
-                className="flex items-center justify-between"
-              >
-                <span className="text-[var(--muted-foreground)]">{t("fieldOutletGroupNone")}</span>
-                {!resolvedGroupId && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-              </DropdownMenuItem>
-              {outletGroups.map((g) => (
-                <DropdownMenuItem
-                  key={g.id}
-                  onClick={() => setOutletGroupId(g.id)}
-                  className="flex items-center justify-between"
-                >
-                  <span className="truncate">{g.name}</span>
-                  {resolvedGroupId === g.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Simulation Strategy</label>
+          <select value={strategy} onChange={(e) => setStrategy(e.target.value)} className={SELECT_CLASS}>
+            {STRATEGY_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          {strategy === "kline" && (
+            <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
+              Forecasts the chart&apos;s <em>shape</em>: each bar becomes 1 (close up vs the previous bar) or 0, giving a sequence like 0011010111… The model predicts whether the next symbol is a 1 or 0. Direction accuracy and the fee-aware backtest apply; price-error metrics (MAE/MAPE) don&apos;t.
+            </p>
+          )}
         </div>
 
-        {/* Worker */}
-        {workers.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fieldWorker")}</label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                  <span className={cn(!worker && "text-[var(--muted-foreground)]")}>
-                    {worker ?? t("fieldWorkerAny")}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-72">
-                <DropdownMenuItem
-                  onClick={() => setWorker(null)}
-                  className="flex items-center justify-between"
-                >
-                  <span className="text-[var(--muted-foreground)]">{t("fieldWorkerAny")}</span>
-                  {worker === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                </DropdownMenuItem>
-                {workers.map((w) => (
-                  <DropdownMenuItem
-                    key={w.name}
-                    onClick={() => setWorker(w.name)}
-                    className="flex items-center justify-between"
-                  >
-                    <span>{w.name}</span>
-                    {worker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+        {/* Forecast Engine */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Forecast Engine</label>
+          <select value={engine} onChange={(e) => setEngine(e.target.value)} className={SELECT_CLASS}>
+            <option value="">{engines.length === 0 ? "Loading engines..." : "Select engine..."}</option>
+            {engines.map((eng) => <option key={eng.name} value={eng.name}>{eng.name}</option>)}
+          </select>
+        </div>
 
-      </div>
-
-      {/* ── Timeline ───────────────────────────────────────────────────────── */}
-      <div className="relative">
-
-        {/* Connecting line behind the circles */}
-        <div className="absolute top-5 left-1/4 right-1/4 h-px bg-[var(--border)] z-0" />
-
-        <div className="grid grid-cols-2 gap-8">
-
-          {/* Step 1 — Start Date */}
-          <div className="flex flex-col items-center gap-3 relative z-10">
-            <StepCircle n={1} active={!!startDate} />
-            <div className="flex flex-col items-center gap-0.5 text-center">
-              <span className="text-sm font-medium">{t("stepStart")}</span>
-              <span className="text-xs text-[var(--muted-foreground)] h-4">
-                {startDate ? format(startDate, "d MMM yyyy") : t("noDateSelected")}
+        {/* Volatility forecast */}
+        <div className="flex flex-col gap-1.5">
+          <label className="flex items-start gap-2 cursor-pointer max-w-2xl">
+            <Checkbox checked={forecastVol} onCheckedChange={(c) => setForecastVol(!!c)} className="mt-0.5" />
+            <span className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium">Forecast volatility</span>
+              <span className="text-xs text-[var(--muted-foreground)]">
+                Also run a second one-step forecast of realized volatility (the bar&apos;s ln(high/low) range), so the Backtest tab&apos;s vol-targeting / vol-breakout strategies can use a genuine volatility forecast instead of the price band width. Roughly doubles run time.
               </span>
-            </div>
-            <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
-              <MiniCalendar
-                selected={startDate}
-                onSelect={handleStartSelect}
-                maxDate={endDate ?? startMaxDate}
-              />
-            </div>
-          </div>
-
-          {/* Step 2 — End Date */}
-          <div className="flex flex-col items-center gap-3 relative z-10">
-            <StepCircle n={2} active={!!endDate} />
-            <div className="flex flex-col items-center gap-0.5 text-center">
-              <span className={cn("text-sm font-medium", !startDate && "text-[var(--muted-foreground)]")}>
-                {t("stepEnd")}
-              </span>
-              <span className="text-xs text-[var(--muted-foreground)] h-4">
-                {endDate ? format(endDate, "d MMM yyyy") : t("noDateSelected")}
-              </span>
-            </div>
-            <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
-              <MiniCalendar
-                selected={endDate}
-                onSelect={setEndDate}
-                minDate={startDate}
-                maxDate={endMaxDate}
-                disabled={!startDate}
-              />
-            </div>
-          </div>
-
-        </div>
-
-        {/* Day count — centered between the two columns */}
-        {dayCount !== null && (
-          <div className="absolute top-[4.25rem] left-1/2 -translate-x-1/2 z-20 bg-background px-2">
-            <span className="text-xs text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
-              {dayCount} {dayCount === 1 ? "day" : "days"}
             </span>
+          </label>
+        </div>
+
+        {/* Date Range timeline */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Date Range</label>
+          <div className="relative mt-2">
+            <div className="absolute top-5 left-1/4 right-1/4 h-px bg-[var(--border)] z-0" />
+            <div className="grid grid-cols-2 gap-8">
+              {/* Start */}
+              <div className="flex flex-col items-center gap-3 relative z-10">
+                <StepCircle n={1} active={!!startDate} />
+                <div className="flex flex-col items-center gap-0.5 text-center">
+                  <span className="text-sm font-medium">Start Date</span>
+                  <span className="text-xs text-[var(--muted-foreground)] h-4">
+                    {startDate ? format(startDate, "d MMM yyyy") : "No date selected"}
+                  </span>
+                </div>
+                <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
+                  <MiniCalendar selected={startDate} onSelect={handleStartSelect} maxDate={endDate} />
+                </div>
+              </div>
+              {/* End */}
+              <div className="flex flex-col items-center gap-3 relative z-10">
+                <StepCircle n={2} active={!!endDate} />
+                <div className="flex flex-col items-center gap-0.5 text-center">
+                  <span className="text-sm font-medium">End Date</span>
+                  <span className="text-xs text-[var(--muted-foreground)] h-4">
+                    {endDate ? format(endDate, "d MMM yyyy") : "No date selected"}
+                  </span>
+                </div>
+                <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
+                  <MiniCalendar selected={endDate} onSelect={setEndDate} minDate={startDate} disabled={!startDate} />
+                </div>
+              </div>
+            </div>
+            {dayCount !== null && (
+              <div className="absolute top-[4.25rem] left-1/2 -translate-x-1/2 z-20 bg-background px-2">
+                <span className="text-xs text-[var(--muted-foreground)]">{dayCount.toLocaleString()} days</span>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={handleClear} className="cursor-pointer">Clear</Button>
+          <Button size="sm" onClick={() => createMutation.mutate()} disabled={!valid || createMutation.isPending} className="cursor-pointer">
+            {createMutation.isPending ? "Starting…" : "Run Simulation"}
+          </Button>
+        </div>
       </div>
-
-        </TabsContent>
-
-        <TabsContent value="parameters" className="mt-6">
-          <SimulationParametersForm state={parameters} onChange={setParameters} />
-        </TabsContent>
-      </Tabs>
-
-      {/* ── Actions ────────────────────────────────────────────────────────── */}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={handleClear} className="cursor-pointer">
-          {t("clearButton")}
-        </Button>
-        <Button
-          size="sm"
-          onClick={handleGenerate}
-          disabled={runMutation.isPending || !startDate || !endDate}
-          className="cursor-pointer"
-        >
-          {runMutation.isPending ? t("generating") : t("generateButton")}
-        </Button>
-      </div>
-
     </div>
   )
 }

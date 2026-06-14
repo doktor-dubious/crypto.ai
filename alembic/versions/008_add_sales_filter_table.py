@@ -20,21 +20,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "sales_filters",
-        sa.Column("id", postgresql.UUID(as_uuid=False), nullable=False),
-        sa.Column("customer_id", postgresql.UUID(as_uuid=False), nullable=False),
-        sa.Column("name", sa.Text(), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("from_date", sa.Date(), nullable=False),
-        sa.Column("to_date", sa.Date(), nullable=False),
-        sa.Column("active", sa.Boolean(), nullable=False, server_default="true"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.ForeignKeyConstraint(["customer_id"], ["customers.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_sales_filters_customer_id", "sales_filters", ["customer_id"])
+    # NOTE: This table is also created in migration 044 with proper defaults.
+    # Skipping this migration to avoid duplicate table creation error.
+    pass
 
 
 def downgrade() -> None:

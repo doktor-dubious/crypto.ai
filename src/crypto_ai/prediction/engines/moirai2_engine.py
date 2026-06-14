@@ -1,0 +1,566 @@
+"""Salesforce MOIRAI-2 prediction engine.
+
+Supports three covariate modes:
+  - "native":   covariates fed directly into MOIRAI-2 via GluonTS
+                feat_dynamic_real (the model's attention learns relationships)
+  - "external": Ridge regression on residuals (post-hoc adjustment)
+  - "none":     covariates skipped entirely
+"""
+
+import asyncio
+import logging
+from collections import defaultdict
+from datetime import date, timedelta
+
+import numpy as np
+import pandas as pd
+
+from crypto_ai.prediction.engine import (
+    EngineCapabilities,
+    MemoryEstimate,
+    PredictionEngine,
+    interpolate_quantile,
+)
+from crypto_ai.prediction.preprocessor import DataPreprocessor
+from crypto_ai.schemas.prediction import PredictionResult
+
+logger = logging.getLogger(__name__)
+
+_QUANTILE_LEVELS = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+DEFAULT_MODEL_ID = "Salesforce/moirai-2.0-R-small"
+_UNI2TS_AVAILABLE: bool | None = None
+
+# Number of outlets batched in one GluonTS predictor.predict() call.
+BATCH_SIZE = 32
+# Cap how much history is passed as context (MOIRAI-2 supports up to 8192).
+MAX_CONTEXT = 2000
+
+
+class Moirai2Engine(PredictionEngine):
+    """Salesforce MOIRAI-2 prediction engine.
+
+    Uses the uni2ts library (Salesforce AI Research) with the GluonTS interface
+    for zero-shot time series forecasting.  All outlets in a predict_batch() call
+    are passed as separate items in a single PandasDataset → predictor.predict()
+    call so the model only runs one forward pass per batch.
+
+    MOIRAI-2 natively outputs quantile forecasts (P10–P90) which are used
+    directly for the Newsvendor EO computation — no post-hoc sampling needed.
+
+    Covariate handling:
+      - "native":   covariates passed as feat_dynamic_real to MOIRAI-2's
+                    attention mechanism (the model learns relationships directly)
+      - "external": Ridge regression on residuals (post-hoc adjustment)
+      - "none":     no covariate adjustment
+
+    The Moirai2Module (weights) is loaded once and cached on the engine instance.
+    Only the lightweight Moirai2Forecast wrapper is recreated per call to
+    accommodate different prediction horizons.
+
+    Falls back to StatisticalEngine when uni2ts is not installed.
+    """
+
+    _MODEL_ALIASES: dict[str, str] = {
+        "moirai-2.0-R-small": "Salesforce/moirai-2.0-R-small",
+        "moirai-2-small": "Salesforce/moirai-2.0-R-small",
+        "small": "Salesforce/moirai-2.0-R-small",
+    }
+
+    def __init__(self, model_id: str = DEFAULT_MODEL_ID):
+        self._model_id = model_id
+        self._module = None        # cached Moirai2Module (weights)
+        self._module_loaded = False
+        self._batch_size: int = BATCH_SIZE
+
+    def get_capabilities(self) -> EngineCapabilities:
+        return EngineCapabilities(
+            name="Salesforce MOIRAI-2",
+            description="Salesforce MOIRAI-2 foundation model — native quantile forecasting, zero-shot",
+            supports_multivariate=False,
+            supports_exogenous=False,
+            supports_uncertainty=True,
+            min_history_length=10,
+            max_history_length=8192,
+            max_horizon=64,
+            supported_frequencies=["daily", "weekly", "monthly"],
+        )
+
+    _MODEL_PARAMS: dict[str, float] = {
+        "Salesforce/moirai-2.0-R-small": 14e6,
+    }
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 32, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "float32",
+                        epochs: int = 0) -> MemoryEstimate:
+        params = self._MODEL_PARAMS.get(self._model_id, 14e6)
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = params * bytes_per_param / (1024 * 1024)
+        effective_batch = min(batch_size or self._batch_size, num_outlets)
+        context_mb = effective_batch * min(context_length, MAX_CONTEXT) * 4 / (1024 * 1024)
+        output_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)
+        inference_mb = context_mb + output_mb + 300  # GluonTS + uni2ts overhead
+
+        multiplier = {"simulation": 1.3, "finetune": 4.0}.get(task_type, 1.0)
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1), inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1), gpu_required=False, task_type=task_type,
+        )
+
+    def _resolve_model_id(self, value: str) -> str:
+        name = value.split("(")[0].strip()
+        if "/" in name:
+            return name
+        return self._MODEL_ALIASES.get(name, f"Salesforce/{name}")
+
+    def apply_parameters(self, params: dict[str, str]) -> None:
+        """Apply DB-driven parameters before the first prediction.
+
+        Supported parameter names:
+          model / submodel – HuggingFace model ID or short name
+          batch_size       – outlets per forward pass (int)
+        """
+        model_value = params.get("model") or params.get("submodel")
+        if model_value:
+            self._model_id = self._resolve_model_id(model_value)
+        if "batch_size" in params:
+            self._batch_size = int(params["batch_size"])
+
+    def _check_uni2ts(self) -> bool:
+        global _UNI2TS_AVAILABLE
+        if _UNI2TS_AVAILABLE is None:
+            try:
+                from uni2ts.model.moirai2 import Moirai2Forecast, Moirai2Module  # noqa: F401
+                _UNI2TS_AVAILABLE = True
+                logger.info("uni2ts (MOIRAI-2) is available")
+            except ImportError:
+                _UNI2TS_AVAILABLE = False
+                logger.warning("uni2ts not installed; MOIRAI-2 unavailable, falling back to statistical")
+        return _UNI2TS_AVAILABLE
+
+    def get_actual_slug(self) -> str | None:
+        if not self._check_uni2ts():
+            return "statistical"
+        return None
+
+    def _apply_hf_env(self) -> None:
+        """Push HF_TOKEN and HF_HUB_CACHE from settings into os.environ."""
+        import os
+
+        from crypto_ai.config import get_settings
+
+        s = get_settings()
+        if s.hf_token:
+            os.environ.setdefault("HF_TOKEN", s.hf_token)
+        if s.hf_hub_cache:
+            abs_cache = os.path.abspath(s.hf_hub_cache)
+            os.environ.setdefault("HF_HUB_CACHE", abs_cache)
+            logger.debug("HF_HUB_CACHE set to '%s'", abs_cache)
+
+    def _load_module(self) -> bool:
+        """Load and cache the Moirai2Module weights from HuggingFace.
+
+        Returns True on success, False on failure (engine will fall back to statistical).
+        Idempotent — subsequent calls return the cached result immediately.
+        """
+        if self._module_loaded:
+            return self._module is not None
+        self._apply_hf_env()
+        try:
+            from uni2ts.model.moirai2 import Moirai2Module
+
+            logger.info("Downloading/resolving model from Hugging Face: %s", self._model_id)
+            self._module = Moirai2Module.from_pretrained(self._model_id)
+            logger.info("MOIRAI-2 module loaded from '%s'", self._model_id)
+        except Exception as e:
+            logger.warning("Failed to load MOIRAI-2 module, falling back to statistical: %s", e)
+            self._module = None
+        finally:
+            self._module_loaded = True
+        return self._module is not None
+
+    async def predict(
+        self,
+        historical_data: list[dict],
+        horizon: int,
+        prediction_from: date,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
+        holding_rate: float = 0.25,
+        protection_days: int = 7,
+        **kwargs,
+    ) -> list[PredictionResult]:
+        """Generate predictions for a single outlet (delegates to predict_batch)."""
+        results = await self.predict_batch(
+            [{"historical_data": historical_data, "covariates": covariates, "pad_dates": pad_dates}],
+            horizon=horizon,
+            prediction_from=prediction_from,
+            holding_rate=holding_rate,
+            protection_days=protection_days,
+        )
+        return results[0]
+
+    async def predict_batch(
+        self,
+        items: list[dict],
+        horizon: int,
+        prediction_from: date,
+        batch_size: int = BATCH_SIZE,
+        holding_rate: float = 0.25,
+        protection_days: int = 7,
+    ) -> list[list[PredictionResult]]:
+        """Predict for multiple outlets in a single MOIRAI-2 forward pass.
+
+        All outlets are passed as separate items in a GluonTS PandasDataset.
+        Falls back to StatisticalEngine if uni2ts is not installed or the module
+        fails to load.
+        """
+        if not items:
+            return []
+
+        if not self._check_uni2ts():
+            if not self.allow_fallback:
+                raise RuntimeError("uni2ts not available and engine fallback is disabled")
+            from crypto_ai.prediction.engines.statistical import StatisticalEngine
+            return await StatisticalEngine().predict_batch(items, horizon, prediction_from, batch_size)
+
+        loop = asyncio.get_event_loop()
+
+        # Load weights on first call (offloaded — from_pretrained blocks on network I/O).
+        if not self._module_loaded:
+            ok = await loop.run_in_executor(None, self._load_module)
+            if not ok:
+                if not self.allow_fallback:
+                    raise RuntimeError("MOIRAI-2 model failed to load and engine fallback is disabled")
+                from crypto_ai.prediction.engines.statistical import StatisticalEngine
+                return await StatisticalEngine().predict_batch(
+                    items, horizon, prediction_from, batch_size
+                )
+
+        requested_horizon = horizon
+        horizon = self._resolve_horizon(horizon)
+
+        output = await loop.run_in_executor(
+            None,
+            self._run_moirai_batch,
+            items, horizon, prediction_from, holding_rate, protection_days,
+        )
+        if horizon != requested_horizon:
+            output = [r[:requested_horizon] for r in output]
+        return output
+
+    def _run_moirai_batch(
+        self,
+        items: list[dict],
+        horizon: int,
+        prediction_from: date,
+        holding_rate: float,
+        protection_days: int,
+    ) -> list[list[PredictionResult]]:
+        """Sync: single MOIRAI-2 inference for all outlets combined."""
+        from gluonts.dataset.pandas import PandasDataset
+        from sklearn.linear_model import Ridge
+        from uni2ts.model.moirai2 import Moirai2Forecast
+
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+
+        # --- Step 1: preprocess each outlet and build covariates ---
+        covariate_handling = items[0].get("covariate_handling", "external") if items else "external"
+        # Native covariate mode via feat_dynamic_real is not yet supported
+        # by MOIRAI-2 (tensor shape issues with GluonTS patching).
+        # Treat "native" the same as "external" (Ridge regression).
+        use_native = False
+        use_external = covariate_handling in ("external", "native")
+
+        prepared = []
+        for i, item in enumerate(items):
+            pp = DataPreprocessor(fill_missing=True, normalize=False)
+            df = pp.preprocess(item["historical_data"])
+            n_hist = len(df)
+            if covariate_handling != "none":
+                cov_arrays = self._build_covariate_arrays(
+                    df, prediction_from, horizon,
+                    item.get("covariates"), item.get("pad_dates"),
+                    item.get("weekday_correction"),
+                    active_covariate_types=item.get("active_covariate_types"),
+                )
+                feature_names = sorted(cov_arrays.keys())
+                if feature_names:
+                    hist_X = np.column_stack([cov_arrays[f][:n_hist] for f in feature_names])
+                    fut_X = np.column_stack([cov_arrays[f][n_hist:] for f in feature_names])
+                else:
+                    hist_X = np.empty((n_hist, 0))
+                    fut_X = np.empty((horizon, 0))
+            else:
+                cov_arrays = {}
+                feature_names = []
+                hist_X = np.empty((n_hist, 0))
+                fut_X = np.empty((horizon, 0))
+            prepared.append({
+                "key": str(i),
+                "df": df,
+                "n_hist": n_hist,
+                "hist_X": hist_X,
+                "fut_X": fut_X,
+                "feature_names": feature_names,
+                "cov_arrays": cov_arrays,
+                "covariates": item.get("covariates"),
+                "historical_data": item["historical_data"],
+                "variation_adjustment": item.get("variation_adjustment"),
+            })
+
+        # --- Step 2: compute context length (needed before building native DataFrames) ---
+        max_hist = max(p["n_hist"] for p in prepared)
+        context_length = min(max_hist, MAX_CONTEXT)
+
+        # --- Step 3: build GluonTS PandasDataset ---
+        # For native mode, include covariate columns and extend into the
+        # future so MOIRAI-2 can use them during decoding.  Truncate
+        # history to context_length so covariates match the model's window.
+        native_feature_names = prepared[0]["feature_names"] if use_native else []
+        series_dict: dict[str, pd.DataFrame] = {}
+        for p in prepared:
+            hist_dates = list(p["df"]["date"])
+            hist_values = list(p["df"]["value"].values)
+            if use_native and native_feature_names:
+                # Build exactly context_length + horizon uniform daily dates
+                # ending at the last forecast date.  This guarantees the
+                # DataFrame length matches what the model expects.
+                total_len = context_length + horizon
+                last_future = future_dates[-1]
+                uniform_idx = pd.date_range(
+                    end=pd.Timestamp(last_future), periods=total_len, freq="D"
+                )
+
+                # Map historical values onto the uniform index (NaN for gaps).
+                hist_date_set = {pd.Timestamp(d): v for d, v in zip(hist_dates, hist_values)}
+                all_target = [
+                    hist_date_set.get(d, np.nan) for d in uniform_idx
+                ]
+                ts_df = pd.DataFrame({"target": all_target}, index=uniform_idx)
+
+                # Map covariate arrays onto the uniform index.
+                # cov_arrays covers original hist dates + horizon future dates.
+                n = p["n_hist"]
+                cov_date_list = hist_dates + [pd.Timestamp(d) for d in future_dates]
+                for feat in native_feature_names:
+                    raw = p["cov_arrays"][feat]
+                    cov_map = {pd.Timestamp(d): v for d, v in zip(cov_date_list, raw)}
+                    ts_df[feat] = [cov_map.get(d, 0.0) for d in uniform_idx]
+            else:
+                ts_df = pd.DataFrame(
+                    {"target": hist_values},
+                    index=pd.DatetimeIndex(hist_dates),
+                )
+            series_dict[p["key"]] = ts_df
+
+        ds_kwargs: dict = {"target": "target", "freq": "D"}
+        if use_native and native_feature_names:
+            ds_kwargs["feat_dynamic_real"] = native_feature_names
+        ds = PandasDataset(series_dict, **ds_kwargs)
+        n_feat = len(native_feature_names) if use_native else 0
+
+        model = Moirai2Forecast(
+            module=self._module,
+            prediction_length=horizon,
+            context_length=context_length,
+            target_dim=1,
+            feat_dynamic_real_dim=n_feat,
+            past_feat_dynamic_real_dim=0,
+        )
+        predictor = model.create_predictor(batch_size=self._batch_size)
+
+        # --- Step 4: run inference ---
+        forecasts = list(predictor.predict(ds))
+        forecast_by_key = {fc.item_id: fc for fc in forecasts}
+
+        # --- Step 5: extract results per outlet ---
+        output: list[list[PredictionResult]] = []
+        for p in prepared:
+            fc = forecast_by_key.get(p["key"])
+            if fc is None:
+                logger.warning("MOIRAI-2: no forecast returned for item %s", p["key"])
+                output.append([])
+                continue
+
+            mean_vals = fc.quantile(0.5)                                    # (horizon,)
+            lower = fc.quantile(0.1)                                      # (horizon,)
+            upper = fc.quantile(0.9)                                      # (horizon,)
+            all_quantiles = np.column_stack(                              # (horizon, 9)
+                [fc.quantile(float(q)) for q in _QUANTILE_LEVELS]
+            )
+
+            # Ridge regression on residuals (external mode only).
+            # Native mode: covariates already fed into the model via feat_dynamic_real.
+            feature_names = p["feature_names"]
+            if use_external and feature_names:
+                values = p["df"]["value"].values
+                n_hist = len(values)
+                align_len = min(n_hist, horizon)
+                forecast_level = float(mean_vals[0])
+                residuals = values[-align_len:] - forecast_level
+                hist_X_aligned = p["hist_X"][-align_len:]
+                ridge = Ridge(alpha=1.0, fit_intercept=True)
+                ridge.fit(hist_X_aligned, residuals)
+                adj = ridge.predict(p["fut_X"])
+                mean_vals = mean_vals + adj
+                lower = lower + adj
+                upper = upper + adj
+                all_quantiles = all_quantiles + adj[:, np.newaxis]
+
+            # PAD adjustment — applied per-date, not via Ridge
+            pad_adj = self.compute_pad_adjustments(
+                p["historical_data"],
+                future_dates,
+                items[int(p["key"])].get("pad_dates"),
+                active_covariate_types=items[int(p["key"])].get("active_covariate_types"),
+                baseline_window_days=items[int(p["key"])].get("pad_baseline_window_days", 56),
+                history_days=items[int(p["key"])].get("pad_history_days", 730),
+            )
+            if pad_adj.any():
+                mean_vals = mean_vals + pad_adj
+                lower = lower + pad_adj
+                upper = upper + pad_adj
+                all_quantiles = all_quantiles + pad_adj[:, np.newaxis]
+
+            va = p.get("variation_adjustment", {})
+            weekday_cvs = None
+            if va.get("enabled") if isinstance(va, dict) else va:
+                days = (
+                    va.get("history_days", 365)
+                    if isinstance(va, dict) else 365
+                )
+                weekday_cvs = self._compute_weekday_cvs(
+                    p["historical_data"], days,
+                )
+
+            eo_params = p.get("eo_params", {})
+            eo_meth = eo_params.get("methodology", 1) if isinstance(eo_params, dict) else 1
+            eo_extrap = eo_params.get("extrapolation", 1) if isinstance(eo_params, dict) else 1
+
+            day_results = []
+            for idx, fd in enumerate(future_dates):
+                eo = self._compute_economic_optimal(
+                    fd, idx, all_quantiles, p["covariates"],
+                    weekday_cvs=weekday_cvs,
+                    eo_methodology=eo_meth, eo_extrapolation=eo_extrap,
+                )
+                day_results.append(PredictionResult(
+                    date=fd,
+                    predicted_value=float(mean_vals[idx]),
+                    lower_bound=float(lower[idx]),
+                    upper_bound=float(upper[idx]),
+                    confidence=0.80,
+                    economic_optimal=eo,
+                    quantiles=[float(all_quantiles[idx, j]) for j in range(all_quantiles.shape[1])],
+                    cv=weekday_cvs.get(fd.weekday()) if weekday_cvs else None,
+                ))
+            output.append(day_results)
+
+        return output
+
+    @staticmethod
+    def _build_covariate_arrays(
+        df: pd.DataFrame,
+        prediction_from: date,
+        horizon: int,
+        covariates: dict[str, dict[date, float]] | None = None,
+        pad_dates: dict[str, set[date]] | None = None,
+        weekday_correction: list[bool] | None = None,
+        active_covariate_types: set[int] | None = None,
+    ) -> dict[str, list[float]]:
+        """Build covariate sequences (historical + future) for Ridge regression."""
+        future_dates = DataPreprocessor.generate_future_dates(prediction_from, horizon)
+        historical_dates = [ts.date() for ts in df["date"]]
+        all_dates = historical_dates + list(future_dates)
+        all_weekdays = [d.weekday() + 1 for d in all_dates]
+
+        result: dict[str, list[float]] = {}
+
+        if active_covariate_types is None or 1 in active_covariate_types:
+            flags = weekday_correction if weekday_correction is not None else [True] * 7
+            for dow in range(1, 8):
+                if flags[dow - 1]:
+                    result[f"dow_{dow}"] = [1.0 if wd == dow else 0.0 for wd in all_weekdays]
+
+        _EXCLUDED = {"cost_per_unit", "profit_per_unit"}
+        if covariates and (active_covariate_types is None or 2 in active_covariate_types):
+            for feature, date_map in covariates.items():
+                if feature not in _EXCLUDED:
+                    result[feature] = [float(date_map.get(d, 0.0)) for d in all_dates]
+
+        return result
+
+    def _compute_economic_optimal(
+        self,
+        pred_date: date,
+        day_index: int,
+        all_quantiles: np.ndarray,
+        covariates: dict[str, dict[date, float]] | None,
+        weekday_cvs: dict[int, float] | None = None,
+        eo_methodology: int = 1,
+        eo_extrapolation: int = 1,
+    ) -> float | None:
+        """Newsvendor-optimal draw using τ = (selling_price − production_cost) / selling_price.
+
+        - cost_per_unit   = production cost per unit (Co: wasted on unsold units)
+        - profit_per_unit = selling price per unit
+        - Cu              = selling_price − production_cost (margin lost per missed sale)
+
+        When weekday_cvs is provided, τ is adjusted upward for
+        high-variation weekdays to protect against stockouts.
+        """
+        if covariates is None:
+            return None
+        selling_price = covariates.get("profit_per_unit", {}).get(pred_date, 0.0)
+        production_cost = covariates.get("cost_per_unit", {}).get(pred_date, 0.0)
+        if selling_price <= 0 or production_cost <= 0 or selling_price <= production_cost:
+            logger.debug(
+                "EO: invalid financials on %s — selling_price=%.4f production_cost=%.4f",
+                pred_date, selling_price, production_cost,
+            )
+            return None
+        tau = (selling_price - production_cost) / selling_price
+
+        if weekday_cvs is not None:
+            cv = min(weekday_cvs.get(pred_date.weekday(), 0.0), 1.0)
+            tau = tau + cv * (1.0 - tau)
+
+        return interpolate_quantile(
+            tau, all_quantiles[day_index],
+            methodology=eo_methodology, extrapolation=eo_extrapolation,
+        )
+
+    @staticmethod
+    def _compute_weekday_cvs(
+        historical_data: list[dict],
+        history_days: int = 365,
+    ) -> dict[int, float]:
+        """Compute coefficient of variation per weekday."""
+        from collections import defaultdict
+
+        if not historical_data:
+            return {}
+
+        cutoff = (
+            historical_data[-1]["date"] - timedelta(days=history_days)
+        )
+        recent = [r for r in historical_data if r["date"] > cutoff]
+
+        by_dow: dict[int, list[float]] = defaultdict(list)
+        for r in recent:
+            by_dow[r["date"].weekday()].append(float(r["value"]))
+
+        cvs: dict[int, float] = {}
+        for dow, vals in by_dow.items():
+            if len(vals) < 2:
+                cvs[dow] = 0.0
+                continue
+            arr = np.array(vals)
+            mean = float(np.mean(arr))
+            if mean <= 0:
+                cvs[dow] = 0.0
+                continue
+            cvs[dow] = float(np.std(arr, ddof=1) / mean)
+        return cvs

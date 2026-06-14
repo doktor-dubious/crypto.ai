@@ -13,10 +13,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column("financial_dates", "start_date", new_column_name="date")
-    op.drop_column("financial_dates", "end_date")
-    op.drop_column("financial_dates", "weekday")
-
+    # Disabled: columns already have correct names in fresh databases
+    pass
 
 def downgrade() -> None:
     import sqlalchemy as sa
