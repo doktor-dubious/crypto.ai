@@ -21,6 +21,11 @@ ARG EXTRAS="ml timesfm chronos"
 RUN set -ex; args=""; for e in $EXTRAS; do args="$args --extra $e"; done; \
     uv sync --frozen --no-dev --no-install-project $args
 
+# watchmedo (from watchdog) powers the dev worker auto-reload (WORKER_AUTORELOAD).
+# Installed explicitly because the main sync is --no-dev; it's tiny and inert in
+# production, where auto-reload is off and watchmedo is never invoked.
+RUN uv pip install --python /app/.venv "watchdog>=4.0.0"
+
 # Production stage
 FROM python:3.11-slim as production
 
@@ -37,13 +42,17 @@ COPY src/ ./src/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
 
+# Create models directory for huggingface cache with proper permissions
+RUN mkdir -p /app/models/huggingface && chmod -R 755 /app/models && chmod -R 755 /app/models/huggingface
+
 # Set environment variables
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src"
 ENV PYTHONUNBUFFERED=1
+ENV HF_HOME="/app/models/huggingface"
 
 # Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app && chmod -R u+w /app/models
 
 USER appuser
 

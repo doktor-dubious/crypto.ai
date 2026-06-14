@@ -3,13 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: uvicorn gorm_ai.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn crypto_ai.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/crypto_ai
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
@@ -38,11 +38,11 @@ services:
       dockerfile: Dockerfile
     # Reads simultaneous_tasks from DB config and starts with matching concurrency.
     # Uses prefork pool when concurrency > 1, solo pool for concurrency = 1.
-    command: python -m gorm_ai.tasks.worker_entrypoint
+    command: python -m crypto_ai.tasks.worker_entrypoint
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/gorm_ai
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/crypto_ai
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
@@ -51,6 +51,9 @@ services:
       - MKL_NUM_THREADS=4
       - OPENBLAS_NUM_THREADS=4
       - WORKER_NAME=${WORKER_NAME:-local}
+      # Dev: auto-restart the worker on ./src changes (Celery doesn't hot-reload).
+      # Set WORKER_AUTORELOAD=0 to disable. Requires the dev deps (watchdog).
+      - WORKER_AUTORELOAD=${WORKER_AUTORELOAD:-1}
       # Override .env's host-path HF_HUB_CACHE with the in-container mount path.
       - HF_HUB_CACHE=/app/models/huggingface
     volumes:
@@ -81,13 +84,13 @@ services:
     environment:
       - POSTGRES_USER=gorm
       - POSTGRES_PASSWORD=gorm
-      - POSTGRES_DB=gorm_ai
+      - POSTGRES_DB=crypto_ai
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gorm -d gorm_ai"]
+      test: ["CMD-SHELL", "pg_isready -U gorm -d crypto_ai"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -114,7 +117,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://gorm:gorm@db:5432/gorm_ai
+      - DATABASE_URL=postgresql://gorm:gorm@db:5432/crypto_ai
       - BACKEND_INTERNAL_URL=http://app:8000
       - NEXT_PUBLIC_APP_URL=http://localhost:3000
       - BETTER_AUTH_URL=http://localhost:3000
