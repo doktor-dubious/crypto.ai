@@ -50,7 +50,7 @@ services:
       - OMP_NUM_THREADS=4
       - MKL_NUM_THREADS=4
       - OPENBLAS_NUM_THREADS=4
-      - WORKER_NAME=${WORKER_NAME:-local}
+      - WORKER_NAME=${WORKER_NAME:-CRYPTO}
       # Dev: auto-restart the worker on ./src changes (Celery doesn't hot-reload).
       # Set WORKER_AUTORELOAD=0 to disable. Requires the dev deps (watchdog).
       - WORKER_AUTORELOAD=${WORKER_AUTORELOAD:-1}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------
-# Deploy Gorm AI to https://gorm.predictioninstitute.com
+# Deploy Crypt AI to https://gorm.predictioninstitute.com
 #
 # Builds the production frontend image, runs database migrations,
 # and (re)starts all services.
@@ -23,7 +23,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "==> Deploying Gorm AI to ${PROD_URL}"
+echo "==> Deploying Crypt AI to ${PROD_URL}"
 
 # 1. Pull latest code
 echo "==> Pulling latest changes..."
@@ -39,13 +39,13 @@ if [ "$SKIP_BUILD" = false ]; then
         --build-arg NEXT_PUBLIC_APP_URL="${PROD_URL}" \
         --build-arg BETTER_AUTH_URL="${PROD_URL}" \
         --build-arg BACKEND_INTERNAL_URL=http://app:8000 \
-        -t gormai-frontend-prod frontend/
+        -t cryptoai-frontend-prod frontend/
 fi
 
 # 3. Run database migrations
 echo "==> Running database migrations..."
 docker compose up -d db
-docker compose exec -T db sh -c 'until pg_isready -U gorm -d gorm_ai; do sleep 1; done'
+docker compose exec -T db sh -c 'until pg_isready -U gorm -d crypto_ai; do sleep 1; done'
 docker compose run --rm -T app alembic upgrade head
 
 # 4. Start/restart all services

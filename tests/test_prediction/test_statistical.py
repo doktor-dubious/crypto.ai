@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from gorm_ai.prediction.engines.statistical import StatisticalEngine
+from crypto_ai.prediction.engines.statistical import StatisticalEngine
 
 
 @pytest.fixture

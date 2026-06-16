@@ -82,6 +82,12 @@ async def get_latest_kline(
     return kline
 
 
+@router.get("/pair-counts")
+async def get_pair_counts(service: KlineServiceDep) -> dict[str, int]:
+    """Number of distinct trading pairs (with loaded data) per coin, keyed by coin id."""
+    return await service.get_pair_counts_by_coin()
+
+
 @router.get("/{kline_id}", response_model=KlineResponse)
 async def get_kline(kline_id: str, service: KlineServiceDep) -> KlineResponse:
     """Get a specific kline."""
@@ -133,6 +139,21 @@ async def get_trading_pairs(
     """Get available trading pairs (quote assets) for a coin."""
     pairs = await service.get_quote_assets_by_coin(coin_id)
     return {"pairs": pairs}
+
+
+@router.get("/range/{coin_id}/{quote_asset}/{interval}")
+async def get_kline_range(
+    coin_id: str,
+    quote_asset: str,
+    interval: str,
+    service: KlineServiceDep,
+) -> dict[str, str | None]:
+    """Earliest/latest available date for a coin/pair/timeframe (for date pickers)."""
+    lo, hi = await service.get_date_range(coin_id, quote_asset, interval)
+    return {
+        "start_date": lo.date().isoformat() if lo else None,
+        "end_date": hi.date().isoformat() if hi else None,
+    }
 
 
 @router.get("/timeframes/{coin_id}/{quote_asset}")

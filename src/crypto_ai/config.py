@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database
-    database_url: str = "postgresql+asyncpg://gorm:gorm@localhost:5433/gorm_ai"
+    database_url: str = "postgresql+asyncpg://gorm:gorm@localhost:5433/crypto_ai"
     database_echo: bool = False
 
     # Redis

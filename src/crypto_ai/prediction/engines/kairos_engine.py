@@ -142,6 +142,9 @@ class KairosEngine(PredictionEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_kairos()
+
     def _check_kairos(self) -> bool:
         global _KAIROS_AVAILABLE
         if _KAIROS_AVAILABLE is None:

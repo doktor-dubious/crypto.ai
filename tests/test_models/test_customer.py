@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gorm_ai.database.models import Customer
+from crypto_ai.database.models import Customer
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,7 @@ async def _run_kline_simulation_async(
                 include_full_predictions=bool(record_id),
                 forecast_vol=bool(request_data.get("forecast_vol")),
                 strategy=request_data.get("strategy", "price"),
+                parameters=request_data.get("parameters") or None,
             )
 
         # Persist the full per-timestamp forecasts to their own table, then strip

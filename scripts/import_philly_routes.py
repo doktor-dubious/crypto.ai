@@ -18,9 +18,9 @@ from collections import Counter, defaultdict
 
 from sqlalchemy import select
 
-from gorm_ai.database.connection import async_session_factory
-from gorm_ai.database.models.outlet import Outlet
-from gorm_ai.database.models.outlet_info import OutletInfo
+from crypto_ai.database.connection import async_session_factory
+from crypto_ai.database.models.outlet import Outlet
+from crypto_ai.database.models.outlet_info import OutletInfo
 
 CUSTOMER_ID = "ef063dd2-f7f1-4118-8738-2e5e055c7133"
 INFO_KEY = "route"

@@ -61,6 +61,7 @@ def _interval_minutes(interval: str) -> int:
 
 
 _VOL_WINDOW = 20  # trailing bars for the vol-breakout expansion baseline
+_CONVICTION_FLOOR = 0.1  # smallest size a barely-qualifying signal still takes
 
 
 def _compute_backtest(
@@ -71,14 +72,30 @@ def _compute_backtest(
     periods_per_year: int,
     strategy: str = "price",
     vol_mode: str | None = None,
+    cover_fees: bool = False,
+    position_sizing: str = "none",
+    pyramid_steps: int = 4,
+    allow_short: bool = False,
 ) -> dict:
-    """Fee-aware, long-only backtest of a confidence-thresholded signal.
+    """Fee-aware backtest of a confidence-thresholded signal (long, or long/short).
 
     rows: (timestamp, prev_close, actual, predicted, prob_up, quantiles, pred_vol)
     by time. The base signal goes long for the next bar when prob_up >= threshold
     (and, if min_edge_pct>0, the point forecast clears prev_close by that margin).
+    When ``cover_fees`` is set, the round-trip fee (2 * fee_side) is added to that
+    required edge, so a bar only trades when its forecast move is expected to come
+    out ahead after costs.
     Fees are charged per side only when the position *changes*, so consecutive
-    long bars aren't double-charged.
+    same-direction bars aren't double-charged.
+
+    When ``allow_short`` is set, the signal is symmetric: a bar goes SHORT for the
+    next bar when ``prob_up <= 1 - threshold`` (and, with min_edge/cover_fees, the
+    point forecast falls below prev_close by the required margin). A short profits
+    when price drops. NOTE: the fee model is symmetric (same per-side fee for longs
+    and shorts, matching Binance's commission), but it does NOT model the carrying
+    cost that real shorts incur — perpetual-futures funding or margin borrow
+    interest — so short results here are optimistic by that (regime-dependent)
+    amount. Flipping long↔short pays both sides' fee (close + open) as one change.
 
     When ``strategy == "price_volatility"`` a per-bar volatility proxy is used:
     the genuine one-step volatility forecast ``pred_vol`` when present, else the
@@ -89,10 +106,20 @@ def _compute_backtest(
       • "vol_breakout" only takes the long when predicted vol exceeds its trailing
         average (a vol expansion) — otherwise it stays flat.
 
+    ``position_sizing`` applies a size factor on top of the above, in (0, 1]:
+      • "conviction": size scales with how far prob_up clears the threshold.
+      • "pyramiding": size ramps up over consecutive qualifying bars (adding to a
+        winner), reaching full size after ``pyramid_steps`` bars.
+    ("none" keeps full size on every signal — the original behaviour.)
+
     Returns metrics plus the (downsampled) equity curves.
     """
     fee_side = (fee_bps / 2.0) / 10_000.0
     min_edge = min_edge_pct / 100.0
+    # Required edge before going long: the manual min-edge, plus the full
+    # round-trip fee when cover_fees is on (so the expected gross move must
+    # cover the cost of entering and exiting the trade).
+    edge = min_edge + (2.0 * fee_side if cover_fees else 0.0)
     n = len(rows)
     if n == 0:
         return {"n_bars": 0}
@@ -105,11 +132,17 @@ def _compute_backtest(
     spread_rel: list[float | None] = []
     bar_ret: list[float] = []
     base_long: list[bool] = []
+    base_short: list[bool] = []
+    pu_list: list[float] = []
     used_pred_vol = False
     for _ts, prev, act, pred, pu, q, pv in rows:
         prev = float(prev); act = float(act); pred = float(pred); pu = float(pu)
         bar_ret.append((act - prev) / prev if prev else 0.0)
-        base_long.append(pu >= threshold and (min_edge <= 0 or pred >= prev * (1 + min_edge)))
+        pu_list.append(pu)
+        base_long.append(pu >= threshold and (edge <= 0 or pred >= prev * (1 + edge)))
+        base_short.append(
+            allow_short and pu <= 1 - threshold and (edge <= 0 or pred <= prev * (1 - edge))
+        )
         if pv is not None:
             spread_rel.append(float(pv)); used_pred_vol = True
         elif q and len(q) >= 2 and prev:
@@ -117,35 +150,74 @@ def _compute_backtest(
         else:
             spread_rel.append(None)
 
+    # Per-bar desired direction: +1 long, -1 short, 0 flat. With threshold >= 0.5
+    # the long/short conditions are mutually exclusive; long wins any tie at 0.5.
+    sig = [1 if base_long[i] else (-1 if base_short[i] else 0) for i in range(n)]
+
     # Target vol for sizing = median of the available predicted spreads.
     known = sorted(s for s in spread_rel if s is not None and s > 0)
     target_vol = known[len(known) // 2] if known else None
 
+    # Per-bar size factor in (0, 1] from the position-sizing scheme, applied on
+    # top of whatever size the (vol) signal decides. "none" keeps full size.
+    #   • conviction: scale with how far prob_up clears the threshold.
+    #   • pyramiding: ramp up over consecutive qualifying bars (add to a winner).
+    size_factors = [1.0] * n
+    if position_sizing == "conviction":
+        # pu is effectively capped at 0.9, so normalise the clearance over
+        # (0.9 - threshold); a barely-qualifying signal still takes a floor size.
+        # For shorts, conviction is how far prob_DOWN (1 - pu) clears threshold.
+        denom = max(0.9 - threshold, 0.05)
+        for i in range(n):
+            if sig[i] == 0:
+                continue
+            edge_pu = (pu_list[i] if sig[i] > 0 else 1.0 - pu_list[i])
+            conv = (edge_pu - threshold) / denom
+            size_factors[i] = min(1.0, max(_CONVICTION_FLOOR, conv))
+    elif position_sizing == "pyramiding":
+        step = 1.0 / max(1, pyramid_steps)  # full size reached after pyramid_steps bars
+        streak = 0
+        prev_sign = 0
+        for i in range(n):
+            # Ramp over consecutive SAME-direction bars; reset on flip or flat.
+            streak = streak + 1 if (sig[i] != 0 and sig[i] == prev_sign) else (1 if sig[i] != 0 else 0)
+            prev_sign = sig[i]
+            size_factors[i] = min(1.0, step * streak)
+
     pos: list[float] = []
     for i in range(n):
-        if not base_long[i]:
+        if sig[i] == 0:
             pos.append(0.0)
             continue
         if is_vol and vol_mode == "vol_targeting":
             sv = spread_rel[i]
-            size = min(1.0, target_vol / sv) if (sv and sv > 0 and target_vol) else 1.0
-            pos.append(size)
+            raw = min(1.0, target_vol / sv) if (sv and sv > 0 and target_vol) else 1.0
         elif is_vol and vol_mode == "vol_breakout":
             sv = spread_rel[i]
             window = [s for s in spread_rel[max(0, i - _VOL_WINDOW):i] if s is not None]
             avg = sum(window) / len(window) if window else None
-            pos.append(1.0 if (sv is not None and avg is not None and sv > avg) else 0.0)
+            raw = 1.0 if (sv is not None and avg is not None and sv > avg) else 0.0
         else:
-            pos.append(1.0)
+            raw = 1.0
+        # sig carries the sign: +size for longs, -size for shorts.
+        pos.append(sig[i] * raw * size_factors[i])
 
+    # n_fills = real exchange orders: one per bar where the position size changes
+    # (entry, each add/trim, exit), plus the final close-out. Scaling schemes
+    # (conviction, pyramiding) generate many more fills than "trades" (campaigns).
     net: list[float] = []
     prev_pos = 0.0
+    n_fills = 0
     for i in range(n):
-        cost = abs(pos[i] - prev_pos) * fee_side
+        delta = pos[i] - prev_pos
+        if abs(delta) > 1e-9:
+            n_fills += 1
+        cost = abs(delta) * fee_side
         net.append(pos[i] * bar_ret[i] - cost)
         prev_pos = pos[i]
-    if pos[-1] > 0:  # close out the final open position
-        net[-1] -= pos[-1] * fee_side
+    if abs(pos[-1]) > 1e-9:  # close out the final open position (long or short)
+        net[-1] -= abs(pos[-1]) * fee_side
+        n_fills += 1
 
     strat_eq, e = [], 1.0
     for r in net:
@@ -158,15 +230,27 @@ def _compute_backtest(
     bh_final = bh_eq[-1] * (1 - 2 * fee_side)  # buy & hold pays one round trip
 
     # Per-trade returns (a trade = a contiguous run with non-zero exposure).
+    # trade_markers carries each trade's entry timestamp + net return so the UI
+    # can mark the equity curve (green = winning trade, red = losing).
     trades: list[float] = []
+    trade_markers: list[dict] = []
     i = 0
     while i < n:
-        if pos[i] > 0:
+        if abs(pos[i]) > 1e-9:
+            entry_ts = rows[i][0]
+            side = 1 if pos[i] > 0 else -1
             run, j = 1.0, i
-            while j < n and pos[j] > 0:
+            # A campaign is a contiguous run holding the SAME direction; a
+            # long→short flip ends one trade and starts another.
+            while j < n and abs(pos[j]) > 1e-9 and (1 if pos[j] > 0 else -1) == side:
                 run *= 1 + net[j]
                 j += 1
-            trades.append(run - 1.0)
+            ret = run - 1.0
+            trades.append(ret)
+            trade_markers.append({
+                "timestamp": entry_ts, "ret": ret,
+                "side": "long" if side > 0 else "short",
+            })
             i = j
         else:
             i += 1
@@ -185,6 +269,7 @@ def _compute_backtest(
             mdd = min(mdd, (eq - peak) / peak)
 
     long_bars = sum(1 for p in pos if p > 0)
+    short_bars = sum(1 for p in pos if p < 0)
     # Downsample the curve to keep the payload light.
     step = max(1, n // 1500)
     idxs = list(range(0, n, step))
@@ -195,8 +280,11 @@ def _compute_backtest(
     return {
         "n_bars": n,
         "n_trades": n_trades,
+        "n_fills": n_fills,
         "long_bars": long_bars,
-        "exposure_pct": long_bars / n * 100,
+        "short_bars": short_bars,
+        "allow_short": allow_short,
+        "exposure_pct": (long_bars + short_bars) / n * 100,
         "win_rate_pct": (wins / n_trades * 100) if n_trades else 0.0,
         "total_return_pct": (strat_eq[-1] - 1) * 100,
         "buy_hold_return_pct": (bh_final - 1) * 100,
@@ -204,7 +292,9 @@ def _compute_backtest(
         "sharpe": sharpe,
         "max_drawdown_pct": mdd * 100,
         "vol_source": ("forecast" if used_pred_vol else "band") if is_vol else None,
+        "effective_min_edge_pct": edge * 100,
         "equity_curve": curve,
+        "trade_markers": trade_markers,
     }
 
 _SORT_COLUMNS = {
@@ -414,8 +504,12 @@ class KlineSimulationRecordService:
         fee_bps: float = 15.0,
         min_edge_pct: float = 0.0,
         vol_mode: str | None = None,
+        cover_fees: bool = False,
+        position_sizing: str = "none",
+        pyramid_steps: int = 4,
+        allow_short: bool = False,
     ) -> dict | None:
-        """Run a fee-aware long-only backtest over a sim's stored predictions."""
+        """Run a fee-aware backtest (long, or long/short) over stored predictions."""
         sim = await self.get(simulation_id)
         if not sim:
             return None
@@ -453,17 +547,23 @@ class KlineSimulationRecordService:
 
         bar_minutes = _interval_minutes(sim.interval)
         periods_per_year = int(round(365 * 24 * 60 / bar_minutes))
+        sizing = position_sizing if position_sizing in ("conviction", "pyramiding") else "none"
+        steps = max(1, min(50, pyramid_steps))
         result = _compute_backtest(
             rows, threshold, fee_bps, min_edge_pct, periods_per_year,
-            strategy=strat, vol_mode=vm,
+            strategy=strat, vol_mode=vm, cover_fees=cover_fees, position_sizing=sizing,
+            pyramid_steps=steps, allow_short=allow_short,
         )
         result.update({
             "model": use_model,
             "strategy": strat,
             "vol_mode": vm,
+            "position_sizing": sizing,
+            "pyramid_steps": steps,
             "threshold": threshold,
             "fee_bps": fee_bps,
             "min_edge_pct": min_edge_pct,
+            "cover_fees": cover_fees,
             "periods_per_year": periods_per_year,
         })
         return result

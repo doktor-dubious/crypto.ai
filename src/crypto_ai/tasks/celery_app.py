@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 celery_app = Celery(
-    "gorm_ai",
+    "crypto_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=["crypto_ai.tasks.predictions", "crypto_ai.tasks.simulations", "crypto_ai.tasks.finetuning", "crypto_ai.tasks.optimization", "crypto_ai.tasks.finetune_examination", "crypto_ai.tasks.kline_simulations", "crypto_ai.tasks.imports"],
@@ -199,8 +199,23 @@ def _get_redis():
 
 
 def _get_worker_models() -> str:
-    """Return the WORKER_MODELS env var (comma-separated engine slugs)."""
-    return os.environ.get("WORKER_MODELS", "")
+    """Comma-separated engine slugs this worker can run.
+
+    Explicit via the WORKER_MODELS env var (e.g. single-model remote GPU
+    workers like "sundial"); otherwise derived from the engines whose backing
+    libraries are actually installed on this worker, so the local worker
+    advertises exactly what it can run.
+    """
+    env = os.environ.get("WORKER_MODELS", "").strip()
+    if env:
+        return env
+    try:
+        from crypto_ai.prediction.registry import EngineRegistry
+
+        avail = EngineRegistry().engine_availability()
+        return ",".join(sorted(slug for slug, ok in avail.items() if ok))
+    except Exception:
+        return ""
 
 
 @worker_ready.connect

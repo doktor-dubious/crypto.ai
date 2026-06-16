@@ -182,6 +182,20 @@ class EngineRegistry:
         """
         return list(self._engines.keys())
 
+    def engine_availability(self) -> dict[str, bool]:
+        """Map each registered engine value (slug) → whether it's installed/runnable.
+
+        A cheap, no-download check used to fail fast on un-installed engines and to
+        mark them in the UI.
+        """
+        out: dict[str, bool] = {}
+        for engine_type in self._engines:
+            try:
+                out[engine_type.value] = self.get_engine(engine_type).is_available()
+            except Exception:
+                out[engine_type.value] = False
+        return out
+
     def get_capabilities(self, engine_type: PredictionEngineEnum) -> EngineCapabilities:
         """
         Get capabilities of a specific engine.

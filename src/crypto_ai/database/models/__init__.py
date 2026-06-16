@@ -8,6 +8,7 @@ from crypto_ai.database.models.coin import Coin
 from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.kline_simulation import KlineSimulation
 from crypto_ai.database.models.kline_simulation_prediction import KlineSimulationPrediction
+from crypto_ai.database.models.kline_strategy import KlineStrategy, KlineStrategyParameter
 from crypto_ai.database.models.covariate import Covariate, CovariateOutlet
 from crypto_ai.database.models.last_prediction import LastPrediction
 from crypto_ai.database.models.currency import Currency
@@ -56,6 +57,8 @@ __all__ = [
     "Kline",
     "KlineSimulation",
     "KlineSimulationPrediction",
+    "KlineStrategy",
+    "KlineStrategyParameter",
     "Configuration",
     "ConfigurationCovariate",
     "Covariate",

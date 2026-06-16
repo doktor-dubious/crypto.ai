@@ -9,8 +9,8 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gorm_ai.database.base import Base
-from gorm_ai.main import app
+from crypto_ai.database.base import Base
+from crypto_ai.main import app
 
 # Use SQLite for testing
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"

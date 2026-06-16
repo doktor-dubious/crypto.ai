@@ -23,6 +23,9 @@ class KlineSimulationCreate(BaseModel):
     # When true, the run ALSO forecasts a realized-volatility series one step
     # ahead (≈2x runtime), enabling genuine vol-aware backtests.
     forecast_vol: bool = False
+    # Route the task to a specific worker's queue (its WORKER_NAME). None/""
+    # = any available worker (the default "celery" queue).
+    worker: str | None = None
 
 
 class KlineSimulationUpdate(BaseModel):
@@ -105,6 +108,14 @@ class BacktestPoint(BaseModel):
     buy_hold: float
 
 
+class BacktestTradeMarker(BaseModel):
+    """A single trade: its entry timestamp, net return (>0 = winning), and side."""
+
+    timestamp: datetime
+    ret: float
+    side: str = "long"  # "long" | "short"
+
+
 class BacktestResponse(BaseModel):
     """Fee-aware long-only backtest of a confidence-thresholded strategy."""
 
@@ -112,13 +123,20 @@ class BacktestResponse(BaseModel):
     strategy: str = "price"
     vol_mode: str | None = None
     vol_source: str | None = None  # "forecast" (genuine pred_vol) | "band" (quantile width)
+    position_sizing: str = "none"  # "none" | "conviction" | "pyramiding"
+    pyramid_steps: int = 4  # bars to reach full size when position_sizing="pyramiding"
     threshold: float
     fee_bps: float
     min_edge_pct: float
+    cover_fees: bool = False
+    allow_short: bool = False  # long/short when True, long-only when False
+    effective_min_edge_pct: float = 0.0  # min_edge_pct plus the round-trip fee when cover_fees is on
     periods_per_year: int
     n_bars: int
     n_trades: int
+    n_fills: int = 0
     long_bars: int
+    short_bars: int = 0
     exposure_pct: float
     win_rate_pct: float
     total_return_pct: float
@@ -127,6 +145,7 @@ class BacktestResponse(BaseModel):
     sharpe: float
     max_drawdown_pct: float
     equity_curve: list[BacktestPoint]
+    trade_markers: list[BacktestTradeMarker] = []
 
 
 class KlineSimulationStatusResponse(BaseModel):

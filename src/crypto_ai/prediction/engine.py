@@ -212,6 +212,16 @@ class PredictionEngine(ABC):
         """
         return None
 
+    def is_available(self) -> bool:
+        """Whether this engine's backing library is installed and runnable here.
+
+        Cheap check (no model download). The default is True; engines that wrap an
+        optional dependency override this to report whether that dependency is
+        importable, so callers can refuse to run (instead of silently falling
+        back) and the UI can mark un-installed models.
+        """
+        return True
+
     def estimate_memory(
         self,
         *,

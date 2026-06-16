@@ -78,6 +78,8 @@ async def create_kline_simulation(
         "models": data.models,
         "forecast_vol": data.forecast_vol,
         "strategy": data.strategy,
+        # Engine parameters from the chosen Simulation Strategy preset (name→value).
+        "parameters": config.get("parameters") or {},
         "name": display_name,
     }
     await task_service.create(
@@ -87,7 +89,13 @@ async def create_kline_simulation(
     await service.set_task(rec.id, task_id)
     await session.commit()
 
-    run_kline_simulation_task.apply_async(args=[request_data], task_id=task_id)
+    # Route to a specific worker's queue when requested (its WORKER_NAME, which
+    # each worker consumes alongside the default "celery" queue); otherwise let
+    # any available worker pick it up.
+    dispatch_kwargs: dict = {"args": [request_data], "task_id": task_id}
+    if data.worker:
+        dispatch_kwargs["queue"] = data.worker
+    run_kline_simulation_task.apply_async(**dispatch_kwargs)
 
     rec = await service.get(rec.id)
     return _to_response(rec)
@@ -197,6 +205,10 @@ async def backtest_kline_simulation(
     fee_bps: Annotated[float, Query(ge=0.0, le=100.0)] = 15.0,
     min_edge_pct: Annotated[float, Query(ge=0.0, le=20.0)] = 0.0,
     vol_mode: Annotated[str | None, Query()] = None,
+    cover_fees: Annotated[bool, Query()] = False,
+    position_sizing: Annotated[str, Query()] = "none",
+    pyramid_steps: Annotated[int, Query(ge=1, le=50)] = 4,
+    allow_short: Annotated[bool, Query()] = False,
 ) -> BacktestResponse:
     """Fee-aware long-only backtest of a confidence-thresholded strategy.
 
@@ -204,10 +216,14 @@ async def backtest_kline_simulation(
     trip per position change. Compares against buy-and-hold over the same bars.
     `vol_mode` ("vol_targeting" | "vol_breakout") optionally applies a
     volatility-aware sizing/filter rule on top of the base signal.
+    `cover_fees` requires the forecast move to clear the round-trip fee (on top
+    of any min_edge_pct), so only trades expected to beat costs are taken.
     """
     result = await service.backtest(
         sim_id, model=model, threshold=threshold, fee_bps=fee_bps,
-        min_edge_pct=min_edge_pct, vol_mode=vol_mode,
+        min_edge_pct=min_edge_pct, vol_mode=vol_mode, cover_fees=cover_fees,
+        position_sizing=position_sizing, pyramid_steps=pyramid_steps,
+        allow_short=allow_short,
     )
     if result is None:
         raise HTTPException(status_code=400, detail="No quantile-based predictions to backtest")

@@ -152,6 +152,9 @@ class FlowStateEngine(PredictionEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_flowstate()
+
     def _check_flowstate(self) -> bool:
         global _FLOWSTATE_AVAILABLE
         if _FLOWSTATE_AVAILABLE is None:

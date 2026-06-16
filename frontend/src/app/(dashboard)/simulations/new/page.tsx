@@ -3,18 +3,20 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
+import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   addMonths, subMonths, addYears, subYears,
   startOfMonth, endOfMonth, eachDayOfInterval,
   getDay, isSameDay, isToday, isBefore, isAfter,
-  differenceInCalendarDays, format,
+  differenceInCalendarDays, format, parseISO,
 } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Checkbox } from "@/components/ui/checkbox"
-import { coinsApi, klinesApi, klineSimulationsApi } from "@/lib/api"
+import { coinsApi, klinesApi, klineSimulationsApi, klineStrategiesApi, tasksApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -25,6 +27,17 @@ const STRATEGY_OPTIONS = [
   { value: "price", label: "Price" },
   { value: "kline", label: "Kline" },
 ] as const
+
+function strategyLabel(v: string | null | undefined) {
+  return STRATEGY_OPTIONS.find((s) => s.value === v)?.label ?? (v || "—")
+}
+
+// Order timeframes by real duration (shortest first), e.g. 5m, 15m, 1h, 4h, 1d.
+const INTERVAL_UNIT_MIN: Record<string, number> = { m: 1, h: 60, d: 1440, w: 10080, M: 43200 }
+function intervalMinutes(s: string): number {
+  const m = /^(\d+)\s*([mhdwM])$/.exec(s.trim())
+  return m ? parseInt(m[1], 10) * (INTERVAL_UNIT_MIN[m[2]] ?? 1) : Number.MAX_SAFE_INTEGER
+}
 
 // ─── Inline calendar (mirrors the gorm New Simulation date-range design) ──────
 const YEARS = Array.from({ length: 13 }, (_, i) => 2019 + i)
@@ -147,6 +160,14 @@ function StepCircle({ n, active }: { n: number; active: boolean }) {
 
 const SELECT_CLASS = "h-9 w-72 px-3 rounded-md border border-input bg-background text-sm disabled:opacity-50"
 const FORM_KEY = "crypt:newSimForm"
+const DEFAULT_START = new Date(2025, 0, 1)   // 2025-01-01
+const DEFAULT_END = new Date(2025, 11, 31)   // 2025-12-31
+
+function clampDate(d: Date, lo?: Date, hi?: Date): Date {
+  if (lo && isBefore(d, lo)) return lo
+  if (hi && isAfter(d, hi)) return hi
+  return d
+}
 
 export default function NewSimulationPage() {
   const router = useRouter()
@@ -157,11 +178,11 @@ export default function NewSimulationPage() {
   const [coinId, setCoinId] = useState<string | null>(null)
   const [quoteAsset, setQuoteAsset] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<string | null>(null)
-  const [strategy, setStrategy] = useState<string>("price")
-  const [engine, setEngine] = useState<string>("")
-  const [forecastVol, setForecastVol] = useState(false)
-  const [startDate, setStartDate] = useState<Date | undefined>(undefined)
-  const [endDate, setEndDate] = useState<Date | undefined>(undefined)
+  const [strategyId, setStrategyId] = useState<string | null>(null)
+  // Worker is ephemeral (depends on live availability), so not persisted.
+  const [worker, setWorker] = useState<string | null>(null)
+  const [startDate, setStartDate] = useState<Date | undefined>(DEFAULT_START)
+  const [endDate, setEndDate] = useState<Date | undefined>(DEFAULT_END)
 
   // Persist the whole form so it survives a refresh or navigating away and back.
   const [loaded, setLoaded] = useState(false)
@@ -175,9 +196,7 @@ export default function NewSimulationPage() {
         if (s.coinId != null) setCoinId(s.coinId)
         if (s.quoteAsset != null) setQuoteAsset(s.quoteAsset)
         if (s.timeframe != null) setTimeframe(s.timeframe)
-        if (s.strategy != null) setStrategy(s.strategy)
-        if (s.engine != null) setEngine(s.engine)
-        if (s.forecastVol != null) setForecastVol(s.forecastVol)
+        if (s.strategyId != null) setStrategyId(s.strategyId)
         if (s.startDate) setStartDate(new Date(s.startDate))
         if (s.endDate) setEndDate(new Date(s.endDate))
       }
@@ -188,12 +207,12 @@ export default function NewSimulationPage() {
     if (!loaded) return
     try {
       localStorage.setItem(FORM_KEY, JSON.stringify({
-        name, description, coinId, quoteAsset, timeframe, strategy, engine, forecastVol,
+        name, description, coinId, quoteAsset, timeframe, strategyId,
         startDate: startDate ? startDate.toISOString() : null,
         endDate: endDate ? endDate.toISOString() : null,
       }))
     } catch { /* quota / unavailable — ignore */ }
-  }, [loaded, name, description, coinId, quoteAsset, timeframe, strategy, engine, forecastVol, startDate, endDate])
+  }, [loaded, name, description, coinId, quoteAsset, timeframe, strategyId, startDate, endDate])
 
   const { data: coins = [] } = useQuery({ queryKey: ["coins"], queryFn: () => coinsApi.list({ limit: 1000 }) })
   const { data: pairsResp } = useQuery({
@@ -207,8 +226,51 @@ export default function NewSimulationPage() {
     queryFn: () => klinesApi.getTimeframes(coinId!, quoteAsset!),
     enabled: !!coinId && !!quoteAsset,
   })
-  const timeframes = tfResp?.timeframes ?? []
-  const { data: engines = [] } = useQuery({ queryKey: ["predictionEngines"], queryFn: () => klinesApi.getEngines() })
+  const timeframes = [...(tfResp?.timeframes ?? [])].sort((a, b) => intervalMinutes(a) - intervalMinutes(b))
+  const { data: rangeResp } = useQuery({
+    queryKey: ["simFormRange", coinId, quoteAsset, timeframe],
+    queryFn: () => klinesApi.getDateRange(coinId!, quoteAsset!, timeframe!),
+    enabled: !!coinId && !!quoteAsset && !!timeframe,
+  })
+  const dataMin = rangeResp?.start_date ? parseISO(rangeResp.start_date) : undefined
+  const dataMax = rangeResp?.end_date ? parseISO(rangeResp.end_date) : undefined
+
+  // Once the data range loads, clamp the selected dates into [first, last] so the
+  // defaults (or a stale selection from another pair) stay valid.
+  useEffect(() => {
+    if (!rangeResp?.start_date || !rangeResp?.end_date) return
+    const lo = parseISO(rangeResp.start_date)
+    const hi = parseISO(rangeResp.end_date)
+    setStartDate((d) => (d ? clampDate(d, lo, hi) : d))
+    setEndDate((d) => (d ? clampDate(d, lo, hi) : d))
+  }, [rangeResp?.start_date, rangeResp?.end_date])
+  const { data: strategies = [] } = useQuery({ queryKey: ["klineStrategies"], queryFn: () => klineStrategiesApi.list() })
+  const selectedStrategy = strategies.find((s) => s.id === strategyId) ?? null
+  const { data: strategyParams = [] } = useQuery({
+    queryKey: ["klineStrategyParams", strategyId],
+    queryFn: () => klineStrategiesApi.listParameters(strategyId!),
+    enabled: !!strategyId,
+  })
+  const selectedParams = strategyParams.filter((p) => p.selected)
+
+  // Available workers (local + remote), filtered to those that support the
+  // strategy's forecast engine. A worker advertising no models accepts anything.
+  const { data: allWorkers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => tasksApi.listWorkers(),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  })
+  const neededSlug = selectedStrategy?.forecast_engine ?? null
+  const workers = allWorkers.filter((w) => {
+    if (w.models.length === 0) return true
+    if (!neededSlug) return true
+    return w.models.includes(neededSlug)
+  })
+  // Drop the selection if the chosen worker is no longer available/eligible.
+  useEffect(() => {
+    if (worker && !workers.some((w) => w.name === worker)) setWorker(null)
+  }, [worker, workers])
 
   const selectedCoin = coins.find((c) => c.id === coinId)
   const dayCount = startDate && endDate ? differenceInCalendarDays(endDate, startDate) + 1 : null
@@ -220,26 +282,32 @@ export default function NewSimulationPage() {
       interval: timeframe!,
       start_date: format(startDate!, "yyyy-MM-dd"),
       end_date: format(endDate!, "yyyy-MM-dd"),
-      models: [engine],
+      models: [selectedStrategy!.forecast_engine!],
       name: name.trim() || null,
       description: description.trim() || null,
-      strategy,
-      forecast_vol: forecastVol,
+      strategy: selectedStrategy!.simulation_strategy,
+      forecast_vol: selectedStrategy!.forecast_vol,
+      worker: worker || undefined,
+      config: {
+        strategy_id: selectedStrategy!.id,
+        strategy_name: selectedStrategy!.name,
+        parameters: Object.fromEntries(selectedParams.map((p) => [p.name, p.value])),
+      },
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
       // Keep the form persisted after a run so the user can return and tweak a
       // selection to launch a variation; "Clear" still wipes it explicitly.
       toast.success("Simulation queued")
-      router.push("/simulations")
+      router.push("/simulations/completed")
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to start simulation"),
   })
 
   function handleClear() {
     setName(""); setDescription(""); setCoinId(null); setQuoteAsset(null); setTimeframe(null)
-    setStrategy("price"); setEngine(""); setForecastVol(false)
-    setStartDate(undefined); setEndDate(undefined)
+    setStrategyId(null); setWorker(null)
+    setStartDate(DEFAULT_START); setEndDate(DEFAULT_END)
   }
 
   function handleStartSelect(d: Date) {
@@ -247,8 +315,8 @@ export default function NewSimulationPage() {
     if (endDate && isBefore(endDate, d)) setEndDate(undefined)
   }
 
-  const valid = coinId && quoteAsset && timeframe && engine && startDate && endDate
-    && !isAfter(startDate, endDate)
+  const valid = coinId && quoteAsset && timeframe && strategyId && selectedStrategy?.forecast_engine
+    && startDate && endDate && !isAfter(startDate, endDate)
 
   return (
     <div className="max-w-5xl px-6 py-6">
@@ -294,39 +362,64 @@ export default function NewSimulationPage() {
           </select>
         </div>
 
-        {/* Simulation Strategy */}
+        {/* Simulation Strategy (preset) */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-[var(--muted-foreground)]">Simulation Strategy</label>
-          <select value={strategy} onChange={(e) => setStrategy(e.target.value)} className={SELECT_CLASS}>
-            {STRATEGY_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          <select value={strategyId ?? ""} onChange={(e) => setStrategyId(e.target.value || null)} className={SELECT_CLASS}>
+            <option value="">{strategies.length === 0 ? "No strategies — create one first" : "Select strategy..."}</option>
+            {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          {strategy === "kline" && (
+          {selectedStrategy && (
             <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
-              Forecasts the chart&apos;s <em>shape</em>: each bar becomes 1 (close up vs the previous bar) or 0, giving a sequence like 0011010111… The model predicts whether the next symbol is a 1 or 0. Direction accuracy and the fee-aware backtest apply; price-error metrics (MAE/MAPE) don&apos;t.
+              {strategyLabel(selectedStrategy.simulation_strategy)} · engine:{" "}
+              {selectedStrategy.forecast_engine
+                ? <span className="font-mono">{selectedStrategy.forecast_engine}</span>
+                : <span className="text-amber-500">none set</span>}
+              {selectedStrategy.forecast_vol ? " · volatility forecast on" : ""}
+              {selectedParams.length ? ` · ${selectedParams.length} parameter${selectedParams.length === 1 ? "" : "s"}` : ""}
+            </p>
+          )}
+          {selectedStrategy && !selectedStrategy.forecast_engine && (
+            <p className="text-xs text-amber-500 max-w-2xl">
+              This strategy has no Forecast Engine set — choose one on the Strategies page before running.
             </p>
           )}
         </div>
 
-        {/* Forecast Engine */}
+        {/* Worker */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium text-[var(--muted-foreground)]">Forecast Engine</label>
-          <select value={engine} onChange={(e) => setEngine(e.target.value)} className={SELECT_CLASS}>
-            <option value="">{engines.length === 0 ? "Loading engines..." : "Select engine..."}</option>
-            {engines.map((eng) => <option key={eng.name} value={eng.name}>{eng.name}</option>)}
-          </select>
-        </div>
-
-        {/* Volatility forecast */}
-        <div className="flex flex-col gap-1.5">
-          <label className="flex items-start gap-2 cursor-pointer max-w-2xl">
-            <Checkbox checked={forecastVol} onCheckedChange={(c) => setForecastVol(!!c)} className="mt-0.5" />
-            <span className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium">Forecast volatility</span>
-              <span className="text-xs text-[var(--muted-foreground)]">
-                Also run a second one-step forecast of realized volatility (the bar&apos;s ln(high/low) range), so the Backtest tab&apos;s vol-targeting / vol-breakout strategies can use a genuine volatility forecast instead of the price band width. Roughly doubles run time.
-              </span>
-            </span>
-          </label>
+          <label className="text-xs font-medium text-[var(--muted-foreground)]">Worker</label>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex items-center justify-between h-9 w-72 px-3 rounded-md border border-input bg-background text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
+                <span className={cn((!worker || (!!neededSlug && workers.length === 0)) && "text-[var(--muted-foreground)]")}>
+                  {neededSlug && workers.length === 0 ? "No worker for chosen model" : (worker ?? "Any available worker")}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72">
+              <DropdownMenuItem onClick={() => setWorker(null)} className="flex items-center justify-between">
+                <span className="text-[var(--muted-foreground)]">Any available worker</span>
+                {worker === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+              </DropdownMenuItem>
+              {workers.map((w) => (
+                <DropdownMenuItem key={w.name} onClick={() => setWorker(w.name)} className="flex items-center justify-between">
+                  <span>{w.name}{w.gpu_name ? <span className="text-[var(--muted-foreground)] ml-1.5 font-mono text-xs">{w.gpu_name}</span> : null}</span>
+                  {worker === w.name && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {neededSlug && workers.length === 0 ? (
+            <p className="text-xs text-amber-500">
+              No worker for the chosen model (<span className="font-mono">{neededSlug}</span>) is online — it can’t run until a worker that supports it is started.
+            </p>
+          ) : workers.length === 0 ? (
+            <p className="text-xs text-[var(--muted-foreground)]">
+              No workers registered — the task will run on any available worker.
+            </p>
+          ) : null}
         </div>
 
         {/* Date Range timeline */}
@@ -345,7 +438,7 @@ export default function NewSimulationPage() {
                   </span>
                 </div>
                 <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
-                  <MiniCalendar selected={startDate} onSelect={handleStartSelect} maxDate={endDate} />
+                  <MiniCalendar selected={startDate} onSelect={handleStartSelect} minDate={dataMin} maxDate={endDate ?? dataMax} />
                 </div>
               </div>
               {/* End */}
@@ -358,7 +451,7 @@ export default function NewSimulationPage() {
                   </span>
                 </div>
                 <div className="w-full rounded-lg border border-[var(--border)] bg-[var(--card,var(--background))] p-4">
-                  <MiniCalendar selected={endDate} onSelect={setEndDate} minDate={startDate} disabled={!startDate} />
+                  <MiniCalendar selected={endDate} onSelect={setEndDate} minDate={startDate ?? dataMin} maxDate={dataMax} disabled={!startDate} />
                 </div>
               </div>
             </div>

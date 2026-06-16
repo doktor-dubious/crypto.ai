@@ -85,14 +85,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sqlalchemy import delete, select  # noqa: E402
 
-from gorm_ai.database.connection import async_session_factory  # noqa: E402
-from gorm_ai.database.models.configuration import Configuration  # noqa: E402
-from gorm_ai.database.models.customer import Customer  # noqa: E402
-from gorm_ai.database.models.finetune_progress import FinetuneProgress  # noqa: E402
-from gorm_ai.database.models.outlet import Outlet  # noqa: E402
-from gorm_ai.database.models.outlet_group import OutletGroupMember  # noqa: E402
-from gorm_ai.logging import configure_logging  # noqa: E402
-from gorm_ai.services.sales import SalesService  # noqa: E402
+from crypto_ai.database.connection import async_session_factory  # noqa: E402
+from crypto_ai.database.models.configuration import Configuration  # noqa: E402
+from crypto_ai.database.models.customer import Customer  # noqa: E402
+from crypto_ai.database.models.finetune_progress import FinetuneProgress  # noqa: E402
+from crypto_ai.database.models.outlet import Outlet  # noqa: E402
+from crypto_ai.database.models.outlet_group import OutletGroupMember  # noqa: E402
+from crypto_ai.logging import configure_logging  # noqa: E402
+from crypto_ai.services.sales import SalesService  # noqa: E402
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ async def _load_db_config(session) -> Configuration | None:
 
 async def _load_engine_config(session, engine_slug: str):
     """Load the prediction engine row by slug."""
-    from gorm_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
+    from crypto_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
     result = await session.execute(
         select(PredictionEngineModel).where(
             PredictionEngineModel.slug == engine_slug,
@@ -692,7 +692,7 @@ async def _main_async(args: argparse.Namespace) -> None:
         checkpoint = args.base_checkpoint
 
     # Set HF cache if configured
-    from gorm_ai.config import get_settings
+    from crypto_ai.config import get_settings
     s = get_settings()
     if s.hf_hub_cache:
         os.environ.setdefault("HF_HUB_CACHE", os.path.abspath(s.hf_hub_cache))

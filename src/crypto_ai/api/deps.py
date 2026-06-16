@@ -11,6 +11,7 @@ from crypto_ai.services.analysis import AnalysisService
 from crypto_ai.services.binance_import import BinanceImportService
 from crypto_ai.services.coin import CoinService
 from crypto_ai.services.kline import KlineService
+from crypto_ai.services.kline_strategy import KlineStrategyService
 from crypto_ai.services.kline_simulation_record import KlineSimulationRecordService
 from crypto_ai.services.cohort_audit import CohortAuditService
 from crypto_ai.services.configuration import ConfigurationService
@@ -78,6 +79,11 @@ def get_coin_service(session: DbSession) -> CoinService:
 def get_kline_service(session: DbSession) -> KlineService:
     """Get kline service."""
     return KlineService(session)
+
+
+def get_kline_strategy_service(session: DbSession) -> KlineStrategyService:
+    """Get kline strategy service."""
+    return KlineStrategyService(session)
 
 
 def get_kline_simulation_record_service(session: DbSession) -> KlineSimulationRecordService:
@@ -220,6 +226,7 @@ CustomerConfigurationServiceDep = Annotated[
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 CoinServiceDep = Annotated[CoinService, Depends(get_coin_service)]
 KlineServiceDep = Annotated[KlineService, Depends(get_kline_service)]
+KlineStrategyServiceDep = Annotated[KlineStrategyService, Depends(get_kline_strategy_service)]
 KlineSimulationRecordServiceDep = Annotated[
     KlineSimulationRecordService, Depends(get_kline_simulation_record_service)
 ]

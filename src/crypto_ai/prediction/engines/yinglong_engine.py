@@ -160,6 +160,9 @@ class YingLongEngine(PredictionEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_yinglong()
+
     def _check_yinglong(self) -> bool:
         global _YINGLONG_AVAILABLE
         if _YINGLONG_AVAILABLE is None:

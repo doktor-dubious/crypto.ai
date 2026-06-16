@@ -35,7 +35,7 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import {
-  predictionEnginesApi, finetuneApi,
+  predictionEnginesApi, finetuneApi, tasksApi,
   type PredictionEngineResponse, type PredictionEngineUpdate,
   type PredictionEngineParameterResponse,
 } from "@/lib/api"
@@ -155,6 +155,12 @@ export default function AIModelsPage() {
   const { data: models = [], isLoading } = useQuery({
     queryKey: ["prediction-engines"],
     queryFn: () => predictionEnginesApi.list(),
+  })
+  const { data: workers = [] } = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => tasksApi.listWorkers(),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   })
 
   const { data: parameters = [] } = useQuery({
@@ -518,6 +524,7 @@ export default function AIModelsPage() {
                   </TableHead>
                   <TableHead><SortHeader field="name" label={t("colName")} /></TableHead>
                   <TableHead><SortHeader field="description" label={t("colDescription")} /></TableHead>
+                  <TableHead>{t("colWorkers")}</TableHead>
                   <TableHead className="w-10 text-center">
                     <button
                       onClick={() => handleSort("starred")}
@@ -532,7 +539,9 @@ export default function AIModelsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageItems.map((model) => (
+                {pageItems.map((model) => {
+                  const modelWorkers = workers.filter((w) => w.models.length === 0 || w.models.includes(model.slug))
+                  return (
                   <TableRow
                     key={model.id}
                     data-state={selectedModel?.id === model.id ? "selected" : undefined}
@@ -552,6 +561,17 @@ export default function AIModelsPage() {
                     <TableCell className="text-muted-foreground text-xs max-w-[240px] truncate">
                       {model.description ?? "—"}
                     </TableCell>
+                    <TableCell className="text-xs">
+                      {modelWorkers.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {modelWorkers.map((w) => (
+                            <span key={w.name} className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium" title={w.models.length === 0 ? "Runs any model" : `Runs: ${w.models.join(", ")}`}>{w.name}</span>
+                          ))}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => handleStar(model.id)}
@@ -569,7 +589,8 @@ export default function AIModelsPage() {
                       </button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           )}

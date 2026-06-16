@@ -1,5 +1,5 @@
 [project]
-name = "gorm-ai"
+name = "crypto-ai"
 version = "0.1.0"
 description = "Time series prediction system with pluggable prediction engines"
 readme = "README.md"
@@ -117,7 +117,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gorm_ai"]
+packages = ["src/crypto_ai"]
 
 [tool.ruff]
 line-length = 100

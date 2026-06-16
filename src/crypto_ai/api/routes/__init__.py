@@ -22,6 +22,7 @@ from crypto_ai.api.routes import (
     import_templates,
     imports,
     kline_simulations,
+    kline_strategies,
     klines,
     llms,
     logs,
@@ -80,6 +81,7 @@ api_router.include_router(currencies.router, prefix="/currencies", tags=["curren
 api_router.include_router(coins.router, prefix="/coins", tags=["coins"])
 api_router.include_router(klines.router, prefix="/klines", tags=["klines"])
 api_router.include_router(kline_simulations.router, prefix="/kline-simulations", tags=["kline-simulations"])
+api_router.include_router(kline_strategies.router, prefix="/kline-strategies", tags=["kline-strategies"])
 api_router.include_router(binance_import.router, prefix="/binance-import", tags=["binance-import"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])

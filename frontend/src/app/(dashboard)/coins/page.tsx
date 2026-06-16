@@ -13,6 +13,8 @@ import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { Maximize } from "@/components/animate-ui/icons/maximize"
+import { Minimize } from "@/components/animate-ui/icons/minimize"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -40,7 +42,7 @@ import { KlineChart } from "@/components/coins/kline-chart"
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
-type SortField = "symbol" | "name" | "description" | "type" | "starred"
+type SortField = "symbol" | "name" | "tradingPairs" | "type" | "starred"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,6 +103,7 @@ export default function CoinsPage() {
   const [selectedCoinId, setSelectedCoinId] = useState<string | null>(() => loadJson<string | null>("selectedCoin", null))
   const [selectedCoin, setSelectedCoin] = useState<CoinResponse | null>(null)
   const [activeTab, setActiveTab] = useState(() => loadJson<string>("activeTab", "details"))
+  const [detailMaximized, setDetailMaximized] = useState(false)
   const tabsListRef = useRef<HTMLDivElement>(null)
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
   const [draft, setDraft] = useState<CoinUpdate>({})
@@ -134,6 +137,12 @@ export default function CoinsPage() {
       const response = await coinsApi.list({ limit: 1000 })
       return response
     },
+  })
+
+  // Number of distinct trading pairs (with loaded data) per coin, for the master table
+  const { data: pairCounts = {} } = useQuery({
+    queryKey: ["klinesPairCounts"],
+    queryFn: () => klinesApi.getPairCounts(),
   })
 
   // Fetch available trading pairs for selected coin
@@ -332,14 +341,14 @@ export default function CoinsPage() {
       switch (sortField) {
         case "symbol": va = a.symbol; vb = b.symbol; break
         case "name": va = a.name; vb = b.name; break
-        case "description": va = a.description ?? ""; vb = b.description ?? ""; break
+        case "tradingPairs": va = pairCounts[a.id] ?? 0; vb = pairCounts[b.id] ?? 0; break
         case "type": va = a.type ?? ""; vb = b.type ?? ""; break
         case "starred": va = starredIds.has(a.id) ? 1 : 0; vb = starredIds.has(b.id) ? 1 : 0; break
       }
       const cmp = va < vb ? -1 : va > vb ? 1 : 0
       return sortDir === "asc" ? cmp : -cmp
     })
-  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds])
+  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds, pairCounts])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
   const safePage = Math.min(currentPage, totalPages)
@@ -434,7 +443,7 @@ export default function CoinsPage() {
     <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Top: Master table ── */}
-      <div className="flex flex-col shrink-0">
+      <div className={cn("flex flex-col shrink-0", detailMaximized && selectedCoin && "hidden")}>
         {/* Toolbar */}
         <div className="flex items-center justify-end px-4 py-2 shrink-0 bg-background">
           <div className="relative">
@@ -496,7 +505,7 @@ export default function CoinsPage() {
                   </TableHead>
                   <TableHead><SortHeader field="symbol" label={t("colSymbol")} /></TableHead>
                   <TableHead><SortHeader field="name" label={t("colName")} /></TableHead>
-                  <TableHead><SortHeader field="description" label={t("colDescription")} /></TableHead>
+                  <TableHead><SortHeader field="tradingPairs" label={t("colTradingPairs")} /></TableHead>
                   <TableHead><SortHeader field="type" label={t("colType")} /></TableHead>
                   <TableHead className="w-10 text-center">
                     <button
@@ -532,8 +541,12 @@ export default function CoinsPage() {
                     <TableCell className="font-medium max-w-[180px] truncate">
                       {coin.name}
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs max-w-[240px] truncate">
-                      {coin.description ?? "—"}
+                    <TableCell className="text-sm tabular-nums">
+                      {pairCounts[coin.id] ? (
+                        pairCounts[coin.id]
+                      ) : (
+                        <span className="text-muted-foreground">0</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs max-w-[120px] truncate">
                       {coin.type ?? "—"}
@@ -642,7 +655,7 @@ export default function CoinsPage() {
       {/* ── Bottom: Detail pane ── */}
       {selectedCoin && (
         <>
-          <hr className="my-8" />
+          <hr className={cn("my-8", detailMaximized && "hidden")} />
 
           <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
             {/* Tabs */}
@@ -658,6 +671,14 @@ export default function CoinsPage() {
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="chart">Chart</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="analyze">Analyze</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="actions">{t("tabActions")}</TabsTrigger>
+                  <div
+                    className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => setDetailMaximized((v) => !v)}
+                    aria-label={detailMaximized ? "Normalize" : "Maximize"}
+                    title={detailMaximized ? "Normalize" : "Maximize"}
+                  >
+                    {detailMaximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
+                  </div>
                 </TabsList>
 
                 <div

@@ -64,4 +64,4 @@ RUN chown -R appuser:appuser /app
 
 USER appuser
 
-CMD ["python", "-m", "gorm_ai.tasks.worker_entrypoint"]
+CMD ["python", "-m", "crypto_ai.tasks.worker_entrypoint"]

@@ -2098,6 +2098,10 @@ class PredictionService:
         """Get list of available prediction engines."""
         return self.engine_registry.get_available_engines()
 
+    def get_engine_availability(self) -> dict[str, bool]:
+        """Map each engine slug → whether its backing library is installed here."""
+        return self.engine_registry.engine_availability()
+
     async def pad_effect(
         self,
         customer_id: str,

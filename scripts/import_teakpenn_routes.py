@@ -22,10 +22,10 @@ from collections import Counter, defaultdict
 
 from sqlalchemy import select
 
-from gorm_ai.database.connection import async_session_factory
-from gorm_ai.database.models.customer import Customer
-from gorm_ai.database.models.outlet import Outlet
-from gorm_ai.database.models.outlet_info import OutletInfo
+from crypto_ai.database.connection import async_session_factory
+from crypto_ai.database.models.customer import Customer
+from crypto_ai.database.models.outlet import Outlet
+from crypto_ai.database.models.outlet_info import OutletInfo
 
 CUSTOMERS: list[tuple[str, str]] = [
     ("10ff7211-d806-4fb0-8f13-35103d401d4d", "Teak Penn (INC)"),

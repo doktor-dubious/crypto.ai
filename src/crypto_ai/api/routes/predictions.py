@@ -280,6 +280,12 @@ async def list_engines(
     return service.get_available_engines()
 
 
+@router.get("/engines/availability")
+async def engine_availability(service: PredictionServiceDep) -> dict[str, bool]:
+    """Map each engine slug → whether its backing library is installed on this server."""
+    return service.get_engine_availability()
+
+
 @router.get("/pad-effect", response_model=PadEffectResponse)
 async def get_pad_effect(
     customer_id: str,

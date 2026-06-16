@@ -127,6 +127,9 @@ class Moirai2Engine(PredictionEngine):
         if "batch_size" in params:
             self._batch_size = int(params["batch_size"])
 
+    def is_available(self) -> bool:
+        return self._check_uni2ts()
+
     def _check_uni2ts(self) -> bool:
         global _UNI2TS_AVAILABLE
         if _UNI2TS_AVAILABLE is None:

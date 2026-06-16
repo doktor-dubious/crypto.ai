@@ -379,6 +379,8 @@ export interface PredictionEngineParameterCreate {
 export const predictionEnginesApi = {
   list: () => apiFetch<PredictionEngineResponse[]>("/prediction-engines"),
 
+  availability: () => apiFetch<Record<string, boolean>>("/predictions/engines/availability"),
+
   create: (data: PredictionEngineCreate) =>
     apiFetch<PredictionEngineResponse>("/prediction-engines", {
       method: "POST",
@@ -3460,8 +3462,16 @@ export const klinesApi = {
   getTradingPairs: (coinId: string) =>
     apiFetch<{ pairs: string[] }>(`/klines/pairs/${coinId}`),
 
+  getPairCounts: () =>
+    apiFetch<Record<string, number>>("/klines/pair-counts"),
+
   getTimeframes: (coinId: string, quoteAsset: string) =>
     apiFetch<{ timeframes: string[] }>(`/klines/timeframes/${coinId}/${quoteAsset}`),
+
+  getDateRange: (coinId: string, quoteAsset: string, interval: string) =>
+    apiFetch<{ start_date: string | null; end_date: string | null }>(
+      `/klines/range/${coinId}/${quoteAsset}/${interval}`,
+    ),
 
   deleteAll: (coinId: string, quoteAsset: string, interval: string) =>
     apiFetch<{ deleted_count: number }>(`/klines?coin_id=${coinId}&quote_asset=${quoteAsset}&interval=${interval}`, { method: "DELETE" }),
@@ -3573,6 +3583,7 @@ export const klineSimulationsApi = {
     strategy?: string
     config?: Record<string, unknown> | null
     forecast_vol?: boolean
+    worker?: string | null
   }) => apiFetch<KlineSimulationResponse>(`/kline-simulations`, { method: "POST", body: JSON.stringify(data) }),
   update: (id: string, data: { starred?: boolean }) =>
     apiFetch<KlineSimulationResponse>(`/kline-simulations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
@@ -3600,15 +3611,103 @@ export const klineSimulationsApi = {
       `/kline-simulations/${id}/predictions?${qs}`,
     )
   },
-  backtest: (id: string, params: { model?: string; threshold?: number; fee_bps?: number; min_edge_pct?: number; vol_mode?: string }) => {
+  backtest: (id: string, params: { model?: string; threshold?: number; fee_bps?: number; min_edge_pct?: number; vol_mode?: string; cover_fees?: boolean; position_sizing?: string; pyramid_steps?: number; allow_short?: boolean }) => {
     const qs = new URLSearchParams()
     if (params.model) qs.set("model", params.model)
     qs.set("threshold", String(params.threshold ?? 0.6))
     qs.set("fee_bps", String(params.fee_bps ?? 15))
     qs.set("min_edge_pct", String(params.min_edge_pct ?? 0))
     if (params.vol_mode) qs.set("vol_mode", params.vol_mode)
+    if (params.cover_fees) qs.set("cover_fees", "true")
+    if (params.position_sizing && params.position_sizing !== "none") qs.set("position_sizing", params.position_sizing)
+    if (params.position_sizing === "pyramiding" && params.pyramid_steps) qs.set("pyramid_steps", String(params.pyramid_steps))
+    if (params.allow_short) qs.set("allow_short", "true")
     return apiFetch<BacktestResponse>(`/kline-simulations/${id}/backtest?${qs}`)
   },
+}
+
+// ─── Kline Strategies (crypto-simulation presets) ────────────────────────────
+
+export interface KlineStrategyResponse {
+  id: string
+  name: string
+  description: string | null
+  simulation_strategy: string
+  finetuned_model: string | null
+  forecast_engine: string | null
+  forecast_vol: boolean
+  starred: boolean
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface KlineStrategyUpdate {
+  name?: string
+  description?: string | null
+  simulation_strategy?: string
+  finetuned_model?: string | null
+  forecast_engine?: string | null
+  forecast_vol?: boolean
+  starred?: boolean
+}
+
+export interface KlineStrategyParameterResponse {
+  id: string
+  strategy_id: string
+  name: string
+  value: string
+  description: string | null
+  selected: boolean
+  created_at: string
+  updated_at: string
+}
+
+export const klineStrategiesApi = {
+  list: () => apiFetch<KlineStrategyResponse[]>("/kline-strategies?limit=1000"),
+
+  get: (id: string) => apiFetch<KlineStrategyResponse>(`/kline-strategies/${id}`),
+
+  create: (data: Partial<KlineStrategyUpdate> & { name: string }) =>
+    apiFetch<KlineStrategyResponse>("/kline-strategies", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, data: KlineStrategyUpdate) =>
+    apiFetch<KlineStrategyResponse>(`/kline-strategies/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    apiFetch<{ success: boolean }>(`/kline-strategies/${id}`, { method: "DELETE" }),
+
+  listParameters: (id: string) =>
+    apiFetch<KlineStrategyParameterResponse[]>(`/kline-strategies/${id}/parameters`),
+
+  addParameter: (id: string, data: { name: string; value: string; description?: string | null }) =>
+    apiFetch<KlineStrategyParameterResponse>(`/kline-strategies/${id}/parameters`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateParameter: (id: string, paramId: string, data: { selected?: boolean; name?: string; value?: string; description?: string | null }) =>
+    apiFetch<KlineStrategyParameterResponse>(`/kline-strategies/${id}/parameters/${paramId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  deleteParameter: (id: string, paramId: string) =>
+    apiFetch<{ success: boolean }>(`/kline-strategies/${id}/parameters/${paramId}`, {
+      method: "DELETE",
+    }),
+
+  copyEngineParameters: (id: string, engineSlug: string) =>
+    apiFetch<KlineStrategyParameterResponse[]>(
+      `/kline-strategies/${id}/copy-engine-parameters?engine_slug=${encodeURIComponent(engineSlug)}`,
+      { method: "POST" },
+    ),
 }
 
 export interface KlineSimulationPredictionResponse {
@@ -3632,13 +3731,20 @@ export interface BacktestResponse {
   strategy?: string
   vol_mode?: string | null
   vol_source?: string | null
+  position_sizing?: string
+  pyramid_steps?: number
   threshold: number
   fee_bps: number
   min_edge_pct: number
+  cover_fees?: boolean
+  allow_short?: boolean
+  effective_min_edge_pct?: number
   periods_per_year: number
   n_bars: number
   n_trades: number
+  n_fills?: number
   long_bars: number
+  short_bars?: number
   exposure_pct: number
   win_rate_pct: number
   total_return_pct: number
@@ -3647,4 +3753,5 @@ export interface BacktestResponse {
   sharpe: number
   max_drawdown_pct: number
   equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
+  trade_markers: { timestamp: string; ret: number; side?: string }[]
 }

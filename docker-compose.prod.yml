@@ -5,17 +5,17 @@
 ##   docker build --network=host -f frontend/Dockerfile --target runner \
 ##     --build-arg NEXT_PUBLIC_APP_URL=https://gorm.predictioninstitute.com \
 ##     --build-arg BETTER_AUTH_URL=https://gorm.predictioninstitute.com \
-##     -t gormai-frontend-prod frontend/
+##     -t cryptoai-frontend-prod frontend/
 ##   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d frontend-prod
 
 services:
   frontend-prod:
-    image: gormai-frontend-prod:latest
+    image: cryptoai-frontend-prod:latest
     ports:
       - "3010:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://gorm:gorm@db:5432/gorm_ai
+      - DATABASE_URL=postgresql://gorm:gorm@db:5432/crypto_ai
       - BACKEND_INTERNAL_URL=http://app:8000
       - NEXT_PUBLIC_APP_URL=https://gorm.predictioninstitute.com
       - BETTER_AUTH_URL=https://gorm.predictioninstitute.com

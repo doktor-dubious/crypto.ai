@@ -12,6 +12,7 @@ from crypto_ai.schemas.task import CeleryWorkerTask
 
 # Lazy import to avoid circular dependencies
 _Simulation = None
+_KlineSimulation = None
 
 
 def _get_simulation_model():
@@ -20,6 +21,14 @@ def _get_simulation_model():
         from crypto_ai.database.models.simulation import Simulation
         _Simulation = Simulation
     return _Simulation
+
+
+def _get_kline_simulation_model():
+    global _KlineSimulation
+    if _KlineSimulation is None:
+        from crypto_ai.database.models.kline_simulation import KlineSimulation
+        _KlineSimulation = KlineSimulation
+    return _KlineSimulation
 
 
 def _restart_worker_container() -> None:
@@ -286,6 +295,23 @@ class TaskService:
                 sim_model.ended_at.is_(None),
             )
             .values(ended_at=now)
+        )
+
+        # Close kline simulations (walk-forward backtests). These have their own
+        # status/error/finished_at fields and are still shown as "Running" while
+        # status is 'pending' or 'started', so reset any orphaned ones to failure.
+        kline_sim_model = _get_kline_simulation_model()
+        await self.session.execute(
+            update(kline_sim_model)
+            .where(
+                kline_sim_model.task_id.in_(celery_task_ids),
+                kline_sim_model.status.in_(("pending", "started")),
+            )
+            .values(
+                status="failure",
+                error="Worker terminated before completion (e.g. out of memory)",
+                finished_at=now,
+            )
         )
 
         # Close finetunes

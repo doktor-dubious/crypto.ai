@@ -15,7 +15,7 @@ horizon = 7
 # --- Test 1: no covariates ---
 print("=== Test 1: no covariates ===")
 try:
-    from gorm_ai.prediction.engines.autogluon_engine import AutoGluonEngine
+    from crypto_ai.prediction.engines.autogluon_engine import AutoGluonEngine
     engine = AutoGluonEngine()
     items = [{"historical_data": hist_data, "covariates": None, "pad_dates": None}]
     result = engine._run_autogluon_batch(items, horizon, prediction_from, 0.25, 7)

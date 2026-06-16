@@ -33,7 +33,7 @@ sleep 1
 
 # Make sure redis is running on the main host before we try to forward to it
 ssh -o StrictHostKeyChecking=accept-new "$REMOTE_HOST" \
-    "cd ~/workspace/projects/gorm.ai && docker compose up -d redis"
+    "cd ~/workspace/projects/crypto.ai && docker compose up -d redis"
 
 LOG_DIR="${HOME}/.gorm-tunnel"
 mkdir -p "$LOG_DIR"

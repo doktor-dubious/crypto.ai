@@ -279,7 +279,7 @@ async def start_finetune(
     # Pre-flight capacity check — only meaningful when running locally.
     # When the user targets a specific remote worker queue (e.g. "Vast TimesFM"),
     # the API server's local RAM/GPU is irrelevant; the check would falsely
-    # reject GPU jobs because gormai-app-1 has no GPU.
+    # reject GPU jobs because cryptoai-app-1 has no GPU.
     if not data.worker:
         try:
             from crypto_ai.services.resource_estimator import check_capacity, estimate_task

@@ -15,9 +15,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.runpod
-    command: python -m gorm_ai.tasks.worker_entrypoint
+    command: python -m crypto_ai.tasks.worker_entrypoint
     environment:
-      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/gorm_ai
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/crypto_ai
       - REDIS_URL=redis://host.docker.internal:6379/0
       - CELERY_BROKER_URL=redis://host.docker.internal:6379/1
       - CELERY_RESULT_BACKEND=redis://host.docker.internal:6379/2
@@ -51,10 +51,10 @@ services:
     entrypoint: ["python", "scripts/finetune_timesfm.py"]
     command: ["--output", "/models/timesfm_finetuned"]
     environment:
-      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/gorm_ai
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@host.docker.internal:5432/crypto_ai
       - FINETUNED_MODEL_PATH=/models/timesfm_finetuned
       - HF_HUB_CACHE=/models/hf_cache
-      - SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/timesfm_finetuned/
+      - SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/crypto.ai/models/timesfm_finetuned/
       - SYNC_EVERY=5
     volumes:
       - ./src:/app/src

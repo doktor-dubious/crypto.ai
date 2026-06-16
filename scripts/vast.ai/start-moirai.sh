@@ -4,18 +4,18 @@ set -euo pipefail
 # Self-healing autossh tunnel to the main gorm host (forwards 5432 + 6379)
 source "$(dirname "$0")/_tunnel.sh"
 
-export DATABASE_URL=postgresql+asyncpg://gorm:gorm@localhost:5432/gorm_ai
+export DATABASE_URL=postgresql+asyncpg://gorm:gorm@localhost:5432/crypto_ai
 export CELERY_BROKER_URL=redis://localhost:6379/1
 export CELERY_RESULT_BACKEND=redis://localhost:6379/2
 export REDIS_URL=redis://localhost:6379/0
 export WORKER_NAME="Vast Moirai"
 export WORKER_MODELS=moirai2
-export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/gorm.ai/models/finetune/moirai/
+export SYNC_TARGET=rune@gorm.predictioninstitute.com:/home/rune/workspace/projects/crypto.ai/models/finetune/moirai/
 export SYNC_EVERY=10
 export HF_HUB_CACHE=/workspace/models/huggingface
 export FINETUNED_MODEL_PATH=/models/finetune/moirai
 
-cd /workspace/gormai
+cd /workspace/crypto.ai
 git pull
 export PATH="$HOME/.local/bin:$PATH"; command -v uv &>/dev/null || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 uv sync --extra moirai
@@ -36,4 +36,4 @@ if ! .venv/bin/python -c "import torch; assert 'sm_120' in str(torch.cuda.get_ar
 fi
 .venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, archs: {torch.cuda.get_arch_list()}')"
 
-PYTHONPATH=src .venv/bin/python -m gorm_ai.tasks.worker_entrypoint
+PYTHONPATH=src .venv/bin/python -m crypto_ai.tasks.worker_entrypoint

@@ -57,6 +57,8 @@ def _prob_up_from_quantiles(prev_close: float | None, quantiles: list[float] | N
     return max(0.0, min(1.0, 1.0 - cdf))
 
 from crypto_ai.database.models.kline import Kline
+from crypto_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
+from crypto_ai.database.models.prediction_engine_parameter import PredictionEngineParameter
 from crypto_ai.schemas.kline import KlineResponse
 from crypto_ai.prediction.registry import EngineRegistry
 from crypto_ai.schemas.prediction import PredictionEngine as PredictionEngineEnum
@@ -84,6 +86,7 @@ class KlineSimulationService:
         include_full_predictions: bool = False,
         forecast_vol: bool = False,
         strategy: str = "price",
+        parameters: dict | None = None,
     ) -> dict:
         """Run simulation of AI models on kline data.
 
@@ -99,6 +102,19 @@ class KlineSimulationService:
             Dictionary with simulation results for each model
         """
         start_time = time.time()
+
+        # Fail fast if any requested engine isn't installed on this server. We
+        # refuse to run rather than let an engine silently fall back to the
+        # statistical engine (which produces no quantiles, breaking the backtest).
+        for model_name in model_names:
+            engine_enum = self._get_engine_enum(model_name)
+            if not engine_enum:
+                raise ValueError(f"Unknown model: {model_name}")
+            if not self.engine_registry.get_engine(engine_enum).is_available():
+                raise ValueError(
+                    f"Engine '{model_name}' is not installed on this server, so the "
+                    "simulation was not run. Pick a model that's installed."
+                )
 
         # Fetch kline data for the date range
         # Convert dates to datetime at start and end of day in UTC
@@ -176,12 +192,18 @@ class KlineSimulationService:
                     pct = min(99, int((base + done) / total_work * 100))
                     await on_progress(pct, f"{mname}: {done}/{total} forecasts")
 
+            # Effective params: the engine's own selected catalog params form the
+            # base; the strategy's params (passed in) override on name conflicts.
+            engine_params = await self._engine_catalog_params(model_name)
+            effective_params = {**engine_params, **(parameters or {})}
+
             try:
                 if strategy == "kline":
                     model_result = await self._run_kline_strategy(
                         model_name, klines, sim_start_idx,
                         on_progress=_model_cb, should_stop=should_stop,
                         include_full_predictions=include_full_predictions,
+                        parameters=effective_params,
                     )
                 else:
                     model_result = await self._run_model_simulation(
@@ -189,6 +211,7 @@ class KlineSimulationService:
                         on_progress=_model_cb, should_stop=should_stop,
                         include_full_predictions=include_full_predictions,
                         forecast_vol=vol_on,
+                        parameters=effective_params,
                     )
                 results["models"][model_name] = model_result
             except VolForecastError:
@@ -204,6 +227,24 @@ class KlineSimulationService:
                 results["stopped"] = True
                 break
 
+        # If every requested model failed (and the run wasn't gracefully
+        # stopped mid-way), surface it as a failed run rather than a "success"
+        # whose per-model errors are buried in the analysis tab. The task layer
+        # maps this exception to status="failure" with the message on the
+        # top-level error column, which is what the Error tab reads.
+        if not results.get("stopped"):
+            model_results = results["models"]
+            errored = {
+                name: r["error"]
+                for name, r in model_results.items()
+                if isinstance(r, dict) and r.get("error")
+            }
+            if model_results and len(errored) == len(model_results):
+                if len(errored) == 1:
+                    raise RuntimeError(next(iter(errored.values())))
+                joined = "; ".join(f"{name}: {err}" for name, err in errored.items())
+                raise RuntimeError(f"All models failed — {joined}")
+
         total_time = time.time() - start_time
         model_time = total_time - fetch_time
         results["timing"]["model_analysis_sec"] = round(model_time, 3)
@@ -212,6 +253,34 @@ class KlineSimulationService:
         log.info(f"Simulation completed in {total_time:.2f}s (fetch: {fetch_time:.2f}s, models: {model_time:.2f}s)")
 
         return results
+
+    async def _engine_catalog_params(self, model_name: str) -> dict[str, str]:
+        """The engine's own selected catalog parameters (name→value), keyed by slug.
+
+        These are the defaults set on the model itself (the ai-models page); a
+        strategy's parameters override them at run time.
+        """
+        engine = (
+            await self.session.execute(
+                select(PredictionEngineModel).where(
+                    PredictionEngineModel.slug == model_name,
+                    PredictionEngineModel.active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if not engine:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(PredictionEngineParameter).where(
+                    PredictionEngineParameter.prediction_engine_id == engine.id,
+                    PredictionEngineParameter.prediction_strategy_id.is_(None),
+                    PredictionEngineParameter.active.is_(True),
+                    PredictionEngineParameter.selected.is_(True),
+                )
+            )
+        ).scalars().all()
+        return {p.name: p.value for p in rows}
 
     async def _run_model_simulation(
         self,
@@ -222,6 +291,7 @@ class KlineSimulationService:
         should_stop: StopCb | None = None,
         include_full_predictions: bool = False,
         forecast_vol: bool = False,
+        parameters: dict | None = None,
     ) -> dict:
         """Walk-forward one-step-ahead backtest for a single model.
 
@@ -239,6 +309,12 @@ class KlineSimulationService:
                 engine = self.engine_registry.get_engine(engine_enum)
             except ValueError as e:
                 return {"error": f"Model {model_name} not available: {str(e)}"}
+
+            if parameters:
+                try:
+                    engine.apply_parameters({str(k): str(v) for k, v in parameters.items()})
+                except Exception as e:
+                    log.warning(f"apply_parameters failed for {model_name}: {e}")
 
             capabilities = engine.get_capabilities()
             ctx_len = capabilities.max_history_length or 1024
@@ -278,7 +354,18 @@ class KlineSimulationService:
                     {"date": base_date + timedelta(days=j), "value": v}
                     for j, v in enumerate(ctx)
                 ]
-                items.append({"historical_data": hist, "covariates": None, "pad_dates": None})
+                # Crypto klines carry no covariates and the synthetic daily index
+                # has no real weekday seasonality. covariate_handling="none"
+                # disables the engines' residual-Ridge adjustment, which at
+                # horizon=1 fits on a single residual point and collapses the
+                # point forecast onto the last close (predicted == prev_close,
+                # so predicted direction is always 0).
+                items.append({
+                    "historical_data": hist,
+                    "covariates": None,
+                    "pad_dates": None,
+                    "covariate_handling": "none",
+                })
                 usable_idx.append(gi)
 
             if not items:
@@ -421,6 +508,7 @@ class KlineSimulationService:
         on_progress: Callable[[int, int], Awaitable[None]] | None = None,
         should_stop: StopCb | None = None,
         include_full_predictions: bool = False,
+        parameters: dict | None = None,
     ) -> dict:
         """Forecast the bar's SHAPE, not its price.
 
@@ -440,6 +528,12 @@ class KlineSimulationService:
                 engine = self.engine_registry.get_engine(engine_enum)
             except ValueError as e:
                 return {"error": f"Model {model_name} not available: {str(e)}"}
+
+            if parameters:
+                try:
+                    engine.apply_parameters({str(k): str(v) for k, v in parameters.items()})
+                except Exception as e:
+                    log.warning(f"apply_parameters failed for {model_name}: {e}")
 
             capabilities = engine.get_capabilities()
             ctx_len = capabilities.max_history_length or 1024
@@ -561,7 +655,14 @@ class KlineSimulationService:
                 {"date": base_date + timedelta(days=j), "value": v}
                 for j, v in enumerate(ctx)
             ]
-            items.append({"historical_data": hist, "covariates": None, "pad_dates": None})
+            # See _run_model_simulation: disable the residual-Ridge covariate
+            # adjustment, which at horizon=1 pins the forecast to the last value.
+            items.append({
+                "historical_data": hist,
+                "covariates": None,
+                "pad_dates": None,
+                "covariate_handling": "none",
+            })
 
         preds: list[float] = []
         for c in range(0, len(items), _CHUNK):

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import and_, desc, distinct, select
+from sqlalchemy import and_, desc, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crypto_ai.database.models.kline import Kline
@@ -149,6 +149,31 @@ class KlineService:
         )
         result = await self.session.execute(stmt)
         return sorted(result.scalars().all())
+
+    async def get_pair_counts_by_coin(self) -> dict[str, int]:
+        """Number of distinct trading pairs (quote assets) with loaded data, per coin id."""
+        stmt = (
+            select(Kline.coin_id, func.count(distinct(Kline.quote_asset)))
+            .where(Kline.active == True)
+            .group_by(Kline.coin_id)
+        )
+        result = await self.session.execute(stmt)
+        return {str(coin_id): count for coin_id, count in result.all()}
+
+    async def get_date_range(
+        self, coin_id: str, quote_asset: str, interval: str
+    ) -> tuple[datetime | None, datetime | None]:
+        """Earliest and latest open_time for a coin/pair/timeframe (None if no data)."""
+        stmt = select(func.min(Kline.open_time), func.max(Kline.open_time)).where(
+            and_(
+                Kline.coin_id == coin_id,
+                Kline.quote_asset == quote_asset,
+                Kline.interval == interval,
+                Kline.active == True,  # noqa: E712
+            )
+        )
+        lo, hi = (await self.session.execute(stmt)).one()
+        return lo, hi
 
     async def get_intervals_by_coin_and_quote(self, coin_id: str, quote_asset: str) -> list[str]:
         """Get all unique intervals for a trading pair."""

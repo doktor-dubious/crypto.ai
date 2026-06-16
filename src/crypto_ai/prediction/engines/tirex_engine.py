@@ -137,6 +137,9 @@ class TiRexEngine(PredictionEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_tirex()
+
     def _check_tirex(self) -> bool:
         global _TIREX_AVAILABLE
         if _TIREX_AVAILABLE is None:

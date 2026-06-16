@@ -11,8 +11,8 @@ import "./globals.css"
 
 export const metadata: Metadata = {
   title: {
-    default: "Gorm AI",
-    template: "%s | Gorm AI",
+    default: "CRYPT AI",
+    template: "%s | CRYPT AI",
   },
   description: "Time series prediction system",
 }

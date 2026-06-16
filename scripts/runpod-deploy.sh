@@ -13,7 +13,7 @@
 #
 # Usage:
 #   # First time: clone the repo to persistent storage
-#   cd /workspace && git clone <your-repo-url> gorm.ai && cd gorm.ai
+#   cd /workspace && git clone <your-repo-url> crypto.ai && cd crypto.ai
 #
 #   # Set your production server details
 #   export PROD_HOST=your-server.example.com

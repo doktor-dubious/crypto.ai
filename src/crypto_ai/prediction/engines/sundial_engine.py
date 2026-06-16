@@ -147,6 +147,9 @@ class SundialEngine(PredictionEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_sundial()
+
     def _check_sundial(self) -> bool:
         global _SUNDIAL_AVAILABLE
         if _SUNDIAL_AVAILABLE is None:
@@ -238,6 +241,7 @@ class SundialEngine(PredictionEngine):
             self._model.to(device)
             self._model.eval()
             self._device = device
+            self._torch_dtype = dtype_map[self._precision]
             logger.info("Sundial model loaded: %s (%s, device: %s)", self._model_id, self._precision, device)
         except Exception as e:
             logger.warning("Failed to load Sundial model, falling back to statistical: %s", e)
@@ -462,8 +466,12 @@ class SundialEngine(PredictionEngine):
             if len(v) < max_len:
                 v = np.concatenate([np.zeros(max_len - len(v)), v])
             contexts.append(v)
+        # Match the input dtype to the model's weights (e.g. bfloat16/float16),
+        # otherwise the forward pass fails with "mat1 and mat2 must have the
+        # same dtype". Falls back to float32 if the dtype wasn't recorded.
         context_tensor = torch.tensor(
-            np.stack(contexts), dtype=torch.float32
+            np.stack(contexts),
+            dtype=getattr(self, "_torch_dtype", torch.float32),
         ).to(self._device)  # (batch_size, max_len)
 
         # Call forward() directly — max_output_length is in time steps.

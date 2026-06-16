@@ -13,7 +13,7 @@ Crypto AI is a set of functionality that works with crypto currency
 
 ## Project Structure
 ```
-src/gorm_ai/
+src/crypto_ai/
 ├── main.py              # FastAPI app entrypoint
 ├── config.py            # Settings via pydantic-settings
 ├── database/
@@ -47,10 +47,10 @@ ruff check src/
 pytest tests/ -v
 
 # Start development server
-uvicorn gorm_ai.main:app --reload
+uvicorn crypto_ai.main:app --reload
 
 # Start Celery worker
-celery -A gorm_ai.tasks.celery_app worker --loglevel=info
+celery -A crypto_ai.tasks.celery_app worker --loglevel=info
 
 # Run database migrations
 alembic upgrade head

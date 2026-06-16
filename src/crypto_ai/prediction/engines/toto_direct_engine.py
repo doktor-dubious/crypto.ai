@@ -99,6 +99,9 @@ class TotoDirectEngine(ChronosPipelineEngine):
 
     # -- model loading -------------------------------------------------------
 
+    def is_available(self) -> bool:
+        return self._check_toto()
+
     def _check_toto(self) -> bool:
         global _TOTO_AVAILABLE
         if _TOTO_AVAILABLE is None:

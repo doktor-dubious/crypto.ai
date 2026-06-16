@@ -14,6 +14,7 @@ import {
   List,
   LogOut,
   Plus,
+  SlidersHorizontal,
   Settings,
   ShoppingCart,
   Sliders,
@@ -92,7 +93,8 @@ const COINS_SUBNAV_ITEMS = [
 
 const SIMULATIONS_SUBNAV_ITEMS = [
   { href: "/simulations/new", icon: Plus, labelKey: "simulationsNew" },
-  { href: "/simulations", icon: LineChart, labelKey: "simulationsList" },
+  { href: "/simulations/strategies", icon: SlidersHorizontal, labelKey: "simulationsStrategies" },
+  { href: "/simulations/completed", icon: LineChart, labelKey: "simulationsCompleted" },
 ] as const
 
 const STATISTICS_SUBNAV_ITEMS = [
