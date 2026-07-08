@@ -13,7 +13,7 @@ import structlog
 from fastapi import HTTPException
 
 from crypto_ai.database.connection import task_session
-from crypto_ai.services.kline_simulation import KlineSimulationService
+from crypto_ai.services.kline_simulation import KlineSimulationService, ModelDegradedError
 from crypto_ai.services.kline_simulation_record import KlineSimulationRecordService
 from crypto_ai.services.task import TaskService
 from crypto_ai.tasks.celery_app import celery_app
@@ -117,6 +117,11 @@ async def _run_kline_simulation_async(
                 forecast_vol=bool(request_data.get("forecast_vol")),
                 strategy=request_data.get("strategy", "price"),
                 parameters=request_data.get("parameters") or None,
+                horizon=int(request_data.get("horizon") or 1),
+                # use_covariates is the pre-mode boolean form, still possible on
+                # tasks enqueued before the covariate_mode rollout.
+                covariate_mode=request_data.get("covariate_mode")
+                or ("native" if request_data.get("use_covariates") else "off"),
             )
 
         # Persist the full per-timestamp forecasts to their own table, then strip
@@ -152,6 +157,18 @@ async def _run_kline_simulation_async(
             finished=True,
         )
         return result
+    except ModelDegradedError as e:
+        # The requested model couldn't load and the engine fell back. Mark the
+        # simulation "degraded" (distinct from a hard crash) so the master table
+        # flags it instead of showing a green "Completed".
+        log.warning(f"Kline simulation degraded: {e}")
+        async with task_session() as session:
+            await TaskService(session).update_status(
+                task_id, "failure", completed_at=datetime.now(UTC), error=str(e)
+            )
+            await session.commit()
+        await _mark_record("degraded", error=str(e), finished=True)
+        raise
     except Exception as e:
         log.error(f"Kline simulation task failed: {e}", exc_info=True)
         async with task_session() as session:

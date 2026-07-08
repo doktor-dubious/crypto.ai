@@ -12,6 +12,8 @@ from crypto_ai.services.binance_import import BinanceImportService
 from crypto_ai.services.coin import CoinService
 from crypto_ai.services.kline import KlineService
 from crypto_ai.services.kline_strategy import KlineStrategyService
+from crypto_ai.services.paper_trade import PaperTradeService
+from crypto_ai.services.strategy_template import StrategyTemplateService
 from crypto_ai.services.kline_simulation_record import KlineSimulationRecordService
 from crypto_ai.services.cohort_audit import CohortAuditService
 from crypto_ai.services.configuration import ConfigurationService
@@ -39,6 +41,8 @@ from crypto_ai.services.simulation_filter import SimulationFilterService
 from crypto_ai.services.simulation_strategy import SimulationStrategyService
 from crypto_ai.services.task import TaskService
 from crypto_ai.services.user_customer import UserCustomerService
+from crypto_ai.services.live_ingest_control import LiveIngestControlService
+from crypto_ai.services.worker_management import WorkerManagementService
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -54,6 +58,16 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 def get_analysis_service(session: DbSession) -> AnalysisService:
     """Get analysis service."""
     return AnalysisService(session)
+
+
+def get_worker_management_service(session: DbSession) -> WorkerManagementService:
+    """Get worker management service."""
+    return WorkerManagementService(session)
+
+
+def get_live_ingest_control_service() -> LiveIngestControlService:
+    """Get the live-ingest control service (no DB — reads Docker + Redis)."""
+    return LiveIngestControlService()
 
 
 def get_cohort_audit_service(session: DbSession) -> CohortAuditService:
@@ -79,6 +93,14 @@ def get_coin_service(session: DbSession) -> CoinService:
 def get_kline_service(session: DbSession) -> KlineService:
     """Get kline service."""
     return KlineService(session)
+
+
+def get_strategy_template_service(session: DbSession) -> StrategyTemplateService:
+    return StrategyTemplateService(session)
+
+
+def get_paper_trade_service(session: DbSession) -> PaperTradeService:
+    return PaperTradeService(session)
 
 
 def get_kline_strategy_service(session: DbSession) -> KlineStrategyService:
@@ -227,6 +249,10 @@ CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 CoinServiceDep = Annotated[CoinService, Depends(get_coin_service)]
 KlineServiceDep = Annotated[KlineService, Depends(get_kline_service)]
 KlineStrategyServiceDep = Annotated[KlineStrategyService, Depends(get_kline_strategy_service)]
+StrategyTemplateServiceDep = Annotated[
+    StrategyTemplateService, Depends(get_strategy_template_service)
+]
+PaperTradeServiceDep = Annotated[PaperTradeService, Depends(get_paper_trade_service)]
 KlineSimulationRecordServiceDep = Annotated[
     KlineSimulationRecordService, Depends(get_kline_simulation_record_service)
 ]
@@ -259,3 +285,9 @@ SimulationFilterServiceDep = Annotated[
 SimulationStrategyServiceDep = Annotated[SimulationStrategyService, Depends(get_simulation_strategy_service)]
 SalesFilterServiceDep = Annotated[SalesFilterService, Depends(get_sales_filter_service)]
 UserCustomerServiceDep = Annotated[UserCustomerService, Depends(get_user_customer_service)]
+WorkerManagementServiceDep = Annotated[
+    WorkerManagementService, Depends(get_worker_management_service)
+]
+LiveIngestControlServiceDep = Annotated[
+    LiveIngestControlService, Depends(get_live_ingest_control_service)
+]

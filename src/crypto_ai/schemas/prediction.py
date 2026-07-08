@@ -28,6 +28,14 @@ class PredictionEngine(StrEnum):
     KAIROS = "kairos"
     TIREX = "tirex"
     FLOWSTATE = "flowstate"
+    TOTO2 = "toto2"
+    TTM = "ttm"
+    TABPFN = "tabpfn"
+    # Parameter-free mean-reversion baseline built from streak statistics.
+    STREAK_REVERSAL = "streak-reversal"
+    # Marker value for orchestrated ensembles — never registered in the engine
+    # registry; BlendingEngine is constructed directly from a group's weights.
+    BLENDING = "blending"
 
 
 class TaskStatus(StrEnum):

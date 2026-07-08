@@ -117,12 +117,16 @@ class ChronosPipelineEngine(PredictionEngine):
         model_value = params.get("model") or params.get("submodel")
         if model_value:
             self._model_id = self._resolve_model_id(model_value)
+            self._model_loaded = False  # Force reload when model changes
+            self._pipeline = None
         if "samples" in params:
             self._num_samples = int(params["samples"])
         if "precision" in params:
             p = params["precision"]
             if p in self._VALID_PRECISIONS:
                 self._precision = p
+                self._model_loaded = False  # Force reload when precision changes
+                self._pipeline = None
             else:
                 logger.warning("Ignoring unknown precision '%s'; valid: %s", p, self._VALID_PRECISIONS)
         if "batch_size" in params:
@@ -439,24 +443,22 @@ class ChronosPipelineEngine(PredictionEngine):
 
         is_bolt = isinstance(self._pipeline, ChronosBoltPipeline)
 
-        # Build batch context tensor — pad shorter series on the left with zeros.
-        max_len = max(len(item["values"]) for item in batch)
-        contexts = []
-        for item in batch:
-            v = item["values"]
-            if len(v) < max_len:
-                v = np.concatenate([np.zeros(max_len - len(v)), v])
-            contexts.append(torch.tensor(v, dtype=torch.float32))
-        context_tensor = torch.stack(contexts)  # (batch_size, max_len)
+        # Pass unequal-length contexts as a list of 1-D tensors: the Chronos
+        # pipelines left-pad and mask internally. Padding to a matrix with
+        # zeros ourselves would inject fake "minimum value" observations into
+        # shorter series (values are min-max normalized, so 0 = series min).
+        contexts = [
+            torch.tensor(item["values"], dtype=torch.float32) for item in batch
+        ]
 
         with torch.no_grad():
             if is_bolt:
                 forecast = self._pipeline.predict(
-                    context_tensor, prediction_length=horizon,
+                    contexts, prediction_length=horizon,
                 )
             else:
                 forecast = self._pipeline.predict(
-                    context_tensor, prediction_length=horizon, num_samples=self._num_samples,
+                    contexts, prediction_length=horizon, num_samples=self._num_samples,
                 )
         forecast_np = forecast.numpy()
 
@@ -510,6 +512,44 @@ class ChronosPipelineEngine(PredictionEngine):
             ))
 
         return results, ridge_infos
+
+    # -- residual covariate adjustment ---------------------------------------
+
+    @staticmethod
+    def _residual_ridge_adjustment(
+        item: dict,
+        base_pred: np.ndarray,
+        horizon: int,
+    ) -> tuple[np.ndarray, dict]:
+        """Fit Ridge on residuals of the base forecast for covariate adjustment.
+
+        Model-agnostic: works on any engine's point forecast.  Returns a
+        ``(horizon,)`` adjustment array to add to the base forecast/quantiles
+        and a ridge_info dict (feature_names / coefficients / intercept).
+        Adjustment is zero when covariate_handling is "none" or no covariates.
+        """
+        from sklearn.linear_model import Ridge
+
+        values = item["values"]
+        covariate_handling = item.get("covariate_handling", "external")
+        feature_names = sorted(item.get("feature_names", []))
+        if covariate_handling != "none" and feature_names:
+            align_len = min(len(values), horizon)
+            forecast_level = float(base_pred[0])
+            residuals = values[-align_len:] - forecast_level
+            hist_X_aligned = item["hist_X"][-align_len:]
+            ridge = Ridge(alpha=1.0, fit_intercept=True)
+            ridge.fit(hist_X_aligned, residuals)
+            adj = ridge.predict(item["fut_X"])
+            ridge_info = {
+                "feature_names": feature_names,
+                "coefficients": list(ridge.coef_),
+                "intercept": float(ridge.intercept_),
+            }
+        else:
+            adj = np.zeros(horizon)
+            ridge_info = {"feature_names": [], "coefficients": [], "intercept": 0.0}
+        return adj, ridge_info
 
     # -- covariates ----------------------------------------------------------
 

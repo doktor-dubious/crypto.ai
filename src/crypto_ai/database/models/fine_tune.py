@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from crypto_ai.database.base import Base
 
 if TYPE_CHECKING:
+    from crypto_ai.database.models.coin import Coin
     from crypto_ai.database.models.customer import Customer
     from crypto_ai.database.models.outlet_group import OutletGroup
     from crypto_ai.database.models.prediction_engine import PredictionEngine
@@ -20,12 +21,23 @@ class FineTune(Base):
 
     __tablename__ = "fine_tunes"
 
-    customer_id: Mapped[str] = mapped_column(
+    # Legacy sales-based finetuning targeted a customer/outlet-group; crypto
+    # kline finetuning targets a coin/pair/timeframe instead, so both are
+    # optional and only one set is populated per run.
+    customer_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("customers.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
+    coin_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("coin.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    quote_asset: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    interval: Mapped[str | None] = mapped_column(String(10), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
@@ -65,7 +77,8 @@ class FineTune(Base):
     )
 
     # Relationships
-    customer: Mapped["Customer"] = relationship("Customer")
+    customer: Mapped["Customer | None"] = relationship("Customer")
+    coin: Mapped["Coin | None"] = relationship("Coin", lazy="selectin")
     outlet_group: Mapped["OutletGroup | None"] = relationship(
         "OutletGroup", lazy="selectin",
     )

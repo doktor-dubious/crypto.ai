@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 
+import { auth } from "@/lib/auth"
+
 const BACKEND_URL = process.env.BACKEND_INTERNAL_URL ?? "http://localhost:8000"
 
 export const maxDuration = 300
 
 export async function POST(request: NextRequest) {
+  // This route is under /api/ (skipped by the auth middleware) and proxies to
+  // the unauthenticated backend — so it must verify the session itself.
+  const session = await auth.api.getSession({ headers: request.headers })
+  if (!session) {
+    return NextResponse.json({ detail: "Unauthorized" }, { status: 401 })
+  }
+
   const body = await request.text()
 
   try {

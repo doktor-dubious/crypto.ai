@@ -1,5 +1,7 @@
 """Custom trained model prediction engine."""
 
+from datetime import date, timedelta
+
 import numpy as np
 
 from crypto_ai.prediction.engine import EngineCapabilities, PredictionEngine
@@ -43,6 +45,7 @@ class CustomEngine(PredictionEngine):
         self,
         historical_data: list[dict],
         horizon: int,
+        prediction_from: date | None = None,
         model_path: str | None = None,
         **kwargs,
     ) -> list[PredictionResult]:
@@ -52,6 +55,8 @@ class CustomEngine(PredictionEngine):
         Args:
             historical_data: List of dicts with 'date' and 'value' keys
             horizon: Number of periods to predict
+            prediction_from: First forecast date (inclusive); defaults to the
+                day after the last historical date
             model_path: Optional path to model (overrides constructor path)
             **kwargs: Model-specific parameters
 
@@ -86,8 +91,11 @@ class CustomEngine(PredictionEngine):
         lower = self.preprocessor.denormalize(lower)
         upper = self.preprocessor.denormalize(upper)
 
-        # Generate future dates
-        future_dates = DataPreprocessor.generate_future_dates(last_date, horizon)
+        # Generate future dates. generate_future_dates is INCLUSIVE of its
+        # start date, so anchoring at last_date would date the first forecast
+        # on the last observed day — one day earlier than every other engine.
+        start = prediction_from or (last_date + timedelta(days=1))
+        future_dates = DataPreprocessor.generate_future_dates(start, horizon)
 
         # Build results
         results = []

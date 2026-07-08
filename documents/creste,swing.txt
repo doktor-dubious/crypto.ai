@@ -1,0 +1,123 @@
+2) Volume/volatility around crests — yes, and I measured it
+
+I tested it on your data before answering. Around swing points (local extreme of ±12 bars), volume and range-volatility spike to 1.4–1.6× their trailing median exactly at the swing bar, with a ramp starting 2–3 bars earlier — and the effect is stronger at bottoms (classic capitulation: panic volume marks the low). The tradeable direction also works: when current volume and range are both >2× their trailing median, the probability a swing low forms within 3 bars nearly doubles (10.8% → 18.6% on ETH 1h). So yes — volume/vol are genuinely informative covariates for crest detection, and Chronos-2 (which supports covariates) would be the natural first engine to feed them to. That's a follow-up if you want it: the sim path currently passes covariates=None.
+
+
+❯ Are there other trend reversal signals that may be interesting? I.e., perhaps the size of the bars tend to decrease around swing points?                                                                                            
+
+● Good question to test rather than theorize — your DB has everything needed (OHLC bodies/wicks, volume, trade counts, even taker buy sell split). Note one thing we already saw: total bar range actually spikes at the swing bar itself. But your intuition might still be right in a subtler form — classic reversal signatures are big range with a small body (long wicks), and shrinking gains into the top. Let me run a battery of candidate reversal signals against the swing points.
+
+Tested a full battery on your data (BTC 15m, BTC 1h, ETH 1h): candle bodies, wicks, shrinking gains, volume divergence, taker buy/sell flow, trade counts, and price stretch. The results kill your specific hypothesis but confirm  two better ones — and turned up one genuinely surprising signal.
+
+Your hypothesis first: do bars shrink around swing points? No — the opposite
+
+Body size sits at ~1.0× normal all the way into the swing and then jumps to 1.2–1.3× at the swing bar itself, with trade counts 1.3–1.4× normal. Crypto reversals at these timeframes are climactic, not quiet: the top/bottom is a violent full-body thrust bar (closing right at its extreme — the opposite-side wick shrinks to 0.65–0.75×), followed immediately by a big bar the other way. The "market goes quiet at the turn" pattern you're describing exists in some markets at daily scale, but intraday crypto turns on exhaustion spikes, not lulls.
+
+What does lead the swings
+
+Three signatures are consistently elevated before the turn (all three datasets):
+
+- Wick pressure: upper wicks run ~1.05–1.13× normal during the final 6 bars into a top (sellers repeatedly pushing closes off the highs), mirrored for lower wicks into bottoms.
+- Taker-flow tilt: taker-buy ratio climbs into tops and flips to net selling on the bar right after; mirrored at bottoms. A coincident-to-slightly-leading confirmation.
+- Participation swell: trade counts start rising 2–3 bars ahead of the swing.
+
+The tradeable scoreboard (forward returns, only past data used)
+
+┌───────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────────────────────┐
+│           Signal (after 3 up-bars, fade it)           │                                    Improvement over plain streak-fade                                    │             Consistent?             │
+├───────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ + volume divergence (3rd bar on less volume than 1st) │ roughly doubles the edge: −1.9 vs −1.3 bps (15m), −4.9 vs −2.8 (1h BTC), −6.0 vs −4.3 (ETH), t = 4.6–8.0 │ ✓ all three, both directions        │
+├───────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ + taker ratio < 0.45 (price up, takers net selling)   │ biggest per-bar edge, −7.4 bps at BTC 1h                                                                 │ directionally yes, but rare (t ≈ 3) │
+├───────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ + small body (your doji idea)                         │ marginal                                                                                                 │ weak                                │
+├───────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ + long upper wick                                     │ none — forward return actually neutral/positive                                                          │ ✗ (lore fails)                      │
+├───────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ + shrinking gains (deceleration)                      │ mixed, small                                                                                             │ ✗/weak                              │
+└───────────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────────────────────┘
+
+Volume divergence is the clear winner — "a move that advances on falling volume is running out of buyers" is one piece of technical lore your data actually supports, robustly.
+
+And the surprise: stretch + volume splits into two different regimes. When price is >2σ below its 20-bar mean, it bounces (+7.6 bps over 6 bars on BTC 15m, t=8.7). But when price is >2σ above its mean on 2× volume, it keeps 
+going: +20.6 bps/6 bars on BTC 1h, +26.2 on ETH 1h (t ≈ 5). High-volume upward breakouts are momentum, not reversal — fading them is exactly wrong. That 20–26 bps over 6 hours is the first number we've found that comfortably
+clears futures maker fees (~4–8 bps round trip), which makes it the most economically interesting signal so far — worth treating with suspicion precisely because of that, and confirming on other coins/periods before believing
+it.
+
+Economics reality check on the reversal side: even the best fade combos are 3–7 bps per bar — tradeable only on maker-fee futures, and thin. The value of these signals in your stack is probably less "trade them raw" and more
+feed them to the models: volume, taker ratio, and volume-divergence flags are exactly the covariates Chronos-2 can ingest (the sim path currently passes covariates=None), and the streak-reversal baseline could condition on
+volume divergence to become a stronger floor. The breakout-continuation signal would also suit a horizon-6 run with the new horizon field.
+
+Script saved as reversal_signals.py in the scratchpad alongside the other two. If you want a next step, my pick would be wiring volume/taker covariates into the Chronos-2 sim path — it's the cleanest way to let a real model
+exploit all of these at once instead of us hand-crafting rules.
+
+=================
+
+QUESTION:
+We should start experimenting with seeing if crests/swing forcasts can be monetized.
+
+Where would such an implementation live? Is this something that should be set as a simulation or strategy goal when starting the simulation, or can it be done retrospectively when analysing. Like having another tab in the completed simulation table for this analysis?
+
+Specifically there are these leading indicators which we should look at implementing:
+
+1) Volume/volatility around crests
+Three signatures are consistently elevated before the turn (all three datasets):
+
+2) Wick pressure: upper wicks run ~1.05–1.13× normal during the final 6 bars into a top (sellers repeatedly pushing closes off the highs), mirrored for lower wicks into bottoms.
+
+3) Taker-flow tilt: taker-buy ratio climbs into tops and flips to net selling on the bar right after; mirrored at bottoms. A coincident-to-slightly-leading confirmation.
+
+4) Participation swell: trade counts start rising 2–3 bars ahead of the swing.
+
+Any more? Or do you have any other suggestions that should be taken into considerations for realizing this?
+
+
+● Good instinct to design this before building. Let me answer the architecture question first, because the data involved makes the answer fairly clear-cut.
+
+Where it lives: retrospective first, run-time later
+
+The four signals you listed share one crucial property: none of them need a model forecast. Volume, wicks, taker ratio, trade counts are all raw kline columns already in your DB. That means swing detection can be computed after the fact for any coin/timeframe/date-range — including every simulation you've already run. So:
+
+Phase 1 — a "Swings" tab on the completed-sim detail pane (next to Backtest). Same pattern as the Backtest tab: a GET /kline-simulations/{id}/swings endpoint that pulls the run's klines, computes the signal battery with trailing-only normalization (no lookahead), combines them into a composite crest score, applies an entry rule with live knobs (threshold, long/short, fee bps, hold time), and returns the standard fee-aware equity curve vs buy-and-hold. The simulation record is just the anchor — it supplies coin/pair/timeframe/range and lets you compare "signal-only" against "model forecast" against "signal + model confirmation" (the sim's prob_up as an extra filter) on the same chart. Iteration is instant: change a threshold, the curve re-renders, no re-running anything.
+
+Phase 2 — a run-time strategy target, only once phase 1 shows net-of-fees promise. Two variants, in order of ambition: feed the signals as covariates to Chronos-2 (the sim path currently passes covariates=None; Chronos-2 natively accepts them), or add a "swing" strategy that walk-forwards a swing-proximity label. These must be run-time because walk-forward forecasts are generated bar by bar. This is where an AI model gets the chance to find interactions the hand-built composite misses.
+
+The one thing to keep sacred in phase 1: entry signals use only past data; swing labels (extreme of ±12 bars) are hindsight and are used only for diagnostics — the monetization verdict comes from forward returns after the signal fires, not from "did we label a swing correctly."
+
+Your four signals, plus what I'd add
+
+Your list is right and matches what the data confirmed. I'd extend it with these, roughly in order of evidence strength:
+
+5. Volume divergence — the strongest conditioner we found: a 3rd push on lower volume than the 1st roughly doubles the fade edge, consistently across BTC/ETH and timeframes. Belongs in v1.
+
+6. Stretch × volume regime split — the most important veto: price >2σ above its 20-bar mean on 2× volume keeps going (+20–26 bps over 6 bars at 1h). A crest system that fades high-volume breakouts loses exactly where momentum pays. The composite needs this as a "do not fade" gate; oversold stretch (z < −2) conversely strengthens bottom-fishing.
+
+7. Streak state + deceleration — streak length is your base rate (the one proven signal); shrinking-gains was weak alone but is free to include.
+
+8. Average trade size (volume ÷ trade count vs trailing median) — spiked ~1.1× at swings in the data; separates "many small panicked trades" from "few large absorbing trades." Cheap, already stored.
+
+9. Failed-breakout / sweep pattern — price trades above the prior swing high intra-bar but closes back below it (the classic crypto stop-hunt). Pure OHLC, very testable, and mechanically tied to how swings actually form.
+
+10. Funding-cycle timing — perp funding settles at 00/08/16 UTC and creates mechanical flows; swing frequency almost certainly clusters around these and session opens. A cheap calendar feature.
+
+11. Cross-asset confirmation (BTC turning confirms an alt's swing signal) and higher-timeframe confluence (a 15m signal at a 4h swing level) — both plausible and testable from data you have, but they add cross-series plumbing; I'd hold them for v2.
+
+
+Further out (needs new data imports): funding rates, open interest, and liquidation data from Binance — OI flushes and liquidation cascades are the canonical crypto capitulation markers. Worth a separate import task later, not a blocker now.
+
+Realization considerations that will make or break it
+
+- Few knobs, standardized signals. Every signal as a z-score vs its trailing window, equal-weighted composite, one entry threshold. Ten hand-tuned thresholds on a retrospective tab is an overfitting machine — the Sig-column lesson applies doubly here because you'll be iterating interactively.
+
+- Out-of-sample discipline. Tune knobs on one date range, confirm on a later untouched range before believing anything. The tab could enforce this softly (show the metric split by first/second half of the range).
+
+- The verdict metric is net bps per trade after fees, not swing-detection hit rate (base rates make hit rates flattering). Reuse the equity/Sharpe/drawdown framework, plus a significance t on the forward-return edge.
+
+- Fees decide viability. The measured edges (3–7 bps/bar fades, +7–26 bps over 6 bars) die at spot taker fees and live at futures maker fees. Fading into a turn is limit-order-friendly, so maker fills are realistic — the tab should default to a maker-fee preset (~2–4 bps/side) with taker as comparison.
+
+- Exits matter as much as entries. Start with a fixed H-bar hold (mirrors your new horizon scoring, keeps stats clean); opposite-signal and trailing exits are v2 knobs.
+
+- Asymmetry. Bottoms signaled more strongly than tops in every dataset (capitulation is louder than euphoria) — build long-only / short-only / both as a toggle and expect long-at-bottoms to carry the results.
+
+My recommendation for concrete next step: build the phase-1 Swings tab with signals 1–8 as a z-composite, fixed-hold backtest, maker/taker presets, and a first/second-half split readout. That's a well-bounded piece of work reusing the backtest tab's skeleton end to end. Say go and I'll build it.
+

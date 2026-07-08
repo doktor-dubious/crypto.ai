@@ -1,52 +1,249 @@
-"""Direct Chronos 2.0 prediction engine (no AutoGluon wrapper).
+"""Direct Chronos-2 prediction engine (amazon/chronos-2).
 
-Loads the Chronos model once via the chronos-forecasting library and reuses it
-across all prediction calls, avoiding the per-batch model reload that the
-AutoGluon-based engine suffers from.
+Uses chronos-forecasting >= 2.2's ``Chronos2Pipeline.predict_df`` — the REAL
+Chronos-2 model, NOT the Chronos-v1 t5 pipeline this file previously (mistakenly)
+loaded.  Loaded once per worker and reused across predictions.
+
+Verified against chronos-forecasting==2.2.2.  Real predict_df output columns:
+    ['item_id', 'timestamp', 'target_name', 'predictions', '0.1', ..., '0.9']
+i.e. a mean ``predictions`` column plus one column per quantile level, named by
+the level string ('0.1'..'0.9').
+
+Chronos-2 returns 9 quantiles directly (no sampling) and has NATIVE covariate
+support via ``predict_df(future_df=...)``.  When every item in a batch requests
+``covariate_handling="native"`` (with a shared feature set), covariates are fed
+through that real model-side API — past values as extra ``long_df`` columns and
+the forecast-window values via ``future_df`` — and the Ridge adjustment is
+skipped.  All other requests keep the inherited external-Ridge path for parity
+with the other engines.
+
+The engine slug is ``chronos2``; the ``model`` parameter value ``chronos-2`` is a
+model-id alias resolving to ``amazon/chronos-2`` (distinct from the slug).
 """
 
-from crypto_ai.prediction.engine import EngineCapabilities
+import logging
+
+import numpy as np
+import pandas as pd
+
+from crypto_ai.prediction.engine import EngineCapabilities, MemoryEstimate
 from crypto_ai.prediction.engines.chronos_pipeline_engine import (
-    BATCH_SIZE,
+    _QUANTILE_LEVELS,  # np.array([0.1, 0.2, ..., 0.9])
     ChronosPipelineEngine,
+    _sanitize_nan,
 )
 
-DEFAULT_MODEL_ID = "amazon/chronos-t5-small"
+logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL_ID = "amazon/chronos-2"
+_ANCHOR = "2000-01-01"                                   # synthetic daily index (calendar-agnostic)
+_QUANTILE_LIST = [round(float(q), 2) for q in _QUANTILE_LEVELS]
+
+_CHRONOS2_AVAILABLE: bool | None = None
 
 
 class Chronos2DirectEngine(ChronosPipelineEngine):
-    """Direct Chronos 2.0 engine — load once, predict many.
+    """Amazon Chronos-2 — load once, predict many; quantiles direct from predict_df."""
 
-    Uses the ``chronos-forecasting`` library directly instead of AutoGluon's
-    ``TimeSeriesPredictor``.  The model is loaded lazily on first prediction and
-    cached on the instance for the lifetime of the Celery worker process.
-    """
+    # covariate_handling="native" feeds covariates through predict_df's real
+    # covariate API (extra long_df columns + future_df) — a genuine model-side
+    # fit, safe at horizon 1 (unlike the shared residual-Ridge fallback).
+    supports_native_covariates = True
 
     _MODEL_ALIASES: dict[str, str] = {
-        "chronos-t5-tiny": "amazon/chronos-t5-tiny",
-        "chronos-t5-mini": "amazon/chronos-t5-mini",
-        "chronos-t5-small": "amazon/chronos-t5-small",
-        "chronos-t5-base": "amazon/chronos-t5-base",
-        "chronos-t5-large": "amazon/chronos-t5-large",
-        "chronos-bolt-tiny": "amazon/chronos-bolt-tiny",
-        "chronos-bolt-mini": "amazon/chronos-bolt-mini",
-        "chronos-bolt-small": "amazon/chronos-bolt-small",
-        "chronos-bolt-base": "amazon/chronos-bolt-base",
+        "chronos-2": "amazon/chronos-2",
+        "chronos2": "amazon/chronos-2",
     }
     _DEFAULT_PREFIX = "amazon/"
 
+    _MODEL_PARAMS: dict[str, float] = {
+        **ChronosPipelineEngine._MODEL_PARAMS,
+        "amazon/chronos-2": 119.48e6,     # 119,477,664 params (counted from weights)
+    }
+
     def __init__(self, model_id: str = DEFAULT_MODEL_ID):
-        super().__init__(model_id=model_id, default_precision="bfloat16")
+        # float32 is the safe CPU default; override via the "precision" param for GPU.
+        super().__init__(model_id=model_id, default_precision="float32")
+        self._device: str = "cpu"
+        self._torch_dtype = None
 
     def get_capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(
-            name="Chronos 2.0",
-            description="Amazon Chronos 2.0 foundation model (direct, no AutoGluon)",
+            name="Chronos-2",
+            description="Amazon Chronos-2 foundation model (direct predict_df, native covariates)",
             supports_multivariate=True,
             supports_exogenous=True,
             supports_uncertainty=True,
             min_history_length=5,
-            max_history_length=2048,
-            max_horizon=64,
-            supported_frequencies=["daily", "weekly", "monthly"],
+            max_history_length=8192,
+            max_horizon=1024,
+            supported_frequencies=["daily", "weekly", "monthly", "hourly"],
         )
+
+    def estimate_memory(self, *, task_type: str = "prediction", num_outlets: int = 1,
+                        batch_size: int = 8, horizon: int = 30, context_length: int = 512,
+                        num_covariates: int = 0, precision: str = "float32",
+                        epochs: int = 0) -> MemoryEstimate:
+        params = self._MODEL_PARAMS.get(self._model_id, 120e6)
+        bytes_per_param = 2 if precision in ("bfloat16", "float16") else 4
+        model_mb = params * bytes_per_param / (1024 * 1024)
+        effective_batch = min(batch_size or self._batch_size, num_outlets)
+        context_mb = effective_batch * context_length * 4 / (1024 * 1024)
+        output_mb = effective_batch * horizon * 9 * 4 / (1024 * 1024)
+        ridge_mb = effective_batch * context_length * max(num_covariates, 1) * 8 / (1024 * 1024)
+        inference_mb = context_mb + output_mb + ridge_mb + 150
+        multiplier = {"simulation": 1.3, "finetune": 4.0}.get(task_type, 1.0)
+        total = model_mb + inference_mb * multiplier
+        return MemoryEstimate(
+            model_mb=round(model_mb, 1),
+            inference_mb=round(inference_mb * multiplier, 1),
+            total_mb=round(total, 1),
+            gpu_required=False,
+            task_type=task_type,
+            breakdown={"model": round(model_mb, 1), "context": round(context_mb, 1),
+                       "output": round(output_mb, 1), "ridge": round(ridge_mb, 1),
+                       "pytorch_overhead": 150},
+        )
+
+    # -- model loading -------------------------------------------------------
+
+    def is_available(self) -> bool:
+        return self._check_chronos2()
+
+    def _check_chronos2(self) -> bool:
+        global _CHRONOS2_AVAILABLE
+        if _CHRONOS2_AVAILABLE is None:
+            try:
+                from chronos import Chronos2Pipeline  # noqa: F401
+                _CHRONOS2_AVAILABLE = True
+                logger.info("chronos-forecasting Chronos2Pipeline is available")
+            except ImportError:
+                _CHRONOS2_AVAILABLE = False
+                logger.warning(
+                    "chronos-forecasting>=2.2 (Chronos2Pipeline) not installed; "
+                    "Chronos-2 unavailable, falling back to statistical"
+                )
+        return _CHRONOS2_AVAILABLE
+
+    def _load_model(self) -> None:
+        if self._model_loaded:
+            return
+        if not self._check_chronos2():
+            self._model_loaded = True
+            return
+        self._apply_hf_env()
+        try:
+            import torch
+            from chronos import Chronos2Pipeline
+
+            dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16,
+                         "float16": torch.float16}
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._pipeline = Chronos2Pipeline.from_pretrained(
+                self._model_id, device_map=device, torch_dtype=dtype_map[self._precision],
+            )
+            self._device = device
+            self._torch_dtype = dtype_map[self._precision]
+            logger.info("Chronos-2 loaded: %s (%s, device: %s)",
+                        self._model_id, self._precision, device)
+        except Exception as e:
+            logger.warning("Failed to load Chronos-2, falling back to statistical: %s", e)
+            self._pipeline = None
+        finally:
+            self._model_loaded = True
+
+    # -- quantile column resolution -----------------------------------------
+
+    @staticmethod
+    def _resolve_quantile_columns(df: pd.DataFrame) -> list[str]:
+        """Map each requested level to its predict_df column (named e.g. '0.1'..'0.9')."""
+        cols: list[str] = []
+        for q in _QUANTILE_LIST:
+            match = next(
+                (c for c in (f"{q:g}", str(q), f"{q:.1f}", f"{q:.2f}") if c in df.columns), None
+            )
+            if match is None:
+                raise KeyError(f"Quantile column for level {q} not found in {list(df.columns)}")
+            cols.append(match)
+        return cols
+
+    # -- batch inference (sync, runs in the base class's thread pool) --------
+
+    def _run_batch_inference(
+        self,
+        batch: list[dict],
+        horizon: int,
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]], list[dict]]:
+        """One predict_df call for the whole batch; split output per item_id."""
+        # NATIVE covariates: only when every item in the batch asks for "native"
+        # and shares one feature set (uniform batches — the kline walk-forward
+        # sends exactly that). Mixed batches keep the Ridge path so no item gets
+        # NaN covariate columns from the concat.
+        feature_names = sorted(batch[0].get("feature_names", [])) if batch else []
+        use_native = bool(feature_names) and all(
+            item.get("covariate_handling") == "native"
+            and sorted(item.get("feature_names", [])) == feature_names
+            for item in batch
+        )
+
+        # Build a single long-format frame — one item_id per series in the batch.
+        # (The base has already normalised each item's `values` and precomputed
+        # hist_X/fut_X, aligned to values/horizon respectively.)
+        frames = []
+        future_frames = []
+        for i, item in enumerate(batch):
+            vals = np.asarray(item["values"], dtype=np.float64)
+            ts = pd.date_range(_ANCHOR, periods=len(vals), freq="D")   # regular, gap-free (required)
+            frame = pd.DataFrame({"item_id": i, "timestamp": ts, "target": vals})
+            if use_native:
+                hist_X = np.asarray(item["hist_X"], dtype=np.float64)
+                fut_X = np.asarray(item["fut_X"], dtype=np.float64)
+                fut_ts = pd.date_range(ts[-1] + pd.Timedelta(days=1), periods=horizon, freq="D")
+                fframe = pd.DataFrame({"item_id": i, "timestamp": fut_ts})
+                for f_idx, name in enumerate(feature_names):
+                    frame[name] = hist_X[:, f_idx]
+                    fframe[name] = fut_X[:horizon, f_idx]
+                future_frames.append(fframe)
+            frames.append(frame)
+        long_df = pd.concat(frames, ignore_index=True)
+
+        predict_kwargs: dict = {}
+        if use_native:
+            predict_kwargs["future_df"] = pd.concat(future_frames, ignore_index=True)
+
+        pred_df = self._pipeline.predict_df(
+            long_df,
+            id_column="item_id",
+            timestamp_column="timestamp",
+            target="target",
+            prediction_length=horizon,
+            quantile_levels=_QUANTILE_LIST,
+            **predict_kwargs,
+        )
+        qcols = self._resolve_quantile_columns(pred_df)
+
+        results = []
+        ridge_infos = []
+        for i, item in enumerate(batch):
+            sub = pred_df[pred_df["item_id"] == i].sort_values("timestamp")
+            base_quantiles = np.sort(sub[qcols].to_numpy(dtype=np.float64), axis=1)  # (horizon, 9)
+            base_pred = base_quantiles[:, 4]     # P50
+            base_lower = base_quantiles[:, 0]    # P10
+            base_upper = base_quantiles[:, -1]   # P90
+
+            if use_native:
+                # Covariates already inside the model's forecast — no Ridge.
+                adj = np.zeros(horizon)
+                ridge_info = {"feature_names": feature_names, "coefficients": [],
+                              "intercept": 0.0, "native_covariates": True}
+            else:
+                adj, ridge_info = self._residual_ridge_adjustment(item, base_pred, horizon)
+            ridge_infos.append(ridge_info)
+            results.append((
+                _sanitize_nan(base_pred + adj),
+                _sanitize_nan(base_lower + adj),
+                _sanitize_nan(base_upper + adj),
+                _sanitize_nan(base_quantiles + adj[:, np.newaxis]),
+            ))
+
+        return results, ridge_infos

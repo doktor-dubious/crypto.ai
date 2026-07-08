@@ -17,6 +17,8 @@ import {
   Bot,
   Scissors,
   Sparkles,
+  CandlestickChart,
+  BrainCircuit,
 } from "lucide-react"
 import { ViewSwitcher } from "@/components/ui/view-switcher"
 import { Input } from "@/components/ui/input"
@@ -33,6 +35,8 @@ const LOG_SOURCES = [
   { id: "frontend", icon: <Globe className="h-4 w-4" />, labelKey: "frontend" as const },
   { id: "claude", icon: <Bot className="h-4 w-4" />, labelKey: "claude" as const },
   { id: "llm", icon: <Sparkles className="h-4 w-4" />, labelKey: "llm" as const },
+  { id: "binance", icon: <CandlestickChart className="h-4 w-4" />, labelKey: "binanceData" as const },
+  { id: "trade-ai", icon: <BrainCircuit className="h-4 w-4" />, labelKey: "tradeAi" as const },
 ]
 
 const PAGE_SIZE = 100

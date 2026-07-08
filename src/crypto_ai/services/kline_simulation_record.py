@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 from datetime import UTC, date, datetime
 
@@ -52,8 +53,16 @@ def _forecast_expr(forecast: str | None):
 
 
 def _interval_minutes(interval: str) -> int:
-    """Bars-per-minute for an interval string like '1h', '15m', '1d'."""
-    s = (interval or "1h").strip().lower()
+    """Minutes per bar for an interval string like '1h', '15m', '1d', '1M'.
+
+    Binance uses lowercase 'm' for minutes and uppercase 'M' for months, so
+    the month check must happen before lowercasing.
+    """
+    s = (interval or "1h").strip()
+    if s.endswith("M"):  # monthly (e.g. '1M') — ~30 days per bar
+        num = "".join(ch for ch in s if ch.isdigit()) or "1"
+        return int(num) * 43200
+    s = s.lower()
     units = {"m": 1, "h": 60, "d": 1440, "w": 10080}
     num = "".join(ch for ch in s if ch.isdigit()) or "1"
     unit = "".join(ch for ch in s if ch.isalpha()) or "h"
@@ -154,9 +163,17 @@ def _compute_backtest(
     # the long/short conditions are mutually exclusive; long wins any tie at 0.5.
     sig = [1 if base_long[i] else (-1 if base_short[i] else 0) for i in range(n)]
 
-    # Target vol for sizing = median of the available predicted spreads.
-    known = sorted(s for s in spread_rel if s is not None and s > 0)
-    target_vol = known[len(known) // 2] if known else None
+    # Target vol for sizing = expanding median of the predicted spreads seen so
+    # far. A whole-series median would leak future bars' forecasts into earlier
+    # sizing decisions (look-ahead bias), so the target at bar i only uses
+    # spreads up to and including bar i (each bar's own spread is a forecast
+    # known at decision time).
+    target_vols: list[float | None] = []
+    _seen: list[float] = []
+    for s in spread_rel:
+        if s is not None and s > 0:
+            bisect.insort(_seen, s)
+        target_vols.append(_seen[len(_seen) // 2] if _seen else None)
 
     # Per-bar size factor in (0, 1] from the position-sizing scheme, applied on
     # top of whatever size the (vol) signal decides. "none" keeps full size.
@@ -191,7 +208,8 @@ def _compute_backtest(
             continue
         if is_vol and vol_mode == "vol_targeting":
             sv = spread_rel[i]
-            raw = min(1.0, target_vol / sv) if (sv and sv > 0 and target_vol) else 1.0
+            tv = target_vols[i]
+            raw = min(1.0, tv / sv) if (sv and sv > 0 and tv) else 1.0
         elif is_vol and vol_mode == "vol_breakout":
             sv = spread_rel[i]
             window = [s for s in spread_rel[max(0, i - _VOL_WINDOW):i] if s is not None]
@@ -213,7 +231,9 @@ def _compute_backtest(
         if abs(delta) > 1e-9:
             n_fills += 1
         cost = abs(delta) * fee_side
-        net.append(pos[i] * bar_ret[i] - cost)
+        # Floor at -100%: a short against a >100% up-bar is a bankruptcy, not
+        # negative equity (which would flip the compounded curve's sign).
+        net.append(max(pos[i] * bar_ret[i] - cost, -1.0))
         prev_pos = pos[i]
     if abs(pos[-1]) > 1e-9:  # close out the final open position (long or short)
         net[-1] -= abs(pos[-1]) * fee_side
@@ -307,8 +327,15 @@ _SORT_COLUMNS = {
     "finished_at": KlineSimulation.finished_at,
     "status": KlineSimulation.status,
     "starred": KlineSimulation.starred,
+    "score": KlineSimulation.score,
+    "score_t": KlineSimulation.score_t,
+    "score_vol": KlineSimulation.score_vol,
+    "score_vol_t": KlineSimulation.score_vol_t,
     "created_at": KlineSimulation.created_at,
 }
+
+# Score-like sort fields: NULLs (unscored/failed/non-vol runs) go last either way.
+_NULLS_LAST_FIELDS = {"score", "score_t", "score_vol", "score_vol_t"}
 
 
 class KlineSimulationRecordService:
@@ -388,10 +415,13 @@ class KlineSimulationRecordService:
         ).scalar_one()
 
         col = _SORT_COLUMNS.get(sort_field, KlineSimulation.created_at)
-        col = col.asc() if sort_dir == "asc" else col.desc()
+        directed = col.asc() if sort_dir == "asc" else col.desc()
+        # Keep unscored runs (pending/failed → NULL score) at the bottom either
+        # way. `is_(None)` sorts False(0) before True(1), portable to SQLite.
+        order = [col.is_(None), directed] if sort_field in _NULLS_LAST_FIELDS else [directed]
         stmt = (
             base.options(selectinload(KlineSimulation.coin))
-            .order_by(col)
+            .order_by(*order)
             .offset(offset)
             .limit(limit)
         )
@@ -419,6 +449,9 @@ class KlineSimulationRecordService:
         rec.status = status
         if result is not None:
             rec.result = result
+            for attr in ("score", "score_t", "score_vol", "score_vol_t"):
+                v = result.get(attr) if isinstance(result, dict) else None
+                setattr(rec, attr, float(v) if isinstance(v, (int, float)) else None)
         if error is not None:
             rec.error = error
         if finished:

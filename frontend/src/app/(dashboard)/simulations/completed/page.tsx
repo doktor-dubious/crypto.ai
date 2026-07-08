@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import {
-  Search, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Focus, Info, Flag, ZoomOut,
+  Search, Star, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Focus, Info, Flag, ZoomOut, RefreshCw,
 } from "lucide-react"
 import {
   Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -41,6 +41,7 @@ import {
 } from "@/lib/api"
 
 const PRED_PER_PAGE = 10
+const SIMS_PER_PAGE = 10
 const STAR_KEY = "crypt:simPredStars"
 
 // ── Strategy labels (shared with the New Simulation form) ──
@@ -63,7 +64,21 @@ function strategyLabel(sim: KlineSimulationResponse): string {
   return m ? `${s} · ${VOL_MODE_LABELS[m] ?? m}` : s
 }
 
-function InfoIcon({ text }: { text: string }) {
+// Theme-aware recharts tooltip styling — the library default is a white box
+// that ignores dark mode. CSS variables track the active theme.
+const CHART_TOOLTIP_STYLE = {
+  fontSize: 12,
+  borderRadius: 6,
+  backgroundColor: "var(--popover, var(--background))",
+  border: "1px solid var(--border)",
+  color: "var(--popover-foreground, var(--foreground))",
+} as const
+const CHART_TOOLTIP_LABEL_STYLE = {
+  color: "var(--popover-foreground, var(--foreground))",
+  fontWeight: 500,
+} as const
+
+function InfoIcon({ text }: { text: ReactNode }) {
   return (
     <TooltipProvider delayDuration={150}>
       <UITooltip>
@@ -107,7 +122,7 @@ const FORECAST_OPTIONS = [
 ] as const
 const Q_IDX: Record<string, number> = { q10: 0, q20: 1, q30: 2, q40: 3, q50: 4 }
 
-type SortField = "name" | "coin" | "quote_asset" | "interval" | "strategy" | "start_date" | "finished_at" | "starred"
+type SortField = "name" | "coin" | "quote_asset" | "interval" | "strategy" | "start_date" | "finished_at" | "status" | "score" | "score_t" | "score_vol" | "starred"
 
 function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -118,21 +133,74 @@ function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function StatusCell({ sim }: { sim: KlineSimulationResponse }) {
-  if (sim.status === "success") {
-    return <span className="text-xs font-mono">{sim.finished_at ? format(new Date(sim.finished_at), "MMM d, yyyy HH:mm") : "—"}</span>
-  }
-  if (sim.status === "pending" || sim.status === "started") {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-400">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
-        Running
-      </span>
-    )
-  }
-  const label = sim.status === "failure" ? "Failed" : "Stopped"
-  const color = sim.status === "failure" ? "text-red-400 bg-red-500/15" : "text-amber-400 bg-amber-500/15"
-  return <span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium", color)}>{label}</span>
+// The run's finish timestamp (or "—" while it's still running).
+function FinishedCell({ sim }: { sim: KlineSimulationResponse }) {
+  return <span className="text-xs font-mono">{sim.finished_at ? format(new Date(sim.finished_at), "MMM d, yyyy HH:mm") : "—"}</span>
+}
+
+// Status badge for the master table. "Degraded" = the requested model couldn't
+// load and the engine fell back, so the run isn't usable (no forecast bands).
+const STATUS_BADGE: Record<string, { label: string; cls: string; pulse?: boolean }> = {
+  success:  { label: "Completed", cls: "text-green-500 bg-green-500/15" },
+  degraded: { label: "Degraded",  cls: "text-orange-400 bg-orange-500/15" },
+  failure:  { label: "Failed",    cls: "text-red-400 bg-red-500/15" },
+  stopped:  { label: "Cancelled", cls: "text-amber-400 bg-amber-500/15" },
+  pending:  { label: "Running",   cls: "text-blue-400 bg-blue-500/15", pulse: true },
+  started:  { label: "Running",   cls: "text-blue-400 bg-blue-500/15", pulse: true },
+}
+
+function StatusBadge({ sim }: { sim: KlineSimulationResponse }) {
+  const b = STATUS_BADGE[sim.status] ?? { label: sim.status, cls: "text-muted-foreground bg-muted" }
+  const tip = (sim.status === "degraded" || sim.status === "failure") ? (sim.error ?? undefined) : undefined
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", b.cls)}
+      title={tip}
+    >
+      {b.pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />}
+      {b.label}
+    </span>
+  )
+}
+
+// Price skill (backend `score`): the directional return IC, computed for every
+// run. Higher = more edge. Coloured by sign so promising runs stand out.
+function ScoreCell({ sim }: { sim: KlineSimulationResponse }) {
+  if (sim.score == null) return <span className="text-xs text-muted-foreground">—</span>
+  const color = sim.score >= 0.1 ? "text-green-500"
+    : sim.score <= -0.1 ? "text-red-400"
+    : "text-muted-foreground"
+  return <span className={cn("text-sm font-mono font-medium tabular-nums", color)}>{sim.score.toFixed(3)}</span>
+}
+
+// Volatility skill (backend `score_vol`): corr of predicted vs realized
+// range-vol; only present for Forecast-volatility runs. Vol correlations run
+// much higher than return ICs (0.3–0.6 is normal), hence the different colour
+// thresholds. The cell tooltip carries its own significance t.
+function VolScoreCell({ sim }: { sim: KlineSimulationResponse }) {
+  if (sim.score_vol == null) return <span className="text-xs text-muted-foreground">—</span>
+  const v = sim.score_vol
+  const color = v >= 0.3 ? "text-green-500" : v < 0 ? "text-red-400" : "text-muted-foreground"
+  const tip = sim.score_vol_t != null ? `Significance t = ${sim.score_vol_t.toFixed(1)}` : undefined
+  return (
+    <span title={tip} className={cn("text-sm font-mono font-medium tabular-nums", color)}>
+      {v.toFixed(3)}
+    </span>
+  )
+}
+
+// Significance of the score (backend `score_t`): the t-statistic of the same
+// correlation, sample-size aware. When screening MANY runs, pure chance alone
+// produces max |t| ≈ 3–3.5 across ~1000 runs, so only |t| ≥ 4 is highlighted
+// as a genuine discovery candidate; ≥ 3 is "worth a look".
+function SigCell({ sim }: { sim: KlineSimulationResponse }) {
+  if (sim.score_t == null) return <span className="text-xs text-muted-foreground">—</span>
+  const t = sim.score_t
+  const color = t >= 4 ? "text-green-500"
+    : t >= 3 ? "text-amber-400"
+    : t <= -3 ? "text-red-400"
+    : "text-muted-foreground"
+  return <span className={cn("text-sm font-mono font-medium tabular-nums", color)}>{t.toFixed(1)}</span>
 }
 
 function SimAnalysis({ sim }: { sim: KlineSimulationResponse }) {
@@ -188,6 +256,22 @@ function SimAnalysis({ sim }: { sim: KlineSimulationResponse }) {
             {r?.actual_engine && r.actual_engine !== modelName && (
               <p className="text-xs text-amber-500">ran as: {r.actual_engine}</p>
             )}
+            {(() => {
+              // covariate_mode on newer runs; use_covariates (boolean, = native)
+              // on runs recorded before the external mode existed.
+              const covMode = r?.covariate_mode ?? (r?.use_covariates ? "native" : "off")
+              if (!covMode || covMode === "off") return null
+              return (
+                <span
+                  className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2.5 py-0.5 text-xs font-medium cursor-help"
+                  title={covMode === "external"
+                    ? "The swing-signal series (volume/range/trade z-scores, taker tilt, streak, stretch, wicks) adjusted each forecast via a trailing Ridge fitted on this run's own past residuals — strictly past-only, engine-agnostic. Compare against the same model without covariates to measure what the signals add."
+                    : "This model received the swing-signal series (volume/range/trade z-scores, taker tilt, streak, stretch, wicks) as native covariates during the walk-forward. Compare against the same model without covariates to measure what the signals add."}
+                >
+                  signal covariates ({covMode})
+                </span>
+              )
+            })()}
             {r?.error ? (
               <p className="text-sm text-red-500">{r.error}</p>
             ) : r?.metrics && r?.kline_strategy ? (
@@ -201,12 +285,21 @@ function SimAnalysis({ sim }: { sim: KlineSimulationResponse }) {
                 <div title="Mean Absolute Error — the average absolute gap between actual and predicted close, in price units. Lower is better."><p className="text-xs text-muted-foreground">MAE</p><p className="text-lg font-semibold">${r.metrics.mae?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p></div>
                 <div title="Mean Absolute Percentage Error — the average of the per-bar % error (|actual − predicted| / actual). Lower is better."><p className="text-xs text-muted-foreground">MAPE</p><p className="text-lg font-semibold">{r.metrics.mape?.toFixed(2)}%</p></div>
                 <div title="Root Mean Squared Error — like MAE but squares the errors, so large misses count much more. In price units; lower is better."><p className="text-xs text-muted-foreground">RMSE</p><p className="text-lg font-semibold">${r.metrics.rmse?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p></div>
-                <div title="Pearson correlation between predicted and actual close levels: 1 = perfect, 0 = none, negative = inverse."><p className="text-xs text-muted-foreground">Correlation</p><p className="text-lg font-semibold">{r.metrics.correlation?.toFixed(4)}</p></div>
+                <div title="Signal / IC (Information Coefficient) — Spearman's rank correlation (Pearson correlation computed on the ranks) of the predicted move vs the realized move, both relative to the previous close. Measures tradeable directional edge, independent of any strategy knobs. 1 = perfect, 0 = none, negative = inverse. This is the run's Score for price forecasts."><p className="text-xs text-muted-foreground">Signal (IC)</p><p className="text-lg font-semibold">{(r.metrics.return_ic ?? r.metrics.correlation)?.toFixed(4)}</p></div>
                 <div title="Number of one-step-ahead forecasts evaluated."><p className="text-xs text-muted-foreground">Forecasts</p><p className="text-lg font-semibold">{r.metrics.test_count?.toLocaleString()}</p></div>
+                {r.metrics.return_ic_t != null && (
+                  <div title="Significance of the IC: its t-statistic under the no-signal null, sample-size aware. |t| ≥ 2 is nominally significant for a single run; when screening many runs, look for ≥ 4 (chance alone reaches ~3.5 across ~1000 runs)."><p className="text-xs text-muted-foreground">Significance (t)</p><p className="text-lg font-semibold">{r.metrics.return_ic_t?.toFixed(1)}</p></div>
+                )}
+                {r.metrics.edge_bps != null && (
+                  <div title="Gross directional edge: average return per bar (in basis points) of a frictionless strategy that follows the forecast's direction every bar. Directly comparable to fees — e.g. 3 bps of edge cannot survive a 10 bps round-trip fee."><p className="text-xs text-muted-foreground">Edge (bps/bar)</p><p className="text-lg font-semibold">{r.metrics.edge_bps?.toFixed(1)}</p></div>
+                )}
+                {(r.horizon ?? 1) > 1 && (
+                  <div title="Bars per forecast step: this run forecast the close H bars ahead over non-overlapping windows and was scored on the H-bar move (the local trend), not the next candle."><p className="text-xs text-muted-foreground">Horizon</p><p className="text-lg font-semibold">{r.horizon} bars</p></div>
+                )}
               </div>
             ) : null}
             {r?.vol_metrics && (
-              <div className="rounded-md border border-dashed p-3" title="Quality of the genuine one-step volatility forecast (the bar's realized range-vol, ln(high/low)). Correlation is predicted vs realized; higher = the model anticipates calm/violent bars well. Direction is ~random net of fees, but volatility is the forecastable signal.">
+              <div className="rounded-md border border-dashed p-3" title="Quality of the genuine one-step volatility forecast (the bar's realized range-vol, ln(high/low)). Correlation is the Pearson Correlation Coefficient (linear, on raw values) of predicted vs realized; higher = the model anticipates calm/violent bars well. Direction is ~random net of fees, but volatility is the forecastable signal.">
                 <p className="text-xs text-muted-foreground mb-1">Volatility forecast (predicted vs realized range-vol)</p>
                 <div className="flex gap-6">
                   <div><span className="text-xs text-muted-foreground">Correlation </span><span className="text-base font-semibold">{r.vol_metrics.corr?.toFixed(4)}</span></div>
@@ -402,7 +495,7 @@ function ModelFit({ sim }: { sim: KlineSimulationResponse }) {
                     if (name === "band") return [Array.isArray(v) ? `${Number(v[0]).toLocaleString()} – ${Number(v[1]).toLocaleString()}` : v, "P10–P90"]
                     return [Number(v).toLocaleString(), SERIES_LABEL[name] ?? name]
                   }) as any}
-                  contentStyle={{ fontSize: 12, borderRadius: 6 }}
+                  contentStyle={CHART_TOOLTIP_STYLE} labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                 />
                 <Legend formatter={(v) => SERIES_LABEL[v as string] ?? v} wrapperStyle={{ fontSize: 12 }} />
                 {series.has("band") && hasBand && <Area dataKey="band" stroke="none" fill="#26a69a" fillOpacity={0.12} isAnimationActive={false} connectNulls />}
@@ -929,7 +1022,13 @@ function BacktestTab({ sim }: { sim: KlineSimulationResponse }) {
       </div>
 
       {error ? (
-        <p className="text-sm text-muted-foreground py-8">No quantile-based predictions to backtest (the model produced no quantiles).</p>
+        <p className="text-sm text-muted-foreground py-8">
+          {/* Only a 400 means "no quantiles"; other failures (network, 500)
+              would otherwise be misdiagnosed with that message. */}
+          {String((error as Error).message ?? "").includes("No quantile-based predictions")
+            ? "No quantile-based predictions to backtest (the model produced no quantiles)."
+            : `Backtest failed: ${(error as Error).message || "request error"}`}
+        </p>
       ) : !data ? (
         <p className="text-sm text-muted-foreground py-8">{isFetching ? "Running backtest…" : "—"}</p>
       ) : (
@@ -981,7 +1080,7 @@ function BacktestTab({ sim }: { sim: KlineSimulationResponse }) {
                 <Tooltip
                   labelFormatter={(t) => new Date(t as number).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
                   formatter={((v: any, name: any) => [`${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`, name === "strategy" ? "Strategy" : "Buy & hold"]) as any}
-                  contentStyle={{ fontSize: 12, borderRadius: 6 }}
+                  contentStyle={CHART_TOOLTIP_STYLE} labelStyle={CHART_TOOLTIP_LABEL_STYLE}
                 />
                 <Line type="monotone" dataKey="buy_hold" stroke="#888" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="strategy" stroke="#26a69a" strokeWidth={1.5} dot={false} isAnimationActive={false} />
@@ -1027,9 +1126,11 @@ export default function SimulationsPage() {
   const [simDeleteUnderstood, setSimDeleteUnderstood] = useState(false)
   const [simDeleteConfirmText, setSimDeleteConfirmText] = useState("")
 
+  const [currentPage, setCurrentPage] = useState(1)
+
   const { data: listData } = useQuery({
     queryKey: ["klineSimulations", search, sortField, sortDir],
-    queryFn: () => klineSimulationsApi.list({ search, sort_field: sortField, sort_dir: sortDir, limit: 200 }),
+    queryFn: () => klineSimulationsApi.list({ search, sort_field: sortField, sort_dir: sortDir, limit: 500 }),
     refetchInterval: (q) => {
       const items = q.state.data?.items ?? []
       return items.some((s) => s.status === "pending" || s.status === "started") ? 2000 : false
@@ -1038,6 +1139,15 @@ export default function SimulationsPage() {
   const sims = listData?.items ?? []
   const visibleSims = showOnlySelected ? sims.filter((s) => selectedIds.has(s.id)) : sims
   const selectedSim = useMemo(() => sims.find((s) => s.id === selectedSimId) ?? null, [sims, selectedSimId])
+
+  // Client-side pagination over the (server-sorted/filtered) list — same design
+  // as the coins page. Jump back to page 1 whenever the visible set changes.
+  const totalSimPages = Math.max(1, Math.ceil(visibleSims.length / SIMS_PER_PAGE))
+  const simPage = Math.min(currentPage, totalSimPages)
+  const pageSims = visibleSims.slice((simPage - 1) * SIMS_PER_PAGE, simPage * SIMS_PER_PAGE)
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [search, sortField, sortDir, showOnlySelected])
 
   // Drop the "show only selected" filter once nothing is selected.
   useEffect(() => {
@@ -1054,6 +1164,17 @@ export default function SimulationsPage() {
       queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
       toast.success("Simulation deleted")
     },
+  })
+  const rerunMutation = useMutation({
+    mutationFn: (id: string) => klineSimulationsApi.rerun(id),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      // Jump to the freshly-queued run so its progress is visible immediately.
+      setSelectedSimId(created.id)
+      toast.success("Rerun queued")
+    },
+    onError: () => { toast.error("Failed to start rerun") },
   })
 
   function openDeleteDialog() {
@@ -1110,7 +1231,18 @@ export default function SimulationsPage() {
     if (el) setIndicatorStyle({ left: el.offsetLeft, width: el.offsetWidth })
   }, [activeTab, selectedSim, detailMaximized])
 
-  const allSelected = visibleSims.length > 0 && visibleSims.every((s) => selectedIds.has(s.id))
+  // Header checkbox operates on the current page (coins-page semantics); the
+  // dropdown next to it still selects across the whole loaded list.
+  const allPageSelected = pageSims.length > 0 && pageSims.every((s) => selectedIds.has(s.id))
+  const somePageSelected = pageSims.some((s) => selectedIds.has(s.id))
+
+  function handleHeaderCheckbox() {
+    if (allPageSelected) {
+      setSelectedIds((prev) => { const n = new Set(prev); pageSims.forEach((s) => n.delete(s.id)); return n })
+    } else {
+      setSelectedIds((prev) => { const n = new Set(prev); pageSims.forEach((s) => n.add(s.id)); return n })
+    }
+  }
 
   // Distinct coins across the loaded simulations, for the header "Select <coin>" items.
   const coinSymbols = useMemo(
@@ -1143,8 +1275,8 @@ export default function SimulationsPage() {
                 <TableHead className="w-12 pl-4">
                   <div className="flex items-center gap-0.5">
                     <Checkbox
-                      checked={allSelected ? true : selectedIds.size > 0 ? "indeterminate" : false}
-                      onCheckedChange={(c) => setSelectedIds(c ? new Set(visibleSims.map((s) => s.id)) : new Set())}
+                      checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+                      onCheckedChange={handleHeaderCheckbox}
                     />
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -1172,8 +1304,18 @@ export default function SimulationsPage() {
                 <TableHead><SortHeader field="quote_asset" label="Trading Pair" /></TableHead>
                 <TableHead><SortHeader field="interval" label="Timeframe" /></TableHead>
                 <TableHead><SortHeader field="strategy" label="Strategy" /></TableHead>
+                <TableHead title={"Price skill in [-1, 1], computed for EVERY run: the directional return IC (Information Coefficient) — Spearman's rank correlation (Pearson correlation on the ranks) of predicted vs realized moves, both relative to the previous close. Higher = more edge; ~0 = no exploitable signal; negative = inverse. Parameter-free and independent of the backtest-tab knobs."}>
+                  <SortHeader field="score" label="Score" />
+                </TableHead>
+                <TableHead title={"Significance of the (price) Score: its t-statistic under the no-signal null, t = score x sqrt((n-2)/(1-score^2)) where n = scored bars. Unlike the Score it grows with sample size, so it answers \"is this edge statistically REAL\" — the column to sort by when screening many runs. Rule of thumb: pure chance across ~1000 runs produces a max around 3-3.5, so green (>= 4) marks genuine discovery candidates, amber (>= 3) is worth a look, and strongly negative values flag an inverted signal."}>
+                  <SortHeader field="score_t" label="Sig" />
+                </TableHead>
+                <TableHead title={"Volatility skill, only for runs with Forecast volatility on: the Pearson correlation (linear, on raw values) of the genuine one-step vol forecast vs realized range-vol (ln(high/low)). Empty for all other runs — it is NEVER approximated from the quantile-band width. Kept separate from Score because IC and vol-correlation live on different scales (vol corr 0.3-0.6 is normal, return IC 0.05 is already notable), so one mixed column could not be sorted meaningfully. Hover a value for its own significance t."}>
+                  <SortHeader field="score_vol" label="Vol" />
+                </TableHead>
                 <TableHead><SortHeader field="start_date" label="Date Range" /></TableHead>
                 <TableHead><SortHeader field="finished_at" label="Finished" /></TableHead>
+                <TableHead><SortHeader field="status" label="Status" /></TableHead>
                 <TableHead className="w-10 text-center">
                   <button onClick={() => handleSort("starred")} className="flex items-center gap-1 font-medium hover:text-foreground transition-colors mx-auto">
                     <Star className={cn("h-4 w-4", sortField === "starred" ? "" : "opacity-40")} />
@@ -1183,8 +1325,8 @@ export default function SimulationsPage() {
             </TableHeader>
             <TableBody>
               {visibleSims.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-8">No simulations yet</TableCell></TableRow>
-              ) : visibleSims.map((sim) => (
+                <TableRow><TableCell colSpan={13} className="text-center text-sm text-muted-foreground py-8">No simulations yet</TableCell></TableRow>
+              ) : pageSims.map((sim) => (
                 <TableRow
                   key={sim.id}
                   data-state={selectedSimId === sim.id ? "selected" : undefined}
@@ -1207,8 +1349,12 @@ export default function SimulationsPage() {
                   <TableCell className="font-mono text-sm">{sim.coin_symbol}{sim.quote_asset}</TableCell>
                   <TableCell className="text-sm">{sim.interval}</TableCell>
                   <TableCell className="text-xs">{strategyLabel(sim)}</TableCell>
+                  <TableCell><ScoreCell sim={sim} /></TableCell>
+                  <TableCell><SigCell sim={sim} /></TableCell>
+                  <TableCell><VolScoreCell sim={sim} /></TableCell>
                   <TableCell className="text-xs font-mono">{sim.start_date} → {sim.end_date}</TableCell>
-                  <TableCell><StatusCell sim={sim} /></TableCell>
+                  <TableCell><FinishedCell sim={sim} /></TableCell>
+                  <TableCell><StatusBadge sim={sim} /></TableCell>
                   <TableCell className="text-center w-10" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => starMutation.mutate({ id: sim.id, starred: !sim.starred })} className="hover:text-amber-400 transition-colors" aria-label="Toggle star">
                       <Star className={cn("h-4 w-4", sim.starred ? "fill-amber-400 text-amber-400" : "text-muted-foreground")} />
@@ -1219,6 +1365,48 @@ export default function SimulationsPage() {
             </TableBody>
           </Table>
         </div>
+
+        {visibleSims.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-1.5">
+            <span className="text-s text-muted-foreground">
+              Showing {(simPage - 1) * SIMS_PER_PAGE + 1}–{Math.min(simPage * SIMS_PER_PAGE, visibleSims.length)} of {visibleSims.length} simulations
+            </span>
+            {totalSimPages > 1 && (
+              <Pagination className="w-auto mx-0">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={simPage === 1}
+                    />
+                  </PaginationItem>
+                  {buildPaginationPages(simPage, totalSimPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <PaginationItem key={`e${i}`}>
+                        <PaginationEllipsis />
+                      </PaginationItem>
+                    ) : (
+                      <PaginationItem key={p}>
+                        <PaginationLink
+                          isActive={simPage === p}
+                          onClick={() => setCurrentPage(p)}
+                        >
+                          {p}
+                        </PaginationLink>
+                      </PaginationItem>
+                    )
+                  )}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => setCurrentPage((p) => Math.min(totalSimPages, p + 1))}
+                      disabled={simPage === totalSimPages}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            )}
+          </div>
+        )}
 
         {selectedIds.size > 0 && (
           <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30">
@@ -1310,6 +1498,28 @@ export default function SimulationsPage() {
                 <FieldRow label={selectedSim.models.length > 1 ? "Models" : "Model"}><Input value={selectedSim.models.join(", ")} readOnly className="opacity-70 cursor-default font-mono" /></FieldRow>
                 <FieldRow label="Date Range"><Input value={`${selectedSim.start_date} → ${selectedSim.end_date}`} readOnly className="opacity-70 cursor-default font-mono" /></FieldRow>
                 {(() => {
+                  // Run options folded into config at create time.
+                  const cfg = selectedSim.config as { forecast_vol?: boolean; horizon?: number; use_covariates?: boolean; covariate_mode?: string } | null
+                  const opts: { label: string; tip: string }[] = []
+                  const covMode = cfg?.covariate_mode ?? (cfg?.use_covariates ? "native" : "off")
+                  if (covMode === "native") opts.push({ label: "Signal covariates (native)", tip: "The swing-signal series (volume/range/trade z-scores, taker tilt, streak, stretch, wicks) were fed to the model as native covariates during the walk-forward." })
+                  if (covMode === "external") opts.push({ label: "Signal covariates (external)", tip: "The swing-signal series (volume/range/trade z-scores, taker tilt, streak, stretch, wicks) adjusted each forecast via a trailing Ridge fitted on the run's own past residual history — strictly past-only, works with any engine." })
+                  if (cfg?.forecast_vol) opts.push({ label: "Volatility forecast", tip: "A second walk-forward forecast the realized range-vol series — scored in the Vol column and available to the Backtest tab's vol strategies." })
+                  if ((cfg?.horizon ?? 1) > 1) opts.push({ label: `Horizon ${cfg!.horizon} bars`, tip: "Forecasts scored on the H-bar move over non-overlapping windows rather than the next bar." })
+                  if (opts.length === 0) return null
+                  return (
+                    <FieldRow label="Run options">
+                      <div className="flex flex-wrap gap-1.5">
+                        {opts.map((o) => (
+                          <span key={o.label} title={o.tip} className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2.5 py-1 text-xs font-medium cursor-help">
+                            {o.label}
+                          </span>
+                        ))}
+                      </div>
+                    </FieldRow>
+                  )
+                })()}
+                {(() => {
                   const cfg = selectedSim.config as { strategy_name?: string; parameters?: Record<string, string> } | null
                   const entries = Object.entries(cfg?.parameters ?? {})
                   if (!cfg?.strategy_name && entries.length === 0) return null
@@ -1338,13 +1548,16 @@ export default function SimulationsPage() {
                 <SimAnalysis sim={selectedSim} />
               </TabsContent>
 
+              {/* key={sim.id} resets per-sim state (selected model, zoom,
+                  page, selection) when switching simulations — otherwise a
+                  stale model/page from sim A blanks sim B's data. */}
               <TabsContent value="modelfit" className="mt-6 pl-[2px] pb-8">
-                <ModelFit sim={selectedSim} />
+                <ModelFit key={selectedSim.id} sim={selectedSim} />
               </TabsContent>
 
               <TabsContent value="predictions" className="mt-6 pl-[2px] pb-8 overflow-x-auto">
                 {selectedSim.status === "success" || selectedSim.status === "stopped" ? (
-                  <PredictionsTable simId={selectedSim.id} isKline={selectedSim.strategy === "kline"} />
+                  <PredictionsTable key={selectedSim.id} simId={selectedSim.id} isKline={selectedSim.strategy === "kline"} />
                 ) : (
                   <p className="text-sm text-muted-foreground py-8">Predictions will be available once the simulation completes.</p>
                 )}
@@ -1360,6 +1573,22 @@ export default function SimulationsPage() {
 
               {/* ─ Actions ─ */}
               <TabsContent value="actions" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
+                <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold">Rerun simulation</p>
+                    <p className="text-xs text-muted-foreground">Run this simulation again from the start with the exact same coin, trading pair, timeframe, date range, strategy and parameters. Creates a new run; this one is kept.</p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!selectedSim || rerunMutation.isPending}
+                    onClick={() => selectedSim && rerunMutation.mutate(selectedSim.id)}
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", rerunMutation.isPending && "animate-spin")} />
+                    Rerun
+                  </Button>
+                </div>
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-destructive">Delete simulation</p>

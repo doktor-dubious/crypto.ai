@@ -22,11 +22,15 @@ from crypto_ai.api.routes import (
     import_templates,
     imports,
     kline_simulations,
+    live_ingest,
     kline_strategies,
+    paper_trade,
+    strategy_templates,
     klines,
     llms,
     logs,
     optimization,
+    orchestrations,
     outlet_groups,
     outlets,
     outlier_investigate,
@@ -39,12 +43,15 @@ from crypto_ai.api.routes import (
     price_history,
     sales,
     sales_filters,
+    scalp_analysis,
     simulation_filters,
     simulation_strategies,
     simulations,
+    swing_analysis,
     tasks,
     token,
     users,
+    workers,
 )
 
 api_router = APIRouter()
@@ -81,13 +88,22 @@ api_router.include_router(currencies.router, prefix="/currencies", tags=["curren
 api_router.include_router(coins.router, prefix="/coins", tags=["coins"])
 api_router.include_router(klines.router, prefix="/klines", tags=["klines"])
 api_router.include_router(kline_simulations.router, prefix="/kline-simulations", tags=["kline-simulations"])
+api_router.include_router(
+    swing_analysis.router, prefix="/swing-analysis", tags=["swing-analysis"]
+)
+api_router.include_router(
+    scalp_analysis.router, prefix="/scalp-analysis", tags=["scalp-analysis"]
+)
 api_router.include_router(kline_strategies.router, prefix="/kline-strategies", tags=["kline-strategies"])
+api_router.include_router(strategy_templates.router, prefix="/strategy-templates", tags=["strategy-templates"])
+api_router.include_router(paper_trade.router, prefix="/paper-trade", tags=["paper-trade"])
 api_router.include_router(binance_import.router, prefix="/binance-import", tags=["binance-import"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])
 api_router.include_router(import_templates.router, prefix="/import-templates", tags=["import-templates"])
 api_router.include_router(imports.router, prefix="/imports", tags=["imports"])
 api_router.include_router(optimization.router, prefix="/optimization", tags=["optimization"])
+api_router.include_router(orchestrations.router, prefix="/orchestrations", tags=["orchestrations"])
 api_router.include_router(outlets.router, prefix="/outlets", tags=["outlets"])
 api_router.include_router(outlet_groups.router, prefix="/outlet-groups", tags=["outlet-groups"])
 api_router.include_router(
@@ -113,5 +129,7 @@ api_router.include_router(sales_filters.router, prefix="/sales-filters", tags=["
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(token.router, prefix="/tokens", tags=["tokens"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(workers.router, prefix="/workers", tags=["workers"])
+api_router.include_router(live_ingest.router, prefix="/live-ingest", tags=["live-ingest"])
 
 __all__ = ["api_router"]

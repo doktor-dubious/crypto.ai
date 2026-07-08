@@ -28,6 +28,13 @@ class _SlidingWindowDataset(Dataset):
                     s[i + ctx_len:i + ctx_len + horizon].astype(np.float32),
                 ))
 
+    @classmethod
+    def from_windows(cls, windows: list[tuple[np.ndarray, np.ndarray]]) -> "_SlidingWindowDataset":
+        """Build a dataset from a pre-sliced window list (e.g. a train/val split)."""
+        obj = cls.__new__(cls)
+        obj.windows = windows
+        return obj
+
     def __len__(self):
         return len(self.windows)
 
@@ -57,6 +64,30 @@ _DEFAULT_SANE_CHECK_EPOCHS = 5
 _DEFAULT_MAX_SANE_LOSS = 10.0
 
 
+def _forecast_batch(nn_module, ctx_batch, p, o, q, horizon):
+    """Run TimesFM forward on a context batch and return the horizon forecast."""
+    bsz = ctx_batch.shape[0]
+    patched = ctx_batch.reshape(bsz, -1, p)
+    masks = torch.zeros_like(patched, dtype=torch.bool)
+    (_, _, output_ts, _), _ = nn_module(patched, masks)
+    return output_ts.reshape(bsz, -1, o, q)[:, -1, :horizon, :].mean(dim=-1)
+
+
+def _eval_avg_loss(nn_module, loader, p, o, q, horizon, device) -> float:
+    """Average MSE over a loader with no gradient updates (held-out validation)."""
+    nn_module.eval()
+    total = 0.0
+    n = 0
+    with torch.no_grad():
+        for ctx_batch, tgt_batch in loader:
+            ctx_batch = ctx_batch.to(device)
+            tgt_batch = tgt_batch.to(device)
+            forecast = _forecast_batch(nn_module, ctx_batch, p, o, q, horizon)
+            total += fn.mse_loss(forecast, tgt_batch).item()
+            n += 1
+    return total / max(n, 1)
+
+
 def _train_outlet(
     model,
     series: np.ndarray,
@@ -68,7 +99,11 @@ def _train_outlet(
     patience: int = 0,
     sane_check_epochs: int | None = None,
     max_sane_loss: float | None = None,
+    early_stopping_method: str = "training",
+    validation_split: float = 0.0,
 ):
+    import copy
+
     sane_epochs = sane_check_epochs if sane_check_epochs is not None else _DEFAULT_SANE_CHECK_EPOCHS
     max_loss = max_sane_loss if max_sane_loss is not None else _DEFAULT_MAX_SANE_LOSS
 
@@ -81,81 +116,113 @@ def _train_outlet(
     if context_length % p != 0:
         context_length = ((context_length // p) + 1) * p
 
-    dataset = _SlidingWindowDataset([series], context_length, horizon)
-    if len(dataset) == 0:
+    full = _SlidingWindowDataset([series], context_length, horizon)
+    if len(full) == 0:
         return False
 
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=0,
+    # Validation method: hold out the most-recent fraction of windows and
+    # select/early-stop on their loss instead of the training loss, so the
+    # "best epoch" reflects generalization rather than memorization.
+    use_val = (
+        early_stopping_method == "validation"
+        and 0.0 < validation_split < 1.0
+        and len(full) >= 2
+    )
+    if use_val:
+        n_val = max(1, int(round(len(full) * validation_split)))
+        n_val = min(n_val, len(full) - 1)  # always keep at least one training window
+        train_ds = _SlidingWindowDataset.from_windows(full.windows[:-n_val])
+        val_ds = _SlidingWindowDataset.from_windows(full.windows[-n_val:])
+        logger.info(
+            "  Validation early stopping: %d train / %d val (most recent) windows",
+            len(train_ds), len(val_ds),
+        )
+    else:
+        train_ds, val_ds = full, None
+
+    loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = (
+        DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
+        if val_ds is not None else None
     )
 
     # Snapshot weights so we can roll back if the outlet is pathological
-    import copy
     snapshot = copy.deepcopy(nn_module.state_dict())
-
-    nn_module.train()
     optimizer = AdamW(nn_module.parameters(), lr=lr)
 
-    best_loss = float("inf")
+    best_monitor = float("inf")   # best of the monitored metric (val or train)
+    best_train = float("inf")     # best training loss (for the sane-check only)
+    best_state = None
     stale = 0
 
     for epoch in range(1, epochs + 1):
+        nn_module.train()
         epoch_loss = 0.0
         n = 0
         for ctx_batch, tgt_batch in loader:
             ctx_batch = ctx_batch.to(device)
             tgt_batch = tgt_batch.to(device)
-            bsz = ctx_batch.shape[0]
             optimizer.zero_grad()
-            patched = ctx_batch.reshape(bsz, -1, p)
-            masks = torch.zeros_like(patched, dtype=torch.bool)
-            (_, _, output_ts, _), _ = nn_module(patched, masks)
-            forecast = output_ts.reshape(
-                bsz, -1, o, q,
-            )[:, -1, :horizon, :].mean(dim=-1)
+            forecast = _forecast_batch(nn_module, ctx_batch, p, o, q, horizon)
             loss = fn.mse_loss(forecast, tgt_batch)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(nn_module.parameters(), 1.0)
             optimizer.step()
             epoch_loss += loss.item()
             n += 1
-        avg_loss = epoch_loss / max(n, 1)
-        logger.info(
-            "  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, avg_loss,
-        )
+        train_avg = epoch_loss / max(n, 1)
+        best_train = min(best_train, train_avg)
 
-        # Bail out on pathological outlets: if the best loss across
-        # the first N epochs hasn't dropped below the threshold, the
-        # data is unsuitable.  Restore the weight snapshot so the
-        # shared model isn't corrupted.
-        if epoch == sane_epochs and best_loss > max_loss:
+        # The monitored metric drives best-restore and early stopping.
+        if val_loader is not None:
+            val_avg = _eval_avg_loss(nn_module, val_loader, p, o, q, horizon, device)
+            logger.info(
+                "  Epoch %d/%d — train MSE: %.6f, val MSE: %.6f",
+                epoch, epochs, train_avg, val_avg,
+            )
+            monitor = val_avg
+        else:
+            logger.info("  Epoch %d/%d — avg MSE: %.6f", epoch, epochs, train_avg)
+            monitor = train_avg
+
+        # Track the best epoch so the saved checkpoint is the best-scoring
+        # weights, not whichever epoch we happen to stop on.
+        if monitor < best_monitor:
+            best_monitor = monitor
+            best_state = copy.deepcopy(nn_module.state_dict())
+            stale = 0
+        else:
+            stale += 1
+
+        # Bail out on pathological outlets. Always judged on the *training*
+        # loss, whose threshold is tuned for it.
+        if epoch == sane_epochs and best_train > max_loss:
             logger.warning(
-                "  Best MSE after %d epochs is %.2f (threshold "
-                "%.1f) — skipping outlet (restoring weights)",
+                "  Best train MSE after %d epochs is %.2f (threshold "
+                "%.1f) — skipping series (restoring weights)",
                 sane_epochs,
-                best_loss,
+                best_train,
                 max_loss,
             )
             nn_module.load_state_dict(snapshot)
             nn_module.eval()
             return False
 
-        # Early stopping
-        if patience > 0:
-            if avg_loss < best_loss:
-                best_loss = avg_loss
-                stale = 0
-            else:
-                stale += 1
-                if stale >= patience:
-                    logger.info(
-                        "  Early stopping at epoch %d "
-                        "(no improvement for %d epochs)",
-                        epoch,
-                        patience,
-                    )
-                    break
+        # Patience-based early stopping applies to the training-loss method
+        # only; the validation method runs the full epoch budget and keeps the
+        # best-validation epoch.
+        if not use_val and patience > 0 and stale >= patience:
+            logger.info(
+                "  Early stopping at epoch %d "
+                "(no improvement for %d epochs)",
+                epoch,
+                patience,
+            )
+            break
 
+    # Restore the best-scoring epoch's weights rather than the last epoch's.
+    if best_state is not None:
+        nn_module.load_state_dict(best_state)
     nn_module.eval()
     return True
 
@@ -267,6 +334,8 @@ async def run_finetune(
     sane_check_epochs: int | None = None,
     max_sane_loss: float | None = None,
     allow_new_checkpoint: bool = False,
+    early_stopping_method: str = "training",
+    validation_split: float = 0.0,
 ) -> dict:
     """Fine-tune TimesFM on the provided outlet series.
 
@@ -315,7 +384,7 @@ async def run_finetune(
 
         # Check for graceful stop request between outlets
         if should_stop and should_stop():
-            logger.info("Graceful stop requested after %d/%d outlets", processed, total)
+            logger.info("Graceful stop requested after %d/%d series", processed, total)
             if sync_target and processed > 0:
                 logger.info("  Final sync before stop...")
                 await loop.run_in_executor(
@@ -325,20 +394,20 @@ async def run_finetune(
 
         series = np.array(values, dtype=np.float32)
         if len(series) < context_length + horizon:
-            logger.info("  Outlet %s: too short (%d) — skipping", outlet_id, len(series))
+            logger.info("  Series %s: too short (%d) — skipping", outlet_id, len(series))
             continue
 
-        # Report progress before training so ETA tracks per-outlet, not just completions
+        # Report progress before training so ETA tracks per-series, not just completions
         if on_progress:
             pct = 5 + int(94 * ((idx - 1) / max(total, 1)))
-            await on_progress(pct, f"Training outlet {idx}/{total}")
+            await on_progress(pct, f"Training series {idx}/{total}")
 
         until_sync = sync_every - (processed % sync_every) if sync_target else 0
         logger.info(
-            "  Training on outlet %s (%d points)%s",
+            "  Training on series %s (%d points)%s",
             outlet_id,
             len(series),
-            f" — {until_sync} outlet(s) until next sync" if sync_target else "",
+            f" — {until_sync} series until next sync" if sync_target else "",
         )
         trained = await loop.run_in_executor(
             None,
@@ -347,6 +416,7 @@ async def run_finetune(
                 epochs, learning_rate, batch_size,
                 early_stopping_patience,
                 sane_check_epochs, max_sane_loss,
+                early_stopping_method, validation_split,
             ),
         )
         if trained:
@@ -356,7 +426,7 @@ async def run_finetune(
             processed += 1
             if sync_target and processed % sync_every == 0:
                 logger.info(
-                    "  Syncing checkpoint (%d outlets trained)...",
+                    "  Syncing checkpoint (%d series trained)...",
                     processed,
                 )
                 await loop.run_in_executor(
@@ -370,12 +440,12 @@ async def run_finetune(
 
         pct = 5 + int(94 * (idx / max(total, 1)))
         if on_progress:
-            await on_progress(pct, f"Trained {processed}/{total} outlets")
+            await on_progress(pct, f"Trained {processed}/{total} series")
 
     if sync_target and processed > 0:
         logger.info("  Final sync after completion...")
         await loop.run_in_executor(
             None, _sync_checkpoint, output_dir, sync_target,
         )
-    logger.info("TimesFM fine-tuning done: %d/%d outlets trained", processed, total)
+    logger.info("TimesFM fine-tuning done: %d/%d series trained", processed, total)
     return {"stopped": False, "finetuned": processed, "pathological": pathological}

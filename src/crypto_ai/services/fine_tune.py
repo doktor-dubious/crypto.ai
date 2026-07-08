@@ -22,9 +22,12 @@ class FineTuneTrackingService:
     async def create(
         self,
         *,
-        customer_id: str,
         name: str,
         prediction_engine_id: str,
+        customer_id: str | None = None,
+        coin_id: str | None = None,
+        quote_asset: str | None = None,
+        interval: str | None = None,
         task_id: str | None = None,
         outlet_group_id: str | None = None,
         finetune_from: date | None = None,
@@ -34,6 +37,9 @@ class FineTuneTrackingService:
     ) -> FineTune:
         row = FineTune(
             customer_id=customer_id,
+            coin_id=coin_id,
+            quote_asset=quote_asset,
+            interval=interval,
             name=name,
             description=description,
             prediction_engine_id=prediction_engine_id,
@@ -89,6 +95,7 @@ class FineTuneTrackingService:
             .options(
                 selectinload(FineTune.outlet_group),
                 selectinload(FineTune.prediction_engine),
+                selectinload(FineTune.coin),
             )
             .order_by(FineTune.created_at.desc())
             .limit(limit)
@@ -108,6 +115,10 @@ class FineTuneTrackingService:
                 end_condition=r.end_condition,
                 outlet_group_id=r.outlet_group_id,
                 outlet_group_name=r.outlet_group.name if r.outlet_group else None,
+                coin_id=r.coin_id,
+                coin_symbol=r.coin.symbol if r.coin else None,
+                quote_asset=r.quote_asset,
+                interval=r.interval,
                 finetune_from=r.finetune_from,
                 finetune_to=r.finetune_to,
                 finetuned_outlets=r.finetuned_outlets,

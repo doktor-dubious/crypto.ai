@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
+import { CloudDownload } from "@/components/animate-ui/icons/cloud-download"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
 import { tasksApi, customersApi, type TaskRecordResponse, type TaskStatus } from "@/lib/api"
@@ -55,7 +56,20 @@ function TaskItem({ task, onTaskClick }: { task: TaskRecordResponse; onTaskClick
   }, [])
 
   const iconControls = useAnimation()
+  const [hovered, setHovered] = useState(false)
+  const onIconEnter = () => { setHovered(true); iconControls.start("animate") }
+  const onIconLeave = () => { setHovered(false); iconControls.start("normal") }
+
+  // Import tasks use the animate-ui CloudDownload icon (own `animate` trigger
+  // API); every other type uses the motion-controls animated-icons set.
   const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : task.type === "optimization" ? AnimatedSettings : AnimatedFlask
+  const renderIcon = (className: string, size: number) =>
+    task.type === "import" ? (
+      <CloudDownload className={className} size={size} animate={hovered} />
+    ) : (
+      <Icon className={className} controls={iconControls} />
+    )
+
   const timeStr = (task.started_at ?? task.created_at)
     ? formatDistanceToNow(new Date(task.started_at ?? task.created_at), {
         addSuffix: true,
@@ -67,11 +81,11 @@ function TaskItem({ task, onTaskClick }: { task: TaskRecordResponse; onTaskClick
       <li
         className="flex items-center justify-center py-1 cursor-pointer"
         onClick={() => onTaskClick(task)}
-        onMouseEnter={() => iconControls.start("animate")}
-        onMouseLeave={() => iconControls.start("normal")}
+        onMouseEnter={onIconEnter}
+        onMouseLeave={onIconLeave}
       >
         <div className="relative">
-          <Icon className="h-4 w-4 text-[var(--sidebar-foreground)]/70" controls={iconControls} />
+          {renderIcon("h-4 w-4 text-[var(--sidebar-foreground)]/70", 16)}
           <span
             className={cn(
               "absolute -right-1 -top-1 h-2 w-2 rounded-full",
@@ -93,10 +107,10 @@ function TaskItem({ task, onTaskClick }: { task: TaskRecordResponse; onTaskClick
     <li
       className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--sidebar-accent)] transition-colors cursor-pointer"
       onClick={() => onTaskClick(task)}
-      onMouseEnter={() => iconControls.start("animate")}
-      onMouseLeave={() => iconControls.start("normal")}
+      onMouseEnter={onIconEnter}
+      onMouseLeave={onIconLeave}
     >
-      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--sidebar-foreground)]/60" controls={iconControls} />
+      {renderIcon("mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--sidebar-foreground)]/60", 14)}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">

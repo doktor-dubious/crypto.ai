@@ -1,8 +1,14 @@
 """Pydantic schemas for KlineStrategy (crypto-simulation presets) + parameters."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+# How the swing-signal series reach the model: no covariates, the engine's
+# native model-side covariate API, or the engine-agnostic external trailing
+# Ridge fitted on the walk-forward's own residual history.
+CovariateMode = Literal["off", "native", "external"]
 
 
 # ─── Parameters ──────────────────────────────────────────────────────────────
@@ -45,6 +51,11 @@ class KlineStrategyBase(BaseModel):
     finetuned_model: str | None = None
     forecast_engine: str | None = None
     forecast_vol: bool = False
+    # Bars per forecast step (1 = next bar; H>1 = non-overlapping H-bar trend).
+    horizon: int = 1
+    # Swing-signal covariates: off / native (TimesFM, Chronos-2) / external
+    # (trailing-Ridge walk-forward adjustment, any engine).
+    covariate_mode: CovariateMode = "off"
     starred: bool = False
 
 
@@ -59,6 +70,8 @@ class KlineStrategyUpdate(BaseModel):
     finetuned_model: str | None = None
     forecast_engine: str | None = None
     forecast_vol: bool | None = None
+    horizon: int | None = None
+    covariate_mode: CovariateMode | None = None
     starred: bool | None = None
 
 

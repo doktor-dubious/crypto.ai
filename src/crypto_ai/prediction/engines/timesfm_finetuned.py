@@ -19,15 +19,32 @@ class TimesFMFinetunedEngine(TimesFMEngine):
     fine-tuned checkpoint directory is missing or fails to load.
     """
 
+    # Fine-tunes are written under this base engine's slug (the inference engine
+    # is "timesfm_finetuned" but training runs on the "timesfm" engine).
+    finetune_source_slug = "timesfm"
+
     def __init__(self, checkpoint_path: str | None = None, allow_fallback: bool = True):
         super().__init__()
         self._checkpoint_path = checkpoint_path
         self.allow_fallback = allow_fallback
 
+    def configure_checkpoint(self, path: str | None) -> None:
+        """Point the engine at a specific fine-tuned checkpoint directory.
+
+        Used to select the per-(coin/pair/timeframe) checkpoint for a forecast.
+        If the path differs from the one currently loaded, the cached model is
+        dropped so the next predict lazily reloads from the new path (and falls
+        back to base TimesFM if that directory is missing).
+        """
+        if path != self._checkpoint_path:
+            self._checkpoint_path = path
+            self._model = None
+            self._model_loaded = False
+
     def get_capabilities(self) -> EngineCapabilities:
         caps = super().get_capabilities()
         caps.name = "Google TimesFM (fine-tuned)"
-        caps.description = "Foundation model fine-tuned on in-domain sales data"
+        caps.description = "Foundation model fine-tuned on in-domain data"
         return caps
 
     def _load_model(self) -> None:

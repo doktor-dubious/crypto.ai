@@ -14,8 +14,10 @@ class ElasticityEvent(Base):
 
     __tablename__ = "elasticity_event"
 
-    price_change_event_id = Column(SA_UUID(as_uuid=False), ForeignKey("price_change_event.id"))
-    outlet_id = Column(SA_UUID(as_uuid=False), ForeignKey("outlet.id"))
+    price_change_event_id = Column(
+        SA_UUID(as_uuid=False), ForeignKey("price_change_event.id", ondelete="CASCADE")
+    )
+    outlet_id = Column(SA_UUID(as_uuid=False), ForeignKey("outlets.id", ondelete="CASCADE"))
     engine = Column(String, nullable=False)
     post_days = Column(Integer, nullable=False)
     task_id = Column(String, nullable=True)

@@ -23,6 +23,7 @@ from crypto_ai.prediction.engine import (
     PredictionEngine,
     interpolate_quantile,
 )
+from crypto_ai.prediction.engines.chronos_pipeline_engine import _sanitize_nan
 from crypto_ai.prediction.preprocessor import DataPreprocessor
 from crypto_ai.schemas.prediction import PredictionResult
 
@@ -305,10 +306,12 @@ class TiRexEngine(PredictionEngine):
         for i, item in enumerate(items):
             preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
             pp = prepared[i]["preprocessor"]
-            preds = pp.denormalize(preds_norm)
-            lower = pp.denormalize(lower_norm)
-            upper = pp.denormalize(upper_norm)
-            quantiles = pp.denormalize(quantiles_norm)
+            # Sanitize NaN like the TimesFM/Chronos engines: a NaN forward
+            # pass otherwise propagates into stored predictions and metrics.
+            preds = _sanitize_nan(pp.denormalize(preds_norm))
+            lower = _sanitize_nan(pp.denormalize(lower_norm))
+            upper = _sanitize_nan(pp.denormalize(upper_norm))
+            quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
             # PAD adjustment — applied per-date, not via Ridge
             pad_adj = self.compute_pad_adjustments(
@@ -395,15 +398,14 @@ class TiRexEngine(PredictionEngine):
         import torch
         from sklearn.linear_model import Ridge
 
-        # Build batch context tensor — pad shorter series on the left with zeros.
-        max_len = min(max(len(item["values"]) for item in batch), MAX_CONTEXT)
+        # Inference below is per-item, so no batch padding is needed — padding
+        # shorter series with zeros would feed the model fake "zero price"
+        # history. Just cap each context at MAX_CONTEXT.
         contexts = []
         for item in batch:
             v = item["values"]
-            if len(v) > max_len:
-                v = v[-max_len:]
-            if len(v) < max_len:
-                v = np.concatenate([np.zeros(max_len - len(v)), v])
+            if len(v) > MAX_CONTEXT:
+                v = v[-MAX_CONTEXT:]
             contexts.append(v)
 
         # TiRex forecast() does not reliably batch — call per-item.

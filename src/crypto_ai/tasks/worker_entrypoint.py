@@ -139,6 +139,11 @@ def main() -> None:
             f"--pool={pool}",
             f"--hostname=celery@{worker_name}",
             f"--queues={queues}",
+            # Embedded beat: this single-process worker also runs the periodic
+            # scheduler (paper-trade engine tick). Only the single-worker path
+            # embeds beat; the multi-GPU branch above must not (it'd double-fire).
+            "-B",
+            "--schedule=/tmp/celerybeat-schedule",
         ]
 
         # Dev convenience: Celery workers load task modules at boot and do NOT

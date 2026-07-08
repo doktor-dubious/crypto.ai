@@ -1,6 +1,6 @@
 """KlineStrategy: a reusable crypto-simulation configuration preset."""
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,6 +22,15 @@ class KlineStrategy(Base):
     # Forecast engine name (e.g. "timesfm", "chronos2").
     forecast_engine: Mapped[str | None] = mapped_column(String, nullable=True)
     forecast_vol: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # Bars per forecast step. 1 = next-bar walk-forward; H>1 scores the model on
+    # H-bar moves over non-overlapping windows (call the local trend, not the
+    # next wiggle). Price strategy only.
+    horizon: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # How the swing-signal series (volume/range/trades z, taker, streak,
+    # stretch, wicks) reach the model: "off" | "native" (model-side covariate
+    # API — TimesFM/Chronos-2 only) | "external" (trailing Ridge on the pooled
+    # walk-forward residual history — works with any engine).
+    covariate_mode: Mapped[str] = mapped_column(String, nullable=False, server_default="off")
     starred: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     parameters: Mapped[list["KlineStrategyParameter"]] = relationship(

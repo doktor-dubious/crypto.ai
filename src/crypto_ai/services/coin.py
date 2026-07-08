@@ -47,6 +47,15 @@ class CoinService:
         await self.session.flush()
         return coin
 
+    async def set_categories(self, id: str, categories: list[str]) -> Coin | None:
+        """Replace a coin's CoinGecko category tags."""
+        coin = await self.get(id)
+        if not coin:
+            return None
+        coin.categories = categories
+        await self.session.flush()
+        return coin
+
     async def delete(self, id: str, hard_delete: bool = False) -> bool:
         """Delete a coin."""
         coin = await self.get(id)

@@ -68,13 +68,16 @@ class Kline(Base):
         nullable=False,
         comment="Close price",
     )
+    # Volume fields use unconstrained numeric: low-price/high-supply coins (e.g.
+    # WINUSDT) can have a monthly base volume above 10^12, which overflows the
+    # numeric(20,8) precision cap. Prices keep (20,8) — no asset trades near 10^12.
     volume: Mapped[float] = mapped_column(
-        Numeric(precision=20, scale=8),
+        Numeric(),
         nullable=False,
         comment="Base asset volume",
     )
     quote_asset_volume: Mapped[float] = mapped_column(
-        Numeric(precision=20, scale=8),
+        Numeric(),
         nullable=False,
         comment="Quote asset volume",
     )
@@ -84,12 +87,12 @@ class Kline(Base):
         comment="Number of trades in this period",
     )
     taker_buy_base_asset_volume: Mapped[float] = mapped_column(
-        Numeric(precision=20, scale=8),
+        Numeric(),
         nullable=False,
         comment="Taker buy base asset volume",
     )
     taker_buy_quote_asset_volume: Mapped[float] = mapped_column(
-        Numeric(precision=20, scale=8),
+        Numeric(),
         nullable=False,
         comment="Taker buy quote asset volume",
     )
@@ -97,7 +100,13 @@ class Kline(Base):
     # Relationships
     coin: Mapped["Coin"] = relationship("Coin")
 
-    # Composite index for efficient queries by coin, quote asset, and interval
+    # Unique composite index: one bar per (coin, quote, interval, open_time).
+    # Also serves lookup queries; the importer upserts against it with
+    # ON CONFLICT DO NOTHING so overlapping import ranges can't duplicate bars.
     __table_args__ = (
-        Index("idx_kline_coin_quote_interval_time", "coin_id", "quote_asset", "interval", "open_time"),
+        Index(
+            "idx_kline_coin_quote_interval_time",
+            "coin_id", "quote_asset", "interval", "open_time",
+            unique=True,
+        ),
     )

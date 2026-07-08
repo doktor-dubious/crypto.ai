@@ -1,13 +1,49 @@
 """Coin routes."""
 
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 
-from crypto_ai.api.deps import CoinServiceDep
+from crypto_ai.api.deps import CoinServiceDep, DbSession, TaskServiceDep
 from crypto_ai.schemas.coin import CoinCreate, CoinResponse, CoinUpdate
 
 router = APIRouter()
+
+
+@router.post("/refresh-categories")
+async def refresh_categories(
+    task_service: TaskServiceDep,
+    session: DbSession,
+    coin_service: CoinServiceDep,
+    coin_ids: Annotated[
+        list[str] | None, Query(description="Coin UUIDs; all active coins if omitted")
+    ] = None,
+) -> dict:
+    """Fetch CoinGecko categories for the given coins (or all) in the background.
+
+    Enqueues a single task that tags each coin with its CoinGecko categories.
+    Poll status via GET /binance-import/tasks/{task_id} like other tasks.
+    """
+    from crypto_ai.tasks.metadata import run_category_refresh_task
+
+    if coin_ids:
+        ids = coin_ids
+    else:
+        coins = await coin_service.get_all(limit=100000)
+        ids = [c.id for c in coins]
+
+    if not ids:
+        return {"task_id": None, "count": 0, "message": "No coins to classify"}
+
+    name = f"Categories · {len(ids)} coin(s)"
+    request_data = {"coin_ids": ids, "name": name}
+    task_id = str(uuid.uuid4())
+    await task_service.create(task_id, "metadata", None, name=name, request_data=request_data)
+    await session.commit()
+
+    run_category_refresh_task.apply_async(args=[request_data], task_id=task_id)
+    return {"task_id": task_id, "count": len(ids), "name": name}
 
 
 @router.post("", response_model=CoinResponse, status_code=201)

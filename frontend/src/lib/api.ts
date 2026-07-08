@@ -37,7 +37,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 // ─── Types (mirrored from FastAPI schemas) ────────────────────────────────────
 
 export type TaskStatus = "pending" | "started" | "success" | "failure" | "revoked" | "continued" | "stopped"
-export type TaskType = "prediction" | "simulation" | "kline_simulation" | "import" | "finetune" | "optimization"
+export type TaskType = "prediction" | "simulation" | "kline_simulation" | "import" | "finetune" | "optimization" | "orchestration"
 
 export interface TaskRecordResponse {
   id: string
@@ -150,6 +150,92 @@ export interface WorkerInfo {
   gpu_vram_total_mb: number | null
   gpu_count: number | null
   uptime_s: number | null
+}
+
+// ─── Worker management (system/workers) ──────────────────────────────────────
+
+export type WorkerStatus = "running" | "stopped" | "potential"
+
+export interface WorkerStats {
+  jobs_total: number
+  jobs_instance: number
+  jobs_running: number
+  jobs_success: number
+  jobs_failure: number
+  last_job_at: string | null
+  avg_cpu_time_s: number | null
+  avg_peak_memory_mb: number | null
+}
+
+export interface ManagedWorker {
+  name: string
+  status: WorkerStatus
+  health: string | null
+  models: string[]
+  gpu_name: string | null
+  gpu_vram_total_mb: number | null
+  gpu_count: number | null
+  gpu_index: number | null
+  uptime_s: number | null
+  container_name: string | null
+  service: string | null
+  profile: string | null
+  is_remote: boolean
+  controllable: boolean
+  stats: WorkerStats
+}
+
+export interface WorkerActionResponse { name: string; status: string; message: string }
+export interface WorkerPingResult { name: string; alive: boolean; source: string | null }
+
+export const workersApi = {
+  list: () => apiFetch<ManagedWorker[]>("/workers"),
+  get: (name: string) => apiFetch<ManagedWorker>(`/workers/${encodeURIComponent(name)}`),
+  ping: (name: string) => apiFetch<WorkerPingResult>(`/workers/${encodeURIComponent(name)}/ping`),
+  start: (name: string) => apiFetch<WorkerActionResponse>(`/workers/${encodeURIComponent(name)}/start`, { method: "POST" }),
+  stop: (name: string) => apiFetch<WorkerActionResponse>(`/workers/${encodeURIComponent(name)}/stop`, { method: "POST" }),
+  restart: (name: string) => apiFetch<WorkerActionResponse>(`/workers/${encodeURIComponent(name)}/restart`, { method: "POST" }),
+  remove: (name: string) => apiFetch<WorkerActionResponse>(`/workers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+}
+
+// ─── Live kline ingester (system/workers card) ───────────────────────────────
+
+export interface LiveIngestIntervalStat {
+  interval: string
+  bars: number
+  last_bar_at: string | null
+}
+
+export interface LiveIngestStatus {
+  container_status: "running" | "stopped" | "absent" | "error"
+  container_name: string | null
+  streaming: boolean
+  mode: string | null
+  started_at: string | null
+  uptime_s: number | null
+  heartbeat_at: string | null
+  coins: number | null
+  intervals: string[]
+  streams: number | null
+  connections_up: number | null
+  connections_total: number | null
+  bars_session: number | null
+  last_bar_at: string | null
+  per_interval: LiveIngestIntervalStat[]
+  last_error: string | null
+  last_error_at: string | null
+  message: string | null
+}
+
+export interface LiveIngestActionResponse { status: string; message: string }
+
+export const liveIngestApi = {
+  status: () => apiFetch<LiveIngestStatus>("/live-ingest/status"),
+  start: () => apiFetch<LiveIngestActionResponse>("/live-ingest/start", { method: "POST" }),
+  stop: () => apiFetch<LiveIngestActionResponse>("/live-ingest/stop", { method: "POST" }),
+  restart: () => apiFetch<LiveIngestActionResponse>("/live-ingest/restart", { method: "POST" }),
+  setMode: (mode: "ws" | "poll") =>
+    apiFetch<LiveIngestActionResponse>(`/live-ingest/mode?mode=${mode}`, { method: "POST" }),
 }
 
 export interface CustomerUpdate {
@@ -425,10 +511,11 @@ export const predictionEnginesApi = {
 
 export interface FinetuneRequest {
   prediction_engine_id: string
-  customer_id: string
+  coin_id: string
+  quote_asset: string
+  interval: string
   name?: string
   description?: string
-  outlet_group_id?: string | null
   start_date?: string
   end_date?: string
   context_length?: number
@@ -437,6 +524,8 @@ export interface FinetuneRequest {
   learning_rate?: number
   batch_size?: number
   early_stopping_patience?: number
+  early_stopping_method?: string
+  validation_split?: number
   worker?: string | null
 }
 
@@ -475,7 +564,7 @@ export const finetuneApi = {
 
 export interface FineTuneResponse {
   id: string
-  customer_id: string
+  customer_id: string | null
   name: string
   description: string | null
   started_at: string | null
@@ -483,6 +572,10 @@ export interface FineTuneResponse {
   end_condition: string | null
   outlet_group_id: string | null
   outlet_group_name: string | null
+  coin_id: string | null
+  coin_symbol: string | null
+  quote_asset: string | null
+  interval: string | null
   finetune_from: string | null
   finetune_to: string | null
   finetuned_outlets: number
@@ -1556,6 +1649,7 @@ export interface CoinResponse {
   name: string
   description: string | null
   type: string | null
+  categories: string[]
   active: boolean
   created_at: string
   updated_at: string
@@ -1577,6 +1671,143 @@ export const coinsApi = {
   update: (id: string, data: CoinUpdate) =>
     apiFetch<CoinResponse>(`/coins/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (id: string) => apiFetch<boolean>(`/coins/${id}`, { method: "DELETE" }),
+  // Fetch CoinGecko categories for the given coins (or all if omitted) in the
+  // background; returns a task_id to poll.
+  refreshCategories: (coinIds?: string[]) => {
+    const qs = new URLSearchParams()
+    coinIds?.forEach((id) => qs.append("coin_ids", id))
+    const suffix = qs.toString() ? `?${qs}` : ""
+    return apiFetch<{ task_id: string | null; count: number; name?: string }>(
+      `/coins/refresh-categories${suffix}`,
+      { method: "POST" },
+    )
+  },
+}
+
+// ─── Model Orchestrations ─────────────────────────────────────────────────────
+// Groups are global (no customer scoping). A group screens a pool of candidate
+// engines over a calibration universe (quote asset / interval / coins) and keeps
+// the top-N as a weighted ensemble.
+
+export interface OrchestrationGroupResponse {
+  id: string
+  name: string
+  description: string | null
+  notes: string | null
+  model_composition: Record<string, number>
+  top_n: number
+  calibration_metric: string
+  prediction_target: string | null
+  quote_asset: string
+  interval: string
+  coin_ids: string[]
+  status: string
+  last_calibrated_at: string | null
+  last_calibration_score: number | null
+  created_at: string
+  updated_at: string
+  active: boolean
+}
+
+export interface EngineCompositionItem {
+  engine_slug: string
+  engine_name: string
+  weight: number
+  rank: number
+}
+
+export type OrchestrationMetric = "mase" | "smase" | "mae" | "mape" | "rmse" | "crps"
+
+// Config snapshot the current weights were computed under (staleness basis).
+export interface CalibratedBasis {
+  slugs?: string[]
+  prediction_target?: string | null
+  metric?: string
+  top_n?: number
+}
+
+export interface OrchestrationGroupDetailResponse extends OrchestrationGroupResponse {
+  engines: EngineCompositionItem[]
+  engine_slugs: string[]
+  calibrated_slugs: string[]
+  calibrated_basis: CalibratedBasis
+  engine_workers: Record<string, string>
+  engine_params: Record<string, Record<string, string>>
+  task_id?: string | null
+}
+
+export interface CreateOrchestrationGroupRequest {
+  name: string
+  description?: string
+  notes?: string
+  engine_slugs: string[]
+  metric: OrchestrationMetric
+  top_n: number
+  prediction_target?: string | null
+  quote_asset: string
+  interval: string
+  coin_ids: string[]
+  engine_params?: Record<string, Record<string, string>> | null
+}
+
+export interface UpdateOrchestrationGroupRequest {
+  name?: string
+  description?: string
+  notes?: string
+  metric?: OrchestrationMetric
+  top_n?: number
+  prediction_target?: string | null
+  engine_slugs?: string[]
+  engine_params?: Record<string, Record<string, string>>
+  quote_asset?: string
+  interval?: string
+  coin_ids?: string[]
+}
+
+export interface CalibrateGroupRequest {
+  engine_workers?: Record<string, string> | null
+}
+
+export interface CalibrateGroupResponse {
+  id: string
+  task_id: string
+  status: string
+}
+
+export const orchestrationsApi = {
+  list: () => apiFetch<OrchestrationGroupResponse[]>(`/orchestrations`),
+
+  create: (data: CreateOrchestrationGroupRequest) =>
+    apiFetch<OrchestrationGroupDetailResponse>(`/orchestrations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  get: (groupId: string) =>
+    apiFetch<OrchestrationGroupDetailResponse>(`/orchestrations/${groupId}`),
+
+  update: (groupId: string, data: UpdateOrchestrationGroupRequest) =>
+    apiFetch<OrchestrationGroupResponse>(`/orchestrations/${groupId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  // Selection: re-screen the full candidate pool and pick the top-N.
+  select: (groupId: string, data: CalibrateGroupRequest) =>
+    apiFetch<CalibrateGroupResponse>(`/orchestrations/${groupId}/select`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Reweight: keep the selected models fixed, refresh only their weights.
+  reweight: (groupId: string, data: CalibrateGroupRequest) =>
+    apiFetch<CalibrateGroupResponse>(`/orchestrations/${groupId}/reweight`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  delete: (groupId: string) =>
+    apiFetch<void>(`/orchestrations/${groupId}`, { method: "DELETE" }),
 }
 
 export interface LlmResponse {
@@ -3185,6 +3416,9 @@ export type RidgeCapableEngine =
   | "sundial"
   | "kairos"
   | "tirex"
+  | "toto2"
+  | "ttm"
+  | "tabpfn"
   | "gluon-chronos-bolt"
   | "gluon-chronos2"
   | "gluon-toto"
@@ -3440,6 +3674,24 @@ export const binanceImportApi = {
       error: string | null
       imported_count: number | null
     }>(`/binance-import/tasks/${taskId}`),
+  // Top up every loaded (trading pair + timeframe) series for a coin with the
+  // latest Binance data. Enqueues one background import per combo.
+  refreshCoin: (coinId: string) =>
+    apiFetch<{
+      tasks: { task_id: string; name: string; quote_asset: string; interval: string }[]
+      count: number
+      message?: string
+    }>(`/binance-import/refresh-coin?coin_id=${encodeURIComponent(coinId)}`, { method: "POST" }),
+  // Same as refreshCoin, for many coins at once. Enqueues one import per
+  // (standard interval) for each coin's USDT pair.
+  refreshCoins: (coinIds: string[]) => {
+    const qs = new URLSearchParams()
+    coinIds.forEach((id) => qs.append("coin_ids", id))
+    return apiFetch<{
+      tasks: { task_id: string; name: string; quote_asset: string; interval: string }[]
+      count: number
+    }>(`/binance-import/refresh-coins?${qs}`, { method: "POST" })
+  },
 }
 
 export const klinesApi = {
@@ -3464,6 +3716,14 @@ export const klinesApi = {
 
   getPairCounts: () =>
     apiFetch<Record<string, number>>("/klines/pair-counts"),
+
+  // Most recent data-update timestamp (ISO 8601) per coin id.
+  getLastUpdated: () =>
+    apiFetch<Record<string, string>>("/klines/last-updated"),
+
+  // Average daily traded value in USDT over the last `days` 1d bars, per coin id.
+  getAvgDailyVolume: (days = 30) =>
+    apiFetch<Record<string, number>>(`/klines/avg-daily-volume?days=${days}`),
 
   getTimeframes: (coinId: string, quoteAsset: string) =>
     apiFetch<{ timeframes: string[] }>(`/klines/timeframes/${coinId}/${quoteAsset}`),
@@ -3534,7 +3794,7 @@ export const klinesApi = {
 }
 
 // ── Persisted kline simulations (master/detail) ─────────────────────────────
-export type KlineSimulationStatus = "pending" | "started" | "success" | "failure" | "stopped"
+export type KlineSimulationStatus = "pending" | "started" | "success" | "failure" | "stopped" | "degraded"
 
 export interface KlineSimulationResponse {
   id: string
@@ -3553,6 +3813,16 @@ export interface KlineSimulationResponse {
   status: KlineSimulationStatus
   finished_at: string | null
   result: any | null
+  // Price skill in [-1, 1]: directional return IC (computed for every run).
+  score: number | null
+  // Significance of the price score: t-statistic under the no-signal null.
+  // Sortable to screen many runs for statistically real edge (look for >= 4).
+  score_t: number | null
+  // Volatility skill (corr of predicted vs realized range-vol) + its t.
+  // Only set for forecast_vol runs; kept separate from `score` so each
+  // column sorts one comparable metric.
+  score_vol: number | null
+  score_vol_t: number | null
   error: string | null
   starred: boolean
   active: boolean
@@ -3583,10 +3853,15 @@ export const klineSimulationsApi = {
     strategy?: string
     config?: Record<string, unknown> | null
     forecast_vol?: boolean
+    horizon?: number
+    covariate_mode?: "off" | "native" | "external"
     worker?: string | null
   }) => apiFetch<KlineSimulationResponse>(`/kline-simulations`, { method: "POST", body: JSON.stringify(data) }),
   update: (id: string, data: { starred?: boolean }) =>
     apiFetch<KlineSimulationResponse>(`/kline-simulations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  // Re-run a simulation from scratch with the same parameters; creates a new run.
+  rerun: (id: string) =>
+    apiFetch<KlineSimulationResponse>(`/kline-simulations/${id}/rerun`, { method: "POST" }),
   delete: (id: string) => apiFetch<{ success: boolean }>(`/kline-simulations/${id}`, { method: "DELETE" }),
   status: (id: string) =>
     apiFetch<{
@@ -3624,6 +3899,239 @@ export const klineSimulationsApi = {
     if (params.allow_short) qs.set("allow_short", "true")
     return apiFetch<BacktestResponse>(`/kline-simulations/${id}/backtest?${qs}`)
   },
+  swings: (id: string, params: { threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; use_model?: boolean; signals?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; weights?: string }) => {
+    const qs = new URLSearchParams()
+    qs.set("threshold", String(params.threshold ?? 1.0))
+    qs.set("hold_bars", String(params.hold_bars ?? 6))
+    qs.set("fee_bps", String(params.fee_bps ?? 8))
+    qs.set("side", params.side ?? "long")
+    if (params.use_model) qs.set("use_model", "true")
+    if (params.signals) qs.set("signals", params.signals)
+    if (params.sl_mode && params.sl_mode !== "none") {
+      qs.set("sl_mode", params.sl_mode)
+      qs.set("sl_value", String(params.sl_value ?? 2))
+    }
+    if (params.tp_mode && params.tp_mode !== "none") {
+      qs.set("tp_mode", params.tp_mode)
+      qs.set("tp_value", String(params.tp_value ?? 3))
+    }
+    if (params.weights) qs.set("weights", params.weights)
+    return apiFetch<SwingAnalysisResponse>(`/kline-simulations/${id}/swings?${qs}`)
+  },
+  swingsOptimize: (id: string, params: { fee_bps?: number; use_model?: boolean }) => {
+    const qs = new URLSearchParams()
+    qs.set("fee_bps", String(params.fee_bps ?? 4))
+    if (params.use_model) qs.set("use_model", "true")
+    return apiFetch<SwingOptimizeResponse>(`/kline-simulations/${id}/swings/optimize?${qs}`)
+  },
+}
+
+// ── Standalone swing analysis (Trading → Trend Swings) ──────────────────────
+// Pure kline analysis over an explicit scope — no simulation required.
+// confirm_sim_id optionally borrows a run's stored P(up) for entry confirmation.
+export interface SwingScope {
+  coin_id: string
+  quote_asset: string
+  interval: string
+  start_date: string
+  end_date: string
+}
+
+function swingScopeQs(scope: SwingScope): URLSearchParams {
+  const qs = new URLSearchParams()
+  qs.set("coin_id", scope.coin_id)
+  qs.set("quote_asset", scope.quote_asset)
+  qs.set("interval", scope.interval)
+  qs.set("start_date", scope.start_date)
+  qs.set("end_date", scope.end_date)
+  return qs
+}
+
+// ── Scalping-strategy analysis (Trading → Strategies → Scalping) ────────────
+export interface ScalpSignalPoint {
+  timestamp: string
+  long_score: number | null
+  short_score: number | null
+}
+
+export interface ScalpAnalysisResponse {
+  strategy: string
+  indicator: string
+  params: Record<string, number>
+  vol_gate: string
+  vol_level: number
+  threshold: number
+  hold_bars: number
+  fee_bps: number
+  side: string
+  sl_mode: string
+  sl_value: number
+  tp_mode: string
+  tp_value: number
+  n_bars: number
+  long_entries: number
+  short_entries: number
+  exit_counts: Record<string, number>
+  segments: SwingSegmentStats[]
+  equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
+  trade_markers: { timestamp: string; exit_timestamp: string | null; ret: number; side: string }[]
+  signal_curve: ScalpSignalPoint[]
+}
+
+export const scalpAnalysisApi = {
+  analyze: (scope: SwingScope, params: { strategy: string; indicator?: string; threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; params?: string; vol_gate?: string; vol_level?: number }) => {
+    const qs = swingScopeQs(scope)
+    qs.set("strategy", params.strategy)
+    if (params.indicator) qs.set("indicator", params.indicator)
+    qs.set("threshold", String(params.threshold ?? 1.0))
+    qs.set("hold_bars", String(params.hold_bars ?? 6))
+    qs.set("fee_bps", String(params.fee_bps ?? 4))
+    qs.set("side", params.side ?? "both")
+    if (params.sl_mode && params.sl_mode !== "none") {
+      qs.set("sl_mode", params.sl_mode)
+      qs.set("sl_value", String(params.sl_value ?? 2))
+    }
+    if (params.tp_mode && params.tp_mode !== "none") {
+      qs.set("tp_mode", params.tp_mode)
+      qs.set("tp_value", String(params.tp_value ?? 3))
+    }
+    if (params.params) qs.set("params", params.params)
+    if (params.vol_gate && params.vol_gate !== "off") {
+      qs.set("vol_gate", params.vol_gate)
+      qs.set("vol_level", String(params.vol_level ?? 1.0))
+    }
+    return apiFetch<ScalpAnalysisResponse>(`/scalp-analysis?${qs}`)
+  },
+}
+
+export const swingAnalysisApi = {
+  analyze: (scope: SwingScope, params: { threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; confirm_sim_id?: string | null; signals?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; weights?: string }) => {
+    const qs = swingScopeQs(scope)
+    qs.set("threshold", String(params.threshold ?? 1.0))
+    qs.set("hold_bars", String(params.hold_bars ?? 6))
+    qs.set("fee_bps", String(params.fee_bps ?? 8))
+    qs.set("side", params.side ?? "long")
+    if (params.confirm_sim_id) qs.set("confirm_sim_id", params.confirm_sim_id)
+    if (params.signals) qs.set("signals", params.signals)
+    if (params.sl_mode && params.sl_mode !== "none") {
+      qs.set("sl_mode", params.sl_mode)
+      qs.set("sl_value", String(params.sl_value ?? 2))
+    }
+    if (params.tp_mode && params.tp_mode !== "none") {
+      qs.set("tp_mode", params.tp_mode)
+      qs.set("tp_value", String(params.tp_value ?? 3))
+    }
+    if (params.weights) qs.set("weights", params.weights)
+    return apiFetch<SwingAnalysisResponse>(`/swing-analysis?${qs}`)
+  },
+  optimize: (scope: SwingScope, params: { fee_bps?: number; confirm_sim_id?: string | null }) => {
+    const qs = swingScopeQs(scope)
+    qs.set("fee_bps", String(params.fee_bps ?? 4))
+    if (params.confirm_sim_id) qs.set("confirm_sim_id", params.confirm_sim_id)
+    return apiFetch<SwingOptimizeResponse>(`/swing-analysis/optimize?${qs}`)
+  },
+}
+
+// ── Swing auto-optimizer (bounded sweep, train/validation split) ────────────
+export interface SwingOptimizeStats {
+  n_trades: number
+  win_rate_pct: number
+  avg_net_bps: number
+  edge_t: number
+  total_return_pct: number
+}
+
+export interface SwingOptimizeCombo {
+  threshold: number
+  hold_bars: number
+  side: string
+  sl_mode: string
+  sl_value: number
+  tp_mode: string
+  tp_value: number
+  signals: string[]
+  train: SwingOptimizeStats
+  val: SwingOptimizeStats
+  full: SwingOptimizeStats
+}
+
+export interface SwingOptimizeResponse {
+  evaluated: number
+  total_combos: number
+  partial: boolean
+  fee_bps: number
+  use_model: boolean
+  model_available: boolean
+  split_at: string
+  results: SwingOptimizeCombo[]
+}
+
+// ── Swing/crest analysis (signal-composite backtest over a run's klines) ────
+export interface SwingSegmentStats {
+  label: string
+  n_trades: number
+  win_rate_pct: number
+  avg_net_bps: number
+  edge_t: number
+  total_return_pct: number
+  buy_hold_return_pct: number
+  sharpe: number
+  max_drawdown_pct: number
+}
+
+export interface SwingSignalDiag {
+  key: string
+  name: string
+  enabled: boolean
+  // Contribution multiplier applied (1.0 = equal-weight baseline).
+  weight: number
+  // z components: mean direction-aware contribution at entry bars.
+  // Flags: fraction of entries where the flag fired.
+  mean_z_at_entry: number | null
+}
+
+export interface SwingSignalPoint {
+  timestamp: string
+  long_score: number | null
+  short_score: number | null
+  streak: number | null
+  volume: number | null
+  range: number | null
+  trades: number | null
+  avg_trade: number | null
+  wick: number | null
+  taker: number | null
+  stretch: number | null
+}
+
+export interface SwingAnalysisResponse {
+  threshold: number
+  hold_bars: number
+  fee_bps: number
+  side: string
+  sl_mode: string
+  sl_value: number
+  tp_mode: string
+  tp_value: number
+  // Per-member contribution multipliers actually applied (1.0 = baseline).
+  weights: Record<string, number>
+  // How trades exited: stop / take_profit / reversal / hold_max.
+  exit_counts: Record<string, number>
+  use_model: boolean
+  model_available: boolean
+  n_bars: number
+  long_entries: number
+  short_entries: number
+  vetoed_tops: number
+  segments: SwingSegmentStats[]
+  signals: SwingSignalDiag[]
+  equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
+  trade_markers: { timestamp: string; exit_timestamp: string | null; ret: number; side: string }[]
+  // Per-bar composite + component contributions (bucket-max decimated so
+  // entry spikes survive). components_side says which side the component
+  // values describe ("long" unless side=short).
+  signal_curve: SwingSignalPoint[]
+  components_side: string
 }
 
 // ─── Kline Strategies (crypto-simulation presets) ────────────────────────────
@@ -3636,6 +4144,11 @@ export interface KlineStrategyResponse {
   finetuned_model: string | null
   forecast_engine: string | null
   forecast_vol: boolean
+  // Bars per forecast step (1 = next bar; H>1 = non-overlapping H-bar trend).
+  horizon: number
+  // Swing-signal covariates: off / native (model-side API — TimesFM, Chronos-2)
+  // / external (trailing-Ridge walk-forward adjustment, works with any engine).
+  covariate_mode: "off" | "native" | "external"
   starred: boolean
   active: boolean
   created_at: string
@@ -3649,6 +4162,8 @@ export interface KlineStrategyUpdate {
   finetuned_model?: string | null
   forecast_engine?: string | null
   forecast_vol?: boolean
+  horizon?: number
+  covariate_mode?: "off" | "native" | "external"
   starred?: boolean
 }
 
@@ -3754,4 +4269,99 @@ export interface BacktestResponse {
   max_drawdown_pct: number
   equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
   trade_markers: { timestamp: string; ret: number; side?: string }[]
+}
+
+// ─── Strategy Templates ───────────────────────────────────────────────────────
+// Named, global bundles of a trading strategy's signal parameters (no scope),
+// loadable/editable on the strategy's Analytics page and later on Paper Trade.
+
+export interface StrategyTemplateScope {
+  coin_id?: string
+  quote_asset?: string
+  interval?: string
+}
+
+export interface StrategyTemplate {
+  id: string
+  name: string
+  strategy: string
+  params: Record<string, unknown>
+  scope: StrategyTemplateScope | null
+  description: string | null
+  notes: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export const strategyTemplatesApi = {
+  list: (strategy?: string) =>
+    apiFetch<StrategyTemplate[]>(`/strategy-templates${strategy ? `?strategy=${encodeURIComponent(strategy)}` : ""}`),
+  create: (data: { name: string; strategy: string; params: Record<string, unknown>; scope?: StrategyTemplateScope | null; description?: string | null; notes?: string | null }) =>
+    apiFetch<StrategyTemplate>(`/strategy-templates`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: { name?: string; params?: Record<string, unknown>; scope?: StrategyTemplateScope | null; description?: string | null; notes?: string | null }) =>
+    apiFetch<StrategyTemplate>(`/strategy-templates/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    apiFetch<void>(`/strategy-templates/${id}`, { method: "DELETE" }),
+}
+
+// ─── Paper trade runs (Paper Trade page) ─────────────────────────────────────
+
+export interface PaperTradePnl {
+  total: number | null
+  h1: number | null; h3: number | null; h6: number | null
+  h12: number | null; h24: number | null; week: number | null; month: number | null
+}
+
+export interface PaperTradeRun {
+  id: string
+  template_id: string
+  status: string
+  started_at: string
+  stopped_at: string | null
+  uptime_s: number | null
+  last_trade_at: string | null
+  initial_capital: number
+  template_name: string
+  strategy: string
+  scope: StrategyTemplateScope | null
+  n_trades: number
+  position: "long" | "short" | null
+  error: string | null
+  pnl: PaperTradePnl
+}
+
+export interface PaperTrade {
+  trade_seq: number
+  status: "open" | "closed"
+  side: "long" | "short"
+  qty: number
+  entry_time: string
+  entry_price: number
+  exit_time: string | null
+  exit_price: number | null
+  fee_bps: number | null
+  ret: number | null
+  realized_pnl: number | null
+  exit_reason: string | null
+  // Strategy-template snapshot, frozen at trade time.
+  template_id: string | null
+  template_name: string | null
+  strategy: string | null
+  scope: StrategyTemplateScope | null
+  params: Record<string, unknown> | null
+  // AI verdict (populated by a later review pass).
+  ai_verdict: "GO" | "NO_GO" | null
+  ai_explanation: string | null
+}
+
+export const paperTradeApi = {
+  listRuns: (active = false) =>
+    apiFetch<PaperTradeRun[]>(`/paper-trade/runs${active ? "?active=true" : ""}`),
+  listTrades: (templateId: string, limit = 500) =>
+    apiFetch<PaperTrade[]>(`/paper-trade/trades?template_id=${encodeURIComponent(templateId)}&limit=${limit}`),
+  start: (templateId: string, investment = 100) =>
+    apiFetch<PaperTradeRun>(`/paper-trade/start?template_id=${encodeURIComponent(templateId)}&initial_capital=${investment}`, { method: "POST" }),
+  stop: (templateId: string) =>
+    apiFetch<PaperTradeRun | null>(`/paper-trade/stop?template_id=${encodeURIComponent(templateId)}`, { method: "POST" }),
 }

@@ -31,6 +31,28 @@ class VolForecastError(Exception):
     """
 
 
+class ModelDegradedError(Exception):
+    """The requested model could not run and the engine fell back to another.
+
+    ``is_available()`` only checks that the backing library imports; the model
+    weights load lazily at first predict, so a load failure (missing/uncached
+    weights, OOM) slips past that gate and the engine silently degrades to the
+    statistical fallback — which produces point forecasts with no quantile
+    bands, so the backtest can't run. Rather than persist that as "success",
+    this propagates to mark the run "degraded" with a visible reason.
+    """
+
+
+def _fmt_eta(seconds: float) -> str:
+    """Compact time-remaining: '45s', '12m', '1h 05m'."""
+    s = max(0, int(seconds))
+    if s < 90:
+        return f"{s}s"
+    if s < 5400:
+        return f"{(s + 30) // 60}m"
+    return f"{s // 3600}h {(s % 3600) // 60:02d}m"
+
+
 def _prob_up_from_quantiles(prev_close: float | None, quantiles: list[float] | None) -> float | None:
     """Modeled probability the next close exceeds the last observed close.
 
@@ -59,7 +81,6 @@ def _prob_up_from_quantiles(prev_close: float | None, quantiles: list[float] | N
 from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.prediction_engine import PredictionEngine as PredictionEngineModel
 from crypto_ai.database.models.prediction_engine_parameter import PredictionEngineParameter
-from crypto_ai.schemas.kline import KlineResponse
 from crypto_ai.prediction.registry import EngineRegistry
 from crypto_ai.schemas.prediction import PredictionEngine as PredictionEngineEnum
 
@@ -87,6 +108,8 @@ class KlineSimulationService:
         forecast_vol: bool = False,
         strategy: str = "price",
         parameters: dict | None = None,
+        horizon: int = 1,
+        covariate_mode: str = "off",
     ) -> dict:
         """Run simulation of AI models on kline data.
 
@@ -97,16 +120,59 @@ class KlineSimulationService:
             start_date: Start date for simulation
             end_date: End date for simulation
             model_names: List of model names to test
+            horizon: Bars per forecast step. 1 = classic next-bar walk-forward.
+                H>1 scores the model on H-bar-ahead moves over consecutive
+                NON-overlapping windows — "call the local trend, forgive the
+                wiggles" — which is statistically easier when any drift exists
+                (signal grows ~H, noise ~sqrt(H)). Price strategy only.
+            covariate_mode: How the swing-signal series (volume/range/trade
+                z-scores, taker tilt, streak, stretch, wicks) reach the model.
+                "off": not at all. "native": through the engine's real
+                model-side covariate API — only TimesFM/Chronos-2 qualify (the
+                shared per-window residual-Ridge fallback degenerates at
+                horizon 1, so other engines are refused up-front). "external":
+                a trailing Ridge fitted on the walk-forward's OWN pooled
+                (signals → next-step residual) history — strictly past-only,
+                refit periodically — applied on top of the engine's plain
+                forecasts, so it works with EVERY engine.
 
         Returns:
             Dictionary with simulation results for each model
         """
         start_time = time.time()
 
+        if covariate_mode not in ("off", "native", "external"):
+            raise ValueError(f"Unknown covariate_mode: {covariate_mode}")
+
         # Fail fast if any requested engine isn't installed on this server. We
         # refuse to run rather than let an engine silently fall back to the
         # statistical engine (which produces no quantiles, breaking the backtest).
         for model_name in model_names:
+            # An "orch:<group_id>" token is a calibrated orchestration group run
+            # as a single blended model. Refuse a non-ready group (its empty
+            # composition would silently degrade to nothing) and require every
+            # member engine to be installed here.
+            if model_name.startswith("orch:"):
+                # External covariates adjust the blended output post-hoc, so
+                # they compose with orchestration; native cannot (member
+                # engines blend through the residual-Ridge path, which
+                # degenerates at horizon 1).
+                if covariate_mode == "native":
+                    raise ValueError(
+                        "Native signal covariates are not supported for orchestration "
+                        "groups. Use covariate mode 'external' (works with any model), "
+                        "or run a single native-covariate model (timesfm, chronos2)."
+                    )
+                group = await self._resolve_orch_group(model_name)
+                for slug in (group.model_composition or {}).keys():
+                    enum = self._get_engine_enum(slug)
+                    if not enum or not self.engine_registry.get_engine(enum).is_available():
+                        raise ValueError(
+                            f"Orchestration group '{group.name}' includes model '{slug}', "
+                            "which is not installed on this server. Run the simulation on a "
+                            "worker that carries every member model."
+                        )
+                continue
             engine_enum = self._get_engine_enum(model_name)
             if not engine_enum:
                 raise ValueError(f"Unknown model: {model_name}")
@@ -114,6 +180,15 @@ class KlineSimulationService:
                 raise ValueError(
                     f"Engine '{model_name}' is not installed on this server, so the "
                     "simulation was not run. Pick a model that's installed."
+                )
+            engine_obj = self.engine_registry.get_engine(engine_enum)
+            if covariate_mode == "native" and not engine_obj.supports_native_covariates:
+                raise ValueError(
+                    f"Engine '{model_name}' has no native covariate API — its fallback "
+                    "(residual Ridge) degenerates at horizon 1 and would corrupt the "
+                    "forecast. Use a native-covariate model (timesfm, chronos2), or "
+                    "switch the strategy's covariate mode to 'external', which works "
+                    "with any engine."
                 )
 
         # Fetch kline data for the date range
@@ -139,13 +214,11 @@ class KlineSimulationService:
         klines = result.scalars().all()
         fetch_time = time.time() - start_time
 
+        # Raise (rather than return an error dict) so the task layer marks the
+        # run "failure" with the message on the error column — a returned dict
+        # would be persisted as a "success" whose error is buried in the result.
         if not klines:
-            return {
-                "coin_id": coin_id,
-                "quote_asset": quote_asset,
-                "interval": interval,
-                "error": "No kline data found up to the specified end date",
-            }
+            raise RuntimeError("No kline data found up to the specified end date")
 
         # First index inside the requested simulation window; everything before
         # it is available as historical context.
@@ -156,12 +229,7 @@ class KlineSimulationService:
         sim_count = len(klines) - sim_start_idx
 
         if sim_count < 1:
-            return {
-                "coin_id": coin_id,
-                "quote_asset": quote_asset,
-                "interval": interval,
-                "error": "No kline data found within the simulation date range",
-            }
+            raise RuntimeError("No kline data found within the simulation date range")
 
         # Run each model and collect results
         results = {
@@ -177,20 +245,67 @@ class KlineSimulationService:
             "models": {},
         }
 
-        model_start = time.time()
         # Forecasting volatility roughly doubles the per-model work (a second
         # one-step walk-forward over the realized-vol series). Not used for the
         # kline (binary up/down) strategy.
         vol_on = forecast_vol and strategy != "kline"
-        per_model_work = sim_count * (2 if vol_on else 1)
+        # Horizon only applies to the price path; H>1 steps in non-overlapping
+        # windows, so the number of forecasts shrinks by ~H.
+        horizon = max(1, int(horizon)) if strategy != "kline" else 1
+        results["horizon"] = horizon
+        results["covariate_mode"] = covariate_mode
+        # Legacy boolean the UI's older runs used; kept for display back-compat.
+        results["use_covariates"] = covariate_mode != "off"
+        per_model_work = max(1, sim_count // horizon) * (2 if vol_on else 1)
         total_work = max(1, len(model_names) * per_model_work)
         for model_idx, model_name in enumerate(model_names):
             done_base = model_idx * per_model_work
+            model_start = time.time()
 
-            async def _model_cb(done: int, total: int, mname: str = model_name, base: int = done_base) -> None:
-                if on_progress is not None:
-                    pct = min(99, int((base + done) / total_work * 100))
-                    await on_progress(pct, f"{mname}: {done}/{total} forecasts")
+            async def _model_cb(
+                done: int, total: int,
+                mname: str = model_name, base: int = done_base, t0: float = model_start,
+            ) -> None:
+                if on_progress is None:
+                    return
+                pct = min(99, int((base + done) / total_work * 100))
+                if done <= 0:
+                    # Fired before the first batch: large-context models on CPU
+                    # can take many minutes per batch, so make it visible that
+                    # inference has started (vs sitting on "Loading klines…").
+                    msg = f"{mname}: starting {total} forecasts…"
+                else:
+                    remaining = (time.time() - t0) / done * (total - done)
+                    msg = f"{mname}: {done}/{total} forecasts · ~{_fmt_eta(remaining)} left"
+                await on_progress(pct, msg)
+
+            # An orchestration group runs as a blended engine over its calibrated
+            # members; its per-model params are baked into the BlendingEngine, so
+            # no catalog/strategy params are applied here.
+            if model_name.startswith("orch:"):
+                try:
+                    group = await self._resolve_orch_group(model_name)
+                    blend_engine = self._build_blending_engine(group)
+                    model_result = await self._run_model_simulation(
+                        model_name, klines, sim_start_idx,
+                        on_progress=_model_cb, should_stop=should_stop,
+                        include_full_predictions=include_full_predictions,
+                        forecast_vol=vol_on,
+                        engine_override=blend_engine,
+                        blend_key=f"{coin_id}:{quote_asset}",
+                        horizon=horizon,
+                        covariate_mode=covariate_mode,
+                    )
+                    results["models"][model_name] = model_result
+                except (VolForecastError, ModelDegradedError):
+                    raise
+                except Exception as e:
+                    log.error(f"Error running orchestration model {model_name}: {e}")
+                    results["models"][model_name] = {"error": str(e)}
+                if should_stop is not None and should_stop():
+                    results["stopped"] = True
+                    break
+                continue
 
             # Effective params: the engine's own selected catalog params form the
             # base; the strategy's params (passed in) override on name conflicts.
@@ -212,12 +327,14 @@ class KlineSimulationService:
                         include_full_predictions=include_full_predictions,
                         forecast_vol=vol_on,
                         parameters=effective_params,
+                        horizon=horizon,
+                        covariate_mode=covariate_mode,
                     )
                 results["models"][model_name] = model_result
-            except VolForecastError:
-                # The user opted into a volatility forecast and it failed; fail
-                # the whole run with a visible reason rather than storing a
-                # success that silently has no vol data.
+            except (VolForecastError, ModelDegradedError):
+                # Vol forecast failed, or the engine silently degraded to a
+                # fallback. Fail the whole run with a visible reason rather than
+                # storing a "success" that isn't what was requested.
                 raise
             except Exception as e:
                 log.error(f"Error running model {model_name}: {e}")
@@ -244,6 +361,24 @@ class KlineSimulationService:
                     raise RuntimeError(next(iter(errored.values())))
                 joined = "; ".join(f"{name}: {err}" for name, err in errored.items())
                 raise RuntimeError(f"All models failed — {joined}")
+
+        # Run-level scores = the best model's skill, so the master table can
+        # rank a whole simulation by its most promising model. Price and vol
+        # are SEPARATE columns (they're different, incomparable metrics):
+        # score/score_t = directional return IC (every run computes it);
+        # score_vol/score_vol_t = vol-forecast corr (only forecast_vol runs).
+        def _best(key: str) -> float | None:
+            vals = [
+                m[key]
+                for m in results["models"].values()
+                if isinstance(m, dict) and isinstance(m.get(key), (int, float))
+            ]
+            return max(vals) if vals else None
+
+        results["score"] = _best("score")
+        results["score_t"] = _best("score_t")
+        results["score_vol"] = _best("score_vol")
+        results["score_vol_t"] = _best("score_vol_t")
 
         total_time = time.time() - start_time
         model_time = total_time - fetch_time
@@ -292,33 +427,63 @@ class KlineSimulationService:
         include_full_predictions: bool = False,
         forecast_vol: bool = False,
         parameters: dict | None = None,
+        engine_override=None,
+        blend_key: str | None = None,
+        horizon: int = 1,
+        covariate_mode: str = "off",
     ) -> dict:
-        """Walk-forward one-step-ahead backtest for a single model.
+        """Walk-forward backtest for a single model.
 
-        For every kline at index ``gi >= sim_start_idx`` we forecast its close
-        using only the closes that precede it (capped at the engine's max
-        context), then compare to the actual. All such one-step forecasts are
-        run as a single batched call for efficiency.
+        With ``horizon=1`` (default): every kline at index ``gi >=
+        sim_start_idx`` is forecast one step ahead using only the closes that
+        precede it (capped at the engine's max context), then compared to the
+        actual. With ``horizon=H>1``: origins step in NON-overlapping H-bar
+        windows; each forecast targets the close H bars ahead and is scored on
+        the H-bar move — the "local trend" rather than the next wiggle.
+        Overlap is avoided so each scored row is an independent period and the
+        fee-aware backtest's per-row returns compound correctly.
+
+        ``engine_override`` runs a pre-built engine (e.g. a BlendingEngine for an
+        orchestration group) instead of resolving one from the model slug;
+        ``blend_key`` is stamped on each item so a BlendingEngine can pick the
+        right per-pair weight vector.
         """
         try:
-            engine_enum = self._get_engine_enum(model_name)
-            if not engine_enum:
-                return {"error": f"Unknown model: {model_name}"}
+            if engine_override is not None:
+                engine = engine_override
+                engine_enum = None
+            else:
+                engine_enum = self._get_engine_enum(model_name)
+                if not engine_enum:
+                    return {"error": f"Unknown model: {model_name}"}
 
-            try:
-                engine = self.engine_registry.get_engine(engine_enum)
-            except ValueError as e:
-                return {"error": f"Model {model_name} not available: {str(e)}"}
-
-            if parameters:
                 try:
-                    engine.apply_parameters({str(k): str(v) for k, v in parameters.items()})
-                except Exception as e:
-                    log.warning(f"apply_parameters failed for {model_name}: {e}")
+                    engine = self.engine_registry.get_engine(engine_enum)
+                except ValueError as e:
+                    return {"error": f"Model {model_name} not available: {str(e)}"}
+
+                if parameters:
+                    try:
+                        engine.apply_parameters({str(k): str(v) for k, v in parameters.items()})
+                    except Exception as e:
+                        log.warning(f"apply_parameters failed for {model_name}: {e}")
+
+                # Point a fine-tuned engine at this coin/pair/timeframe's checkpoint.
+                self._configure_finetuned_engine(engine, klines)
 
             capabilities = engine.get_capabilities()
             ctx_len = capabilities.max_history_length or 1024
             min_hist = max(2, capabilities.min_history_length)
+            # Optional strategy parameter capping the per-forecast context. The
+            # engine default can be enormous (Chronos-2: 8192 bars), which on
+            # CPU makes each forecast 10x+ slower for marginal accuracy — e.g.
+            # context_length=1024 of 4h bars is still ~half a year of history.
+            ctx_param = (parameters or {}).get("context_length")
+            if ctx_param:
+                try:
+                    ctx_len = max(min_hist, min(ctx_len, int(float(ctx_param))))
+                except (TypeError, ValueError):
+                    log.warning(f"Ignoring invalid context_length parameter: {ctx_param!r}")
 
             closes = [float(k.close) for k in klines]
             n = len(klines)
@@ -334,7 +499,7 @@ class KlineSimulationService:
                 return (
                     k.open_time
                     if isinstance(k.open_time, datetime)
-                    else datetime.fromtimestamp(k.open_time / 1000)
+                    else datetime.fromtimestamp(k.open_time / 1000, tz=UTC)
                 )
 
             # The engines/preprocessor are date-keyed and SUM values sharing a
@@ -344,31 +509,87 @@ class KlineSimulationService:
             # value sequence, not the calendar.
             base_date = date(2000, 1, 1)
 
-            items: list[dict] = []
-            usable_idx: list[int] = []
-            for gi in range(sim_start_idx, n):
-                ctx = closes[max(0, gi - ctx_len):gi]
-                if len(ctx) < min_hist:
-                    continue  # not enough prior history to forecast this point yet
+            # ``usable_idx`` holds forecast ORIGINS (first bar of each window);
+            # the scored bar is the window's last bar, origin + horizon - 1.
+            # Only the indices are collected here — the per-bar context items
+            # are materialized lazily per chunk below. Building them all
+            # up-front is O(bars x context) dicts (a year of 5m bars with a
+            # 4096-value context is tens of GB) and has OOM-killed the worker.
+            horizon = max(1, int(horizon))
+            usable_idx: list[int] = [
+                gi for gi in range(sim_start_idx, n - horizon + 1, horizon)
+                if min(gi, ctx_len) >= min_hist  # bars of prior history available
+            ]
+
+            # Swing-signal covariates (volume/range/trade z-scores, taker tilt,
+            # streak, stretch, wicks). "native": fed through the engine's real
+            # model-side covariate API (gated in run_simulation). "external":
+            # consumed AFTER the walk-forward by the trailing-Ridge adjustment.
+            # These are past-only series — the forecast window's value is the
+            # last observed one (lagged), which is exact at horizon 1.
+            cov_series: dict | None = None
+            if covariate_mode != "off":
+                import numpy as np
+
+                from crypto_ai.services.swing_analysis import signal_covariate_series
+
+                cov_series = signal_covariate_series(
+                    np.array([float(k.open) for k in klines]),
+                    np.array([float(k.high) for k in klines]),
+                    np.array([float(k.low) for k in klines]),
+                    np.array(closes),
+                    np.array([float(k.volume) for k in klines]),
+                    np.array([float(k.number_of_trades) for k in klines]),
+                    np.array([float(k.taker_buy_base_asset_volume) for k in klines]),
+                )
+                cov_series = {
+                    name: np.nan_to_num(arr, nan=0.0) for name, arr in cov_series.items()
+                }
+
+            def _make_item(gi: int) -> dict:
+                lo = max(0, gi - ctx_len)
+                ctx = closes[lo:gi]
                 hist = [
                     {"date": base_date + timedelta(days=j), "value": v}
                     for j, v in enumerate(ctx)
                 ]
-                # Crypto klines carry no covariates and the synthetic daily index
-                # has no real weekday seasonality. covariate_handling="none"
-                # disables the engines' residual-Ridge adjustment, which at
-                # horizon=1 fits on a single residual point and collapses the
-                # point forecast onto the last close (predicted == prev_close,
-                # so predicted direction is always 0).
-                items.append({
+                # Without covariates: covariate_handling="none" disables the
+                # engines' residual-Ridge adjustment, which at horizon=1 fits on
+                # a single residual point and collapses the point forecast onto
+                # the last close (predicted == prev_close, direction always 0).
+                # With covariates: handling="native" (real model-side API only —
+                # gated upstream) and active_covariate_types={2} so the engine
+                # adds ONLY these date-keyed features (no weekday one-hots or
+                # PAD, meaningless on the synthetic daily index).
+                item = {
                     "historical_data": hist,
                     "covariates": None,
                     "pad_dates": None,
                     "covariate_handling": "none",
-                })
-                usable_idx.append(gi)
+                }
+                if cov_series is not None and covariate_mode == "native":
+                    n_ctx = len(ctx)
+                    item["covariates"] = {
+                        name: {
+                            **{
+                                base_date + timedelta(days=j): float(arr[lo + j])
+                                for j in range(n_ctx)
+                            },
+                            # Forecast window: last observed value, lagged.
+                            **{
+                                base_date + timedelta(days=n_ctx + k): float(arr[gi - 1])
+                                for k in range(horizon)
+                            },
+                        }
+                        for name, arr in cov_series.items()
+                    }
+                    item["covariate_handling"] = "native"
+                    item["active_covariate_types"] = {2}
+                if blend_key is not None:
+                    item["_blend_key"] = blend_key
+                return item
 
-            if not items:
+            if not usable_idx:
                 return {
                     "error": (
                         f"Insufficient history: need at least {min_hist} points "
@@ -376,37 +597,47 @@ class KlineSimulationService:
                     )
                 }
 
-            total = len(items)
+            total = len(usable_idx)
             total_steps = total * (2 if forecast_vol else 1)
             log.info(
-                f"Walk-forward {model_name}: {total} one-step forecasts "
+                f"Walk-forward {model_name}: {total} forecasts at horizon {horizon} "
                 f"(context<= {ctx_len}){' +volatility' if forecast_vol else ''}"
             )
+            if on_progress is not None:
+                # Announce inference start — the first batch can take minutes
+                # on CPU and would otherwise leave the task on "Loading klines…".
+                await on_progress(0, total_steps)
 
             # Process in chunks so progress can be reported and a graceful stop
             # honoured between batched engine calls. Each item is an independent
-            # horizon-1 forecast.
+            # forecast; contexts are built (and freed) one chunk at a time so
+            # memory stays O(chunk x context) regardless of the date range.
             predictions: list[float] = []
             step_quantiles: list[list[float] | None] = []
             stopped = False
             for c in range(0, total, _CHUNK):
-                chunk = items[c:c + _CHUNK]
+                chunk = [_make_item(gi) for gi in usable_idx[c:c + _CHUNK]]
                 try:
                     batch_results = await engine.predict_batch(
-                        chunk, horizon=1, prediction_from=base_date
+                        chunk, horizon=horizon, prediction_from=base_date
                     )
                 except Exception as e:
                     log.error(f"Engine prediction failed: {e}", exc_info=True)
                     return {"error": f"Prediction failed: {str(e)}"}
 
                 for res in batch_results:
-                    q = res[0].quantiles if (res and res[0].quantiles) else None
-                    if res and res[0].predicted_value is not None:
-                        predictions.append(float(res[0].predicted_value))
+                    # Score the window's LAST step (the H-bar-ahead forecast);
+                    # at horizon=1 this is the familiar next-bar step.
+                    step = res[min(horizon, len(res)) - 1] if res else None
+                    q = step.quantiles if (step and step.quantiles) else None
+                    if step and step.predicted_value is not None:
+                        predictions.append(float(step.predicted_value))
                     elif q and len(q) >= 5:
                         predictions.append(float(q[4]))
                     else:
-                        predictions.append(0.0)
+                        # A 0.0 stand-in would score as an extreme "down" call
+                        # and silently corrupt every metric — fail instead.
+                        return {"error": "Engine returned no forecast (no point value or quantiles) for a bar"}
                     step_quantiles.append([float(x) for x in q] if q else None)
 
                 if on_progress is not None:
@@ -420,9 +651,30 @@ class KlineSimulationService:
             usable_idx = usable_idx[:scored]
             step_quantiles = step_quantiles[:scored]
 
-            actuals = [closes[gi] for gi in usable_idx]
+            # Scored bar = the window's last bar; the move is measured from the
+            # last close known at forecast time (the bar before the origin).
+            target_idx = [gi + horizon - 1 for gi in usable_idx]
+            actuals = [closes[ti] for ti in target_idx]
             prev_closes = [closes[gi - 1] for gi in usable_idx]
-            times = [_real_dt(klines[gi]) for gi in usable_idx]
+            times = [_real_dt(klines[ti]) for ti in target_idx]
+
+            # The engine has now loaded and run. If it degraded to a fallback
+            # algorithm (weights couldn't load — past the import-only pre-run
+            # gate), fail the run instead of persisting a fallback forecast that
+            # has no quantile bands and can't be backtested.
+            self._guard_not_degraded(engine, model_name)
+
+            # External covariate mode: adjust the engine's plain forecasts with
+            # a trailing Ridge fitted on this run's own past (signals → next-step
+            # residual) pairs. Strictly causal — each bar is adjusted using only
+            # residuals whose target bar closed before that bar's forecast
+            # origin. Mutates predictions/step_quantiles in place.
+            ext_cov_info: dict | None = None
+            if covariate_mode == "external" and cov_series is not None and predictions:
+                ext_cov_info = self._external_covariate_adjust(
+                    predictions, step_quantiles, actuals, prev_closes,
+                    usable_idx, cov_series, parameters,
+                )
 
             # Genuine volatility forecast: a SECOND one-step walk-forward, this
             # time over the realized range-vol series, on the same scored bars.
@@ -435,6 +687,7 @@ class KlineSimulationService:
                         engine, rv, usable_idx, ctx_len, min_hist, base_date,
                         should_stop=should_stop, on_progress=on_progress,
                         done_offset=total, total_steps=total_steps,
+                        horizon=horizon,
                     )
                 except Exception as e:
                     log.error(f"Volatility forecast failed: {e}", exc_info=True)
@@ -449,7 +702,7 @@ class KlineSimulationService:
                         f"{len(usable_idx)} bars forecast"
                     )
                 for i in range(len(usable_idx)):
-                    realized_vol_list[i] = rv[usable_idx[i]]
+                    realized_vol_list[i] = rv[target_idx[i]]
                     if i < len(vol_preds):
                         pred_vol_list[i] = max(0.0, vol_preds[i])
                 k = len(vol_preds)
@@ -461,14 +714,28 @@ class KlineSimulationService:
             model_result = {
                 "status": "stopped" if stopped else "success",
                 "metrics": metrics,
+                "score": self._model_score(metrics),
+                "score_t": self._model_score_t(metrics),
+                "horizon": horizon,
+                "covariate_mode": covariate_mode,
+                # Legacy boolean older UI builds read; True for either mode.
+                "use_covariates": covariate_mode != "off",
                 "test_count": len(actuals),
                 "engine": engine.__class__.__name__,
-                "actual_engine": engine.get_actual_slug() or engine_enum.value,
+                "actual_engine": engine.get_actual_slug() or (engine_enum.value if engine_enum else model_name),
                 "context_length": ctx_len,
                 "predictions_sample": predictions_sample,
             }
+            if ext_cov_info is not None:
+                model_result["external_covariates"] = ext_cov_info
             if vol_metrics is not None:
                 model_result["vol_metrics"] = vol_metrics
+                # Vol skill is its own column — never merged with the price
+                # score, so sorting each column compares like with like.
+                if vol_metrics.get("corr") is not None:
+                    model_result["score_vol"] = round(float(vol_metrics["corr"]), 4)
+                if vol_metrics.get("corr_t") is not None:
+                    model_result["score_vol_t"] = round(float(vol_metrics["corr_t"]), 2)
 
             # Full per-timestamp rows for durable persistence (stripped from the
             # stored result JSON by the caller). Only built when requested.
@@ -494,8 +761,8 @@ class KlineSimulationService:
                 model_result["_predictions"] = rows
 
             return model_result
-        except VolForecastError:
-            raise  # opted-in vol forecast failed — fail the run, not a model-level error dict
+        except (VolForecastError, ModelDegradedError):
+            raise  # fail the whole run, not a model-level error dict
         except Exception as e:
             log.error(f"Error in model simulation: {e}", exc_info=True)
             return {"error": str(e)}
@@ -535,6 +802,9 @@ class KlineSimulationService:
                 except Exception as e:
                     log.warning(f"apply_parameters failed for {model_name}: {e}")
 
+            # Point a fine-tuned engine at this coin/pair/timeframe's checkpoint.
+            self._configure_finetuned_engine(engine, klines)
+
             capabilities = engine.get_capabilities()
             ctx_len = capabilities.max_history_length or 1024
             min_hist = max(2, capabilities.min_history_length)
@@ -546,7 +816,7 @@ class KlineSimulationService:
                 return (
                     k.open_time
                     if isinstance(k.open_time, datetime)
-                    else datetime.fromtimestamp(k.open_time / 1000)
+                    else datetime.fromtimestamp(k.open_time / 1000, tz=UTC)
                 )
 
             base_date = date(2000, 1, 1)
@@ -587,6 +857,9 @@ class KlineSimulationService:
             prev_closes = [closes[gi - 1] for gi in usable_idx]
             times = [_real_dt(klines[gi]) for gi in usable_idx]
 
+            # Fail rather than persist a silently-degraded fallback forecast.
+            self._guard_not_degraded(engine, model_name)
+
             # Encode the directional call as a tiny synthetic "price" so the
             # existing direction columns and backtest light up: above prev when
             # the model leans up (f>0.5), below when it leans down.
@@ -597,9 +870,11 @@ class KlineSimulationService:
             model_result = {
                 "status": "stopped" if stopped else "success",
                 "metrics": metrics,
+                "score": self._model_score(metrics),
+                "score_t": self._model_score_t(metrics),
                 "test_count": len(actuals),
                 "engine": engine.__class__.__name__,
-                "actual_engine": engine.get_actual_slug() or engine_enum.value,
+                "actual_engine": engine.get_actual_slug() or (engine_enum.value if engine_enum else model_name),
                 "context_length": ctx_len,
                 "predictions_sample": self._analyze_predictions(times, actuals, predictions),
                 "kline_strategy": True,
@@ -625,6 +900,8 @@ class KlineSimulationService:
                 model_result["_predictions"] = rows
 
             return model_result
+        except ModelDegradedError:
+            raise  # fail the whole run, not a model-level error dict
         except Exception as e:
             log.error(f"Error in kline strategy: {e}", exc_info=True)
             return {"error": str(e)}
@@ -641,15 +918,21 @@ class KlineSimulationService:
         on_progress: Callable[[int, int], Awaitable[None]] | None = None,
         done_offset: int = 0,
         total_steps: int = 0,
+        horizon: int = 1,
     ) -> list[float]:
-        """One-step-ahead walk-forward over an arbitrary value series.
+        """Walk-forward over an arbitrary value series.
 
-        For each index gi in ``idxs`` forecast values[gi] from the preceding
-        ``ctx_len`` values. Used for the volatility series; mirrors the price
-        loop but returns plain point forecasts.
+        For each ORIGIN index gi in ``idxs`` forecast ``horizon`` steps from the
+        preceding ``ctx_len`` values and return the last step's point forecast
+        (the value at gi + horizon - 1). Used for the volatility series; mirrors
+        the price loop but returns plain point forecasts.
         """
-        items: list[dict] = []
-        for gi in idxs:
+        horizon = max(1, int(horizon))
+
+        # Contexts are materialized lazily per chunk — building every item
+        # up-front is O(bars x context) memory and has OOM-killed the worker
+        # on long ranges / short timeframes.
+        def _make_item(gi: int) -> dict:
             ctx = values[max(0, gi - ctx_len):gi]
             hist = [
                 {"date": base_date + timedelta(days=j), "value": v}
@@ -657,30 +940,140 @@ class KlineSimulationService:
             ]
             # See _run_model_simulation: disable the residual-Ridge covariate
             # adjustment, which at horizon=1 pins the forecast to the last value.
-            items.append({
+            return {
                 "historical_data": hist,
                 "covariates": None,
                 "pad_dates": None,
                 "covariate_handling": "none",
-            })
+            }
 
         preds: list[float] = []
-        for c in range(0, len(items), _CHUNK):
-            chunk = items[c:c + _CHUNK]
-            batch_results = await engine.predict_batch(chunk, horizon=1, prediction_from=base_date)
+        if on_progress is not None:
+            await on_progress(done_offset, total_steps)  # announce series start
+        for c in range(0, len(idxs), _CHUNK):
+            chunk = [_make_item(gi) for gi in idxs[c:c + _CHUNK]]
+            batch_results = await engine.predict_batch(
+                chunk, horizon=horizon, prediction_from=base_date
+            )
             for res in batch_results:
-                q = res[0].quantiles if (res and res[0].quantiles) else None
-                if res and res[0].predicted_value is not None:
-                    preds.append(float(res[0].predicted_value))
+                step = res[min(horizon, len(res)) - 1] if res else None
+                q = step.quantiles if (step and step.quantiles) else None
+                if step and step.predicted_value is not None:
+                    preds.append(float(step.predicted_value))
                 elif q and len(q) >= 5:
                     preds.append(float(q[4]))
                 else:
-                    preds.append(0.0)
+                    raise RuntimeError(
+                        "Engine returned no forecast (no point value or quantiles) for a bar"
+                    )
             if on_progress is not None:
                 await on_progress(done_offset + len(preds), total_steps)
             if should_stop is not None and should_stop():
                 break
         return preds
+
+    @staticmethod
+    def _external_covariate_adjust(
+        predictions: list[float],
+        step_quantiles: list[list[float] | None],
+        actuals: list[float],
+        prev_closes: list[float],
+        usable_idx: list[int],
+        cov_series: dict,
+        parameters: dict | None,
+    ) -> dict:
+        """Trailing-Ridge covariate adjustment over the walk-forward's own history.
+
+        For each scored bar i, a Ridge maps the swing-signal values at the last
+        OBSERVED bar (origin - 1) to the engine's residual return ((actual -
+        predicted) / prev_close), fitted on the pooled pairs of all EARLIER
+        scored bars — whose target bars closed before bar i's origin, so the
+        fit is strictly causal. This is the mechanism that made external
+        covariate handling win in gorm: pooling across windows gives it
+        hundreds-to-thousands of samples where the per-window fit (and a native
+        API's single context) has a handful. It runs on top of plain forecasts,
+        so it works with every engine, orchestration groups included.
+
+        The forecast and its quantile band are shifted by the predicted
+        residual (in price units). Mutates ``predictions`` and
+        ``step_quantiles`` in place and returns a diagnostics dict.
+
+        Strategy-parameter knobs (all optional):
+          cov_window: trailing fit window in scored bars (0/absent = expanding)
+          cov_alpha:  Ridge penalty on standardized features (default 1.0)
+          cov_warmup: bars left unadjusted while history accumulates (default 50)
+          cov_refit:  refit cadence in bars (default 50)
+        """
+        import numpy as np
+
+        def _param(name: str, default: float) -> float:
+            try:
+                return float((parameters or {}).get(name, default))
+            except (TypeError, ValueError):
+                return default
+
+        alpha = max(1e-6, _param("cov_alpha", 1.0))
+        window = max(0, int(_param("cov_window", 0)))
+        warmup = max(20, int(_param("cov_warmup", 50)))
+        refit = max(1, int(_param("cov_refit", 50)))
+
+        feats = sorted(cov_series)
+        idx = np.asarray(usable_idx, dtype=int)
+        # Feature row i = signal values at the last bar observed before the
+        # forecast (origin - 1); origins have >= min_hist prior bars, so
+        # idx - 1 >= 1 always indexes real data.
+        x_all = np.column_stack(
+            [np.asarray(cov_series[f], dtype=float)[idx - 1] for f in feats]
+        )
+        prev = np.asarray(prev_closes, dtype=float)
+        raw_pred = np.asarray(predictions, dtype=float)
+        act = np.asarray(actuals, dtype=float)
+        safe_prev = np.where(prev == 0, 1.0, prev)
+        # Residual returns of the RAW engine forecast — the fit target. The
+        # adjusted values written back to `predictions` are never re-read here.
+        resid = (act - raw_pred) / safe_prev
+
+        n, k = x_all.shape
+        adjusted = 0
+        abs_adj: list[float] = []
+        eye = np.eye(k)
+        i = warmup
+        while i < n:
+            hi = min(n, i + refit)
+            lo = 0 if window <= 0 else max(0, i - window)
+            xt, yt = x_all[lo:i], resid[lo:i]
+            mu = xt.mean(axis=0)
+            sd = xt.std(axis=0)
+            sd[sd == 0] = 1.0
+            xs = (xt - mu) / sd
+            y_mean = float(yt.mean())
+            w = np.linalg.solve(xs.T @ xs + alpha * eye, xs.T @ (yt - y_mean))
+            # Cap the adjustment at 3σ of the training residuals so a wild
+            # signal value can't blow up a forecast.
+            cap = 3.0 * float(yt.std())
+            r_hat = np.clip(((x_all[i:hi] - mu) / sd) @ w + y_mean, -cap, cap)
+            delta = r_hat * prev[i:hi]
+            for j in range(i, hi):
+                d = float(delta[j - i])
+                predictions[j] = float(raw_pred[j] + d)
+                if step_quantiles[j]:
+                    step_quantiles[j] = [q + d for q in step_quantiles[j]]
+            adjusted += hi - i
+            abs_adj.extend(np.abs(r_hat).tolist())
+            i = hi
+
+        return {
+            "features": feats,
+            "warmup_bars": warmup,
+            "refit_every": refit,
+            "window": window or None,
+            "alpha": alpha,
+            "adjusted_bars": adjusted,
+            "total_bars": n,
+            "mean_abs_adjustment_bps": (
+                round(float(np.mean(abs_adj)) * 1e4, 2) if abs_adj else 0.0
+            ),
+        }
 
     def _vol_metrics(
         self, realized: list[float | None], predicted: list[float | None]
@@ -698,7 +1091,12 @@ class KlineSimulationService:
         da = math.sqrt(sum((a - ma) ** 2 for a in ra))
         dp = math.sqrt(sum((p - mp) ** 2 for p in pr))
         corr = num / (da * dp) if da > 0 and dp > 0 else 0.0
-        return {"corr": round(corr, 4), "mae": round(mae, 6), "count": n}
+        return {
+            "corr": round(corr, 4),
+            "corr_t": round(self._t_stat(corr, n), 2),
+            "mae": round(mae, 6),
+            "count": n,
+        }
 
     def _walk_forward_metrics(
         self, actuals: list[float], predictions: list[float], prev_closes: list[float]
@@ -733,25 +1131,185 @@ class KlineSimulationService:
                 correct += 1
         direction_accuracy = correct / directional * 100 if directional else 0
 
-        # Correlation between predicted and actual levels.
-        if len(actuals) > 1:
-            mean_a = sum(actuals) / len(actuals)
-            mean_p = sum(predictions) / len(predictions)
-            num = sum((a - mean_a) * (p - mean_p) for a, p in zip(actuals, predictions))
-            den_a = math.sqrt(sum((a - mean_a) ** 2 for a in actuals))
-            den_p = math.sqrt(sum((p - mean_p) ** 2 for p in predictions))
-            correlation = num / (den_a * den_p) if den_a > 0 and den_p > 0 else 0
-        else:
-            correlation = 0
+        # Information coefficient: rank correlation of the predicted move against
+        # the realized move, both relative to prev_close. This is the meaningful,
+        # parameter-free measure of forecast edge (a strategy's return is only a
+        # tuned function of it). Computed on RETURNS, not price levels — a
+        # level-to-level correlation on one-step-ahead forecasts is ~1.0 for
+        # everything and can't discriminate.
+        return_ic = self._return_ic(actuals, predictions, prev_closes)
+
+        # Gross directional edge in basis points per bar: the average return of
+        # a frictionless strategy that goes long/short with the forecast's sign
+        # each bar. Parameter-free and directly comparable to trading fees —
+        # e.g. edge_bps of 3 can't survive a 10 bps round trip.
+        edge_terms = [
+            (1 if p > prev else -1 if p < prev else 0) * (a - prev) / prev
+            for a, p, prev in zip(actuals, predictions, prev_closes)
+            if prev
+        ]
+        edge_bps = (sum(edge_terms) / len(edge_terms) * 1e4) if edge_terms else 0.0
 
         return {
             "mae": round(mae, 4),
             "rmse": round(rmse, 4),
             "mape": round(mape, 2),
             "direction_accuracy_pct": round(direction_accuracy, 1),
-            "correlation": round(correlation, 4),
+            "return_ic": round(return_ic, 4),
+            # Significance of the IC: t-statistic under the no-signal null.
+            # Grows with sample size, so a small IC on many bars can outrank a
+            # big IC on few — exactly what mass screening needs.
+            "return_ic_t": round(self._t_stat(return_ic, len(actuals)), 2),
+            "edge_bps": round(edge_bps, 2),
+            # Back-compat key, now returns-based (was price-level correlation).
+            "correlation": round(return_ic, 4),
             "test_count": len(actuals),
         }
+
+    @staticmethod
+    def _rank(xs: list[float]) -> list[float]:
+        """Average (tie-corrected) ranks of ``xs``, for a Spearman correlation."""
+        order = sorted(range(len(xs)), key=lambda i: xs[i])
+        ranks = [0.0] * len(xs)
+        i = 0
+        while i < len(xs):
+            j = i
+            while j + 1 < len(xs) and xs[order[j + 1]] == xs[order[i]]:
+                j += 1
+            avg = (i + j) / 2.0
+            for k in range(i, j + 1):
+                ranks[order[k]] = avg
+            i = j + 1
+        return ranks
+
+    @staticmethod
+    def _pearson(xs: list[float], ys: list[float]) -> float:
+        n = len(xs)
+        if n < 2:
+            return 0.0
+        mx, my = sum(xs) / n, sum(ys) / n
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        dx = math.sqrt(sum((x - mx) ** 2 for x in xs))
+        dy = math.sqrt(sum((y - my) ** 2 for y in ys))
+        return num / (dx * dy) if dx > 0 and dy > 0 else 0.0
+
+    def _return_ic(
+        self, actuals: list[float], predictions: list[float], prev_closes: list[float]
+    ) -> float:
+        """Spearman rank correlation of predicted vs realized one-step returns."""
+        ar: list[float] = []
+        pr: list[float] = []
+        for a, p, prev in zip(actuals, predictions, prev_closes):
+            if prev:
+                ar.append((a - prev) / prev)
+                pr.append((p - prev) / prev)
+        if len(ar) < 2:
+            return 0.0
+        return self._pearson(self._rank(ar), self._rank(pr))
+
+    @staticmethod
+    def _t_stat(r: float, n: int) -> float:
+        """t-statistic of a correlation ``r`` over ``n`` samples under the
+        no-correlation null: t = r * sqrt((n-2) / (1-r^2)).
+
+        The screening companion to a raw correlation: |t| >= ~2 is nominally
+        significant for ONE run, but when sweeping hundreds of coin/timeframe/
+        model combinations the expected max |t| under pure chance is ~3-3.5, so
+        only runs clearing ~4 deserve attention (Bonferroni-style).
+        """
+        if n < 3 or not (-1.0 < r < 1.0):
+            return 0.0
+        return r * math.sqrt((n - 2) / (1.0 - r * r))
+
+    @staticmethod
+    def _model_score(metrics: dict) -> float | None:
+        """Price skill for the master table: the directional return IC.
+
+        Parameter-free, in [-1, 1], higher = more edge. Every run computes it
+        (the price walk-forward always happens). Volatility skill is a
+        SEPARATE column (``score_vol`` from ``vol_metrics.corr``) — the two
+        metrics live on different scales, so mixing them in one sortable
+        column would compare unlike quantities.
+        """
+        ic = metrics.get("return_ic") if isinstance(metrics, dict) else None
+        return round(float(ic), 4) if isinstance(ic, (int, float)) else None
+
+    @staticmethod
+    def _model_score_t(metrics: dict) -> float | None:
+        """Significance (t-statistic) of the price score.
+
+        Answers "is this edge statistically real given the sample size"
+        instead of "how strong is it" — the number to sort by when screening
+        many runs for the rare genuine signal. The vol equivalent is
+        ``score_vol_t`` (from ``vol_metrics.corr_t``).
+        """
+        t = metrics.get("return_ic_t") if isinstance(metrics, dict) else None
+        return round(float(t), 2) if isinstance(t, (int, float)) else None
+
+    @staticmethod
+    def _guard_not_degraded(engine, model_name: str) -> None:
+        """Raise ModelDegradedError if the engine silently fell back at runtime.
+
+        Degrade-capable engines (TimesFM, Chronos-2, …) return their fallback
+        algorithm's slug from ``get_actual_slug()`` once loaded; a healthy run
+        returns None (or its own slug). A mismatch means the requested model
+        never ran.
+        """
+        actual = engine.get_actual_slug()
+        if actual and actual != model_name:
+            raise ModelDegradedError(
+                f"'{model_name}' could not be loaded on this worker and fell back to "
+                f"'{actual}', which produces no forecast bands (so the backtest can't "
+                "run). The simulation was not completed with the requested model — "
+                "ensure it's installed and its weights are available on the worker, "
+                "then re-run."
+            )
+
+    def _configure_finetuned_engine(self, engine, klines: list) -> None:
+        """Point a fine-tuned engine at this run's coin/pair/timeframe checkpoint.
+
+        No-op for engines that aren't fine-tuned (they lack
+        ``configure_checkpoint``). The target is read off the kline rows, which
+        all share the same coin/pair/timeframe. If the per-target checkpoint
+        doesn't exist the engine falls back to its base (zero-shot) model.
+        """
+        configure = getattr(engine, "configure_checkpoint", None)
+        slug = getattr(engine, "finetune_source_slug", None)
+        if configure is None or not slug or not klines:
+            return
+        k = klines[0]
+        from crypto_ai.prediction.finetune_paths import finetune_checkpoint_dir
+        configure(finetune_checkpoint_dir(slug, k.coin_id, k.quote_asset, k.interval))
+
+    async def _resolve_orch_group(self, model_name: str):
+        """Load the orchestration group behind an ``orch:<group_id>`` model token.
+
+        Refuses a non-ready group: an un-calibrated group has an empty
+        composition, which would silently degrade the blended model to nothing.
+        """
+        from crypto_ai.services.orchestration import OrchestrationService
+
+        group_id = model_name.split(":", 1)[1]
+        group = await OrchestrationService(self.session).get_group(group_id)
+        if not group:
+            raise ValueError(f"Orchestration group not found: {group_id}")
+        if group.status != "ready":
+            raise ValueError(
+                f"Orchestration group '{group.name}' is not ready "
+                f"(status: {group.status}). Calibrate it before running a simulation."
+            )
+        return group
+
+    def _build_blending_engine(self, group):
+        """Build a BlendingEngine from a ready group's calibrated weights."""
+        from crypto_ai.prediction.engines.blending import BlendingEngine
+
+        return BlendingEngine(
+            weights=dict(group.model_composition or {}),
+            weights_by_key=dict(group.weights_by_key or {}),
+            registry=self.engine_registry,
+            engine_params=dict(group.engine_params or {}),
+        )
 
     def _get_engine_enum(self, model_name: str) -> PredictionEngineEnum | None:
         """Convert model name string to PredictionEngineEnum."""
@@ -776,6 +1334,11 @@ class KlineSimulationService:
             "kairos": PredictionEngineEnum.KAIROS,
             "tirex": PredictionEngineEnum.TIREX,
             "flowstate": PredictionEngineEnum.FLOWSTATE,
+            "toto2": PredictionEngineEnum.TOTO2,
+            "ttm": PredictionEngineEnum.TTM,
+            "tabpfn": PredictionEngineEnum.TABPFN,
+            "streak-reversal": PredictionEngineEnum.STREAK_REVERSAL,
+            "streak_reversal": PredictionEngineEnum.STREAK_REVERSAL,
         }
 
         if model_lower in mappings:
@@ -881,7 +1444,6 @@ class KlineSimulationService:
             beta = 0.05   # Trend factor
             predictions = []
             current = test_prices[-1]
-            trend = mean_return * current
 
             # Calculate recent trend from last 20 prices
             if len(test_prices) >= 20:
@@ -917,7 +1479,7 @@ class KlineSimulationService:
         """Generate detailed prediction analysis."""
         samples = []
 
-        for i, (date, actual, pred) in enumerate(zip(test_dates, test_actuals, predictions)):
+        for i, (dt, actual, pred) in enumerate(zip(test_dates, test_actuals, predictions)):
             # Only sample every Nth prediction to keep output manageable
             sample_interval = max(1, len(test_actuals) // 10)
             if i % sample_interval == 0 or i < 10:
@@ -925,7 +1487,7 @@ class KlineSimulationService:
                 pct_error = abs(error) / actual * 100 if actual != 0 else 0
 
                 samples.append({
-                    "date": str(date),
+                    "date": str(dt),
                     "actual": float(actual),
                     "predicted": float(pred),
                     "error": float(error),

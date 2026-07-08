@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dialog"
 import { useCustomer } from "@/components/providers/customer-provider"
 import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
+import { CloudDownload } from "@/components/animate-ui/icons/cloud-download"
 import { cn } from "@/lib/utils"
 
 type BadgeVariant = "muted" | "info" | "success" | "destructive" | "warning"
@@ -60,6 +61,7 @@ const TASK_TYPE_ICON: Record<TaskType, typeof Activity> = {
   import: Activity,
   finetune: Brain,
   optimization: Brain,
+  orchestration: Brain,
 }
 
 function getRedirectPath(task: TaskRecordResponse): string | null {
@@ -180,6 +182,8 @@ export function TaskDetailModal({
             >
               {task.status === "started" ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
+              ) : task.type === "import" ? (
+                <CloudDownload className="h-5 w-5" animateOnHover />
               ) : (
                 <Icon className="h-5 w-5" />
               )}

@@ -28,6 +28,7 @@ from crypto_ai.prediction.engine import (
     PredictionEngine,
     interpolate_quantile,
 )
+from crypto_ai.prediction.engines.chronos_pipeline_engine import _sanitize_nan
 from crypto_ai.prediction.preprocessor import DataPreprocessor
 from crypto_ai.schemas.prediction import PredictionResult
 
@@ -43,8 +44,11 @@ MAX_HORIZON = 720
 # For daily data with weekly seasonality: 24 / 7 ≈ 3.4286
 DEFAULT_SCALE_FACTOR = 24.0 / 7.0
 
+# r1.1 (2026 refresh): 18.5M params, 4096 context, output gating on the S5
+# encoder for noisier series.  Loaded as a HF revision of the r1 repo — the
+# "main" branch still holds the original r1 (9M params, 2048 context) weights.
 DEFAULT_MODEL_ID = "ibm-granite/granite-timeseries-flowstate-r1"
-DEFAULT_REVISION = "main"
+DEFAULT_REVISION = "r1.1"
 
 _FLOWSTATE_AVAILABLE: bool | None = None
 
@@ -96,7 +100,7 @@ class FlowStateEngine(PredictionEngine):
 
         Supported parameter names:
           model / submodel – HuggingFace model ID or short name
-          revision         – model revision (e.g. "r1.1" for research variant)
+          revision         – model revision (e.g. "r1.1" or "main" for original r1)
           batch_size       – outlets per forward pass (int)
           scale_factor     – sampling rate encoding (float); 24/N where N=steps/cycle
         """
@@ -329,10 +333,12 @@ class FlowStateEngine(PredictionEngine):
         for i, item in enumerate(items):
             preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
             pp = prepared[i]["preprocessor"]
-            preds = pp.denormalize(preds_norm)
-            lower = pp.denormalize(lower_norm)
-            upper = pp.denormalize(upper_norm)
-            quantiles = pp.denormalize(quantiles_norm)
+            # Sanitize NaN like the TimesFM/Chronos engines: a NaN forward
+            # pass otherwise propagates into stored predictions and metrics.
+            preds = _sanitize_nan(pp.denormalize(preds_norm))
+            lower = _sanitize_nan(pp.denormalize(lower_norm))
+            upper = _sanitize_nan(pp.denormalize(upper_norm))
+            quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
             # PAD adjustment — applied per-date, not via Ridge
             pad_adj = self.compute_pad_adjustments(

@@ -20,7 +20,7 @@ class FineTuneResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    customer_id: str
+    customer_id: str | None
     name: str
     description: str | None
     started_at: datetime | None
@@ -28,6 +28,10 @@ class FineTuneResponse(BaseModel):
     end_condition: str | None
     outlet_group_id: str | None
     outlet_group_name: str | None = None
+    coin_id: str | None = None
+    coin_symbol: str | None = None
+    quote_asset: str | None = None
+    interval: str | None = None
     finetune_from: date | None
     finetune_to: date | None
     finetuned_outlets: int

@@ -93,6 +93,11 @@ export default function StrategiesPage() {
   const [deleteParamDialogOpen, setDeleteParamDialogOpen] = useState(false)
   const [pendingDeleteParam, setPendingDeleteParam] = useState<KlineStrategyParameterResponse | null>(null)
 
+  // ── Delete-strategy dialog (Actions tab) ──
+  const [deleteStrategyDialogOpen, setDeleteStrategyDialogOpen] = useState(false)
+  const [deleteUnderstood, setDeleteUnderstood] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState("")
+
   const { data: strategies = [], isLoading } = useQuery({
     queryKey: ["klineStrategies"],
     queryFn: () => klineStrategiesApi.list(),
@@ -124,6 +129,8 @@ export default function StrategiesPage() {
         finetuned_model: selected.finetuned_model,
         forecast_engine: selected.forecast_engine,
         forecast_vol: selected.forecast_vol,
+        horizon: selected.horizon,
+        covariate_mode: selected.covariate_mode,
       })
     }
   }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -136,7 +143,9 @@ export default function StrategiesPage() {
       draft.simulation_strategy !== selected.simulation_strategy ||
       (draft.finetuned_model ?? null) !== selected.finetuned_model ||
       (draft.forecast_engine ?? null) !== selected.forecast_engine ||
-      draft.forecast_vol !== selected.forecast_vol
+      draft.forecast_vol !== selected.forecast_vol ||
+      (draft.horizon ?? 1) !== selected.horizon ||
+      (draft.covariate_mode ?? "off") !== selected.covariate_mode
     )
   }, [draft, selected])
 
@@ -174,6 +183,18 @@ export default function StrategiesPage() {
       toast.success("Deleted")
     },
   })
+
+  function openDeleteStrategyDialog() {
+    setDeleteUnderstood(false)
+    setDeleteConfirmText("")
+    setDeleteStrategyDialogOpen(true)
+  }
+
+  async function handleDeleteStrategy() {
+    if (!selectedId) return
+    await deleteMutation.mutateAsync([selectedId])
+    setDeleteStrategyDialogOpen(false)
+  }
 
   const addParamMutation = useMutation({
     mutationFn: () => klineStrategiesApi.addParameter(selectedId!, { name: newParamName.trim(), value: newParamValue.trim(), description: newParamDescription.trim() || null }),
@@ -272,6 +293,8 @@ export default function StrategiesPage() {
       finetuned_model: selected.finetuned_model,
       forecast_engine: selected.forecast_engine,
       forecast_vol: selected.forecast_vol,
+      horizon: selected.horizon,
+      covariate_mode: selected.covariate_mode,
     })
   }
 
@@ -417,6 +440,7 @@ export default function StrategiesPage() {
                     <TabsTrigger className={triggerClass} value="details">Details</TabsTrigger>
                     <TabsTrigger className={triggerClass} value="strategy">Strategy</TabsTrigger>
                     <TabsTrigger className={triggerClass} value="aimodel">AI Model</TabsTrigger>
+                    <TabsTrigger className={triggerClass} value="actions">Actions</TabsTrigger>
                     <div
                       className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
                       onClick={() => setDetailMaximized((v) => !v)}
@@ -464,6 +488,21 @@ export default function StrategiesPage() {
                       <option value="">Base model (no finetuning)</option>
                     </select>
                   </FieldRow>
+                  <FieldRow label="Forecast horizon">
+                    <div className="flex flex-col gap-1.5 max-w-xl">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={168}
+                        value={draft.horizon ?? 1}
+                        onChange={(e) => setDraft((d) => ({ ...d, horizon: Math.max(1, Math.min(168, parseInt(e.target.value, 10) || 1)) }))}
+                        className="w-28"
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Bars per forecast step. 1 = classic next-bar walk-forward. Higher values forecast the close H bars ahead over non-overlapping windows and score the H-bar move — calling the local trend while forgiving individual candles. Price strategy only.
+                      </span>
+                    </div>
+                  </FieldRow>
                 </TabsContent>
 
                 {/* ─ AI Model ─ */}
@@ -481,6 +520,22 @@ export default function StrategiesPage() {
                         Also run a second one-step forecast of realized volatility, so the Backtest tab’s vol-targeting / vol-breakout strategies can use a genuine volatility forecast instead of the price band width. Roughly doubles run time.
                       </span>
                     </label>
+                  </FieldRow>
+                  <FieldRow label="Signal covariates">
+                    <div className="flex flex-col gap-1.5 max-w-xl">
+                      <select
+                        value={draft.covariate_mode ?? "off"}
+                        onChange={(e) => setDraft((d) => ({ ...d, covariate_mode: e.target.value as "off" | "native" | "external" }))}
+                        className={SELECT_CLASS}
+                      >
+                        <option value="off">Off</option>
+                        <option value="native">Native — model-side covariate API</option>
+                        <option value="external">External — trailing-Ridge walk-forward adjustment</option>
+                      </select>
+                      <span className="text-xs text-muted-foreground">
+                        How the swing-signal series (volume/range/trade-count z-scores, taker tilt, streak, stretch, wicks — the same signals the Swings tab uses) reach the model. Native feeds them through the engine&apos;s own covariate API so the model can learn non-linear interactions — requires TimesFM or Chronos-2; other engines are refused at run time. External fits a Ridge on the run&apos;s own trailing (signals → residual) history and adjusts each forecast — strictly past-only, pooled across the whole walk-forward, and works with EVERY engine (orchestration groups included). Optional strategy parameters tune it: cov_window (trailing fit window in bars, default expanding), cov_alpha (Ridge penalty, 1.0), cov_warmup (unadjusted warm-up bars, 50), cov_refit (refit cadence, 50). Compare the same coin/timeframe across off / native / external on the Score/Sig columns to measure what the signals add.
+                      </span>
+                    </div>
                   </FieldRow>
 
                   {/* ── Parameters ── */}
@@ -551,6 +606,22 @@ export default function StrategiesPage() {
                     </TooltipProvider>
                   </div>
                 </TabsContent>
+
+                {/* ─ Actions ─ */}
+                <TabsContent value="actions" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
+                  <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-destructive">Delete Strategy</p>
+                      <p className="text-xs text-muted-foreground">
+                        Permanently delete this strategy and its parameters. This cannot be undone.
+                      </p>
+                    </div>
+                    <Button variant="destructive" size="sm" className="shrink-0" onClick={openDeleteStrategyDialog}>
+                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                      Delete
+                    </Button>
+                  </div>
+                </TabsContent>
               </div>
             </Tabs>
 
@@ -601,6 +672,38 @@ export default function StrategiesPage() {
             <Button variant="secondary" size="sm" onClick={() => setDeleteParamDialogOpen(false)}>Cancel</Button>
             <Button variant="destructive" size="sm" disabled={deleteParamMutation.isPending} onClick={() => { if (pendingDeleteParam) deleteParamMutation.mutate(pendingDeleteParam.id) }}>
               {deleteParamMutation.isPending ? "Removing…" : "Remove"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete strategy confirm */}
+      <Dialog open={deleteStrategyDialogOpen} onOpenChange={setDeleteStrategyDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Delete strategy?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes {selected?.name ? `“${selected.name}”` : "this strategy"} and its parameters. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <label className="flex items-start gap-3 rounded-md border border-destructive/30 p-3 cursor-pointer">
+              <Checkbox checked={deleteUnderstood} onCheckedChange={(v) => setDeleteUnderstood(!!v)} className="mt-0.5 shrink-0" />
+              <span className="text-sm">I understand this permanently deletes the strategy and its parameters.</span>
+            </label>
+            <FieldRow label="Type 'delete' to confirm">
+              <Input value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} placeholder="delete" />
+            </FieldRow>
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" size="sm" onClick={() => setDeleteStrategyDialogOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteStrategy}
+              disabled={!deleteUnderstood || deleteConfirmText !== "delete" || deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Deleting…" : "Delete strategy"}
             </Button>
           </DialogFooter>
         </DialogContent>

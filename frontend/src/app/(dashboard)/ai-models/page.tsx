@@ -70,6 +70,37 @@ function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
+function FtNumberField({
+  label, info, value, set, type,
+}: {
+  label: string
+  info: string
+  value: number
+  set: (v: number) => void
+  type: "int" | "float"
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1">
+        <label className="text-xs font-medium text-muted-foreground">{label}</label>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">{info}</TooltipContent>
+        </Tooltip>
+      </div>
+      <Input
+        type="number"
+        step={type === "float" ? "0.0001" : "1"}
+        value={value}
+        onChange={(e) => set(type === "float" ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0)}
+        className="h-9 text-xs"
+      />
+    </div>
+  )
+}
+
 // ─── localStorage helpers ─────────────────────────────────────────────────────
 
 const STORAGE_PREFIX = "gorm:aiModels:"
@@ -138,7 +169,9 @@ export default function AIModelsPage() {
   const [ftContextLength, setFtContextLength] = useState(() => loadJson<number>("ftContextLength", 512))
   const [ftHorizon, setFtHorizon] = useState(() => loadJson<number>("ftHorizon", 64))
   const [ftEpochs, setFtEpochs] = useState(() => loadJson<number>("ftEpochs", 50))
+  const [ftEarlyStoppingMethod, setFtEarlyStoppingMethod] = useState(() => loadJson<string>("ftEarlyStoppingMethod", "training"))
   const [ftEarlyStoppingPatience, setFtEarlyStoppingPatience] = useState(() => loadJson<number>("ftEarlyStoppingPatience", 0))
+  const [ftValidationSplit, setFtValidationSplit] = useState(() => loadJson<number>("ftValidationSplit", 20))
   const [ftLearningRate, setFtLearningRate] = useState(() => loadJson<number>("ftLearningRate", 0.001))
   const [ftBatchSize, setFtBatchSize] = useState(() => loadJson<number>("ftBatchSize", 32))
 
@@ -187,7 +220,9 @@ export default function AIModelsPage() {
   useEffect(() => { saveJson("ftContextLength", ftContextLength) }, [ftContextLength])
   useEffect(() => { saveJson("ftHorizon", ftHorizon) }, [ftHorizon])
   useEffect(() => { saveJson("ftEpochs", ftEpochs) }, [ftEpochs])
+  useEffect(() => { saveJson("ftEarlyStoppingMethod", ftEarlyStoppingMethod) }, [ftEarlyStoppingMethod])
   useEffect(() => { saveJson("ftEarlyStoppingPatience", ftEarlyStoppingPatience) }, [ftEarlyStoppingPatience])
+  useEffect(() => { saveJson("ftValidationSplit", ftValidationSplit) }, [ftValidationSplit])
   useEffect(() => { saveJson("ftLearningRate", ftLearningRate) }, [ftLearningRate])
   useEffect(() => { saveJson("ftBatchSize", ftBatchSize) }, [ftBatchSize])
 
@@ -301,6 +336,8 @@ export default function AIModelsPage() {
         finetune_sync_every: selectedModel.finetune_sync_every,
         finetune_sync_target: selectedModel.finetune_sync_target,
         finetune_allow_new_checkpoint: selectedModel.finetune_allow_new_checkpoint,
+        finetune_sane_epochs: selectedModel.finetune_sane_epochs,
+        finetune_max_mae: selectedModel.finetune_max_mae,
       })
     }
   }, [selectedModel?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -320,7 +357,9 @@ export default function AIModelsPage() {
       draft.finetuned_model_path !== selectedModel.finetuned_model_path ||
       draft.finetune_sync_every !== selectedModel.finetune_sync_every ||
       draft.finetune_sync_target !== selectedModel.finetune_sync_target ||
-      draft.finetune_allow_new_checkpoint !== selectedModel.finetune_allow_new_checkpoint
+      draft.finetune_allow_new_checkpoint !== selectedModel.finetune_allow_new_checkpoint ||
+      draft.finetune_sane_epochs !== selectedModel.finetune_sane_epochs ||
+      draft.finetune_max_mae !== selectedModel.finetune_max_mae
     )
   }, [draft, selectedModel])
 
@@ -334,6 +373,8 @@ export default function AIModelsPage() {
       finetune_sync_every: selectedModel.finetune_sync_every,
       finetune_sync_target: selectedModel.finetune_sync_target,
       finetune_allow_new_checkpoint: selectedModel.finetune_allow_new_checkpoint,
+      finetune_sane_epochs: selectedModel.finetune_sane_epochs,
+      finetune_max_mae: selectedModel.finetune_max_mae,
     })
   }
 
@@ -851,35 +892,43 @@ export default function AIModelsPage() {
                       {/* Column 1: Hyperparameters */}
                       <div className="flex flex-col gap-4">
                         <h3 className="text-sm font-medium">{t("finetuneParameters")}</h3>
-                        {([
-                          { key: "finetuneContextLength", value: ftContextLength, set: (v: number) => setFtContextLength(v), type: "int" },
-                          { key: "finetuneHorizon", value: ftHorizon, set: (v: number) => setFtHorizon(v), type: "int" },
-                          { key: "finetuneEpochs", value: ftEpochs, set: (v: number) => setFtEpochs(v), type: "int" },
-                          { key: "finetuneEarlyStoppingPatience", value: ftEarlyStoppingPatience, set: (v: number) => setFtEarlyStoppingPatience(v), type: "int" },
-                          { key: "finetuneLearningRate", value: ftLearningRate, set: (v: number) => setFtLearningRate(v), type: "float" },
-                          { key: "finetuneBatchSize", value: ftBatchSize, set: (v: number) => setFtBatchSize(v), type: "int" },
-                        ] as const).map(({ key, value, set, type }) => (
-                          <div key={key} className="flex flex-col gap-1.5">
-                            <div className="flex items-center gap-1">
-                              <label className="text-xs font-medium text-muted-foreground">{t(key)}</label>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs text-xs">
-                                  {t(`${key}Info`)}
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                            <Input
-                              type="number"
-                              step={type === "float" ? "0.0001" : "1"}
-                              value={value}
-                              onChange={(e) => set(type === "float" ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0)}
-                              className="h-9 text-xs"
-                            />
+                        <FtNumberField label={t("finetuneContextLength")} info={t("finetuneContextLengthInfo")} value={ftContextLength} set={setFtContextLength} type="int" />
+                        <FtNumberField label={t("finetuneHorizon")} info={t("finetuneHorizonInfo")} value={ftHorizon} set={setFtHorizon} type="int" />
+                        <FtNumberField label={t("finetuneEpochs")} info={t("finetuneEpochsInfo")} value={ftEpochs} set={setFtEpochs} type="int" />
+
+                        {/* Early Stopping Method — selects what the run monitors to pick the best epoch */}
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <label className="text-xs font-medium text-muted-foreground">{t("finetuneEarlyStoppingMethod")}</label>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">
+                                {t("finetuneEarlyStoppingMethodInfo")}
+                              </TooltipContent>
+                            </Tooltip>
                           </div>
-                        ))}
+                          <select
+                            value={ftEarlyStoppingMethod}
+                            onChange={(e) => setFtEarlyStoppingMethod(e.target.value)}
+                            className="h-9 text-xs rounded-md border border-input bg-background px-2"
+                          >
+                            <option value="training">{t("finetuneEarlyStoppingMethodTraining")}</option>
+                            <option value="validation">{t("finetuneEarlyStoppingMethodValidation")}</option>
+                          </select>
+                        </div>
+
+                        {/* Patience is only meaningful for the training-loss method; the
+                            validation method runs all epochs and keeps the best-validation epoch. */}
+                        {ftEarlyStoppingMethod === "validation" ? (
+                          <FtNumberField label={t("finetuneValidationSplit")} info={t("finetuneValidationSplitInfo")} value={ftValidationSplit} set={setFtValidationSplit} type="int" />
+                        ) : (
+                          <FtNumberField label={t("finetuneEarlyStoppingPatience")} info={t("finetuneEarlyStoppingPatienceInfo")} value={ftEarlyStoppingPatience} set={setFtEarlyStoppingPatience} type="int" />
+                        )}
+
+                        <FtNumberField label={t("finetuneLearningRate")} info={t("finetuneLearningRateInfo")} value={ftLearningRate} set={setFtLearningRate} type="float" />
+                        <FtNumberField label={t("finetuneBatchSize")} info={t("finetuneBatchSizeInfo")} value={ftBatchSize} set={setFtBatchSize} type="int" />
                       </div>
 
                       {/* Column 3: Sync Parameters */}

@@ -3,10 +3,16 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from crypto_ai.api.deps import BinanceImportServiceDep, DbSession, TaskServiceDep
+from crypto_ai.api.deps import (
+    BinanceImportServiceDep,
+    CoinServiceDep,
+    DbSession,
+    KlineServiceDep,
+    TaskServiceDep,
+)
 
 router = APIRouter()
 
@@ -29,20 +35,15 @@ async def import_from_file(
             tmp.write(content)
             tmp.flush()
 
-            # Parse the file
+            # Parse the file and upsert (skips bars already present)
             klines = await service.import_from_file(tmp.name, coin_id, interval, quote_asset)
-
-            # Create klines in database
-            from crypto_ai.database.models.kline import Kline
-
-            objs = [Kline(**k.model_dump()) for k in klines]
-            service.session.add_all(objs)
-            await service.session.flush()
+            inserted = await service.insert_klines(klines)
 
             return {
                 "status": "success",
-                "imported_count": len(klines),
-                "message": f"Successfully imported {len(klines)} klines",
+                "imported_count": inserted,
+                "message": f"Successfully imported {inserted} klines"
+                + (f" ({len(klines) - inserted} already present)" if inserted < len(klines) else ""),
             }
 
     except Exception as e:
@@ -64,19 +65,21 @@ async def import_from_binance(
     """Import klines directly from Binance data source with streaming progress."""
 
     async def event_generator():
+        import json
+
         imported = 0
         total = 0
         try:
             async for imported, total, message in service.import_from_binance(
                 symbol, interval, coin_id, quote_asset, start_date, end_date
             ):
-                yield f"data: {{'imported': {imported}, 'total': {total}, 'message': '{message}'}}\n\n"
+                yield f"data: {json.dumps({'imported': imported, 'total': total, 'message': message})}\n\n"
 
             await service.session.commit()
-            yield f"data: {{'imported': {imported}, 'total': {total}, 'message': 'Import complete!', 'status': 'success'}}\n\n"
+            yield f"data: {json.dumps({'imported': imported, 'total': total, 'message': 'Import complete!', 'status': 'success'})}\n\n"
         except Exception as e:
             await service.session.rollback()
-            yield f"data: {{'message': 'Import failed: {str(e)}', 'status': 'error'}}\n\n"
+            yield f"data: {json.dumps({'message': f'Import failed: {e}', 'status': 'error'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -119,6 +122,148 @@ async def import_from_binance_async(
 
     run_binance_import_task.apply_async(args=[request_data], task_id=task_id)
     return {"task_id": task_id, "status": "pending", "name": request_data["name"]}
+
+
+async def _plan_coin_refresh(coin, kline_service) -> list[dict]:
+    """Build one import request per standard interval for the coin's USDT pair.
+
+    Every interval in STANDARD_INTERVALS is refreshed against the USDT quote asset:
+    intervals that already have data are topped up from their last stored bar to
+    today; intervals with no data yet are back-filled from BINANCE_EARLIEST_DATE.
+    Overlapping bars are skipped on insert (ON CONFLICT DO NOTHING), so re-running
+    is safe.
+    """
+    from datetime import UTC, datetime
+
+    from crypto_ai.services.binance_import import (
+        BINANCE_EARLIEST_DATE,
+        STANDARD_INTERVALS,
+        fetch_earliest_listing_date,
+    )
+
+    # Latest stored bar per interval for the USDT pair (missing → back-fill all).
+    combos = await kline_service.get_loaded_combos(coin.id)
+    last_by_interval = {iv: hi for qa, iv, hi in combos if qa == "USDT"}
+
+    today = datetime.now(UTC).date().isoformat()
+    symbol = f"{coin.symbol}USDT"
+
+    # Intervals with no data are back-filled from the coin's actual first bar
+    # (probed once via REST), not the 2017 floor — otherwise a coin listed later
+    # (e.g. DODO 2021, BROCCOLI714 2025) 404s on every pre-listing monthly archive.
+    # Fall back to the 2017 floor if the probe fails.
+    backfill_start = BINANCE_EARLIEST_DATE
+    if any(iv not in last_by_interval for iv in STANDARD_INTERVALS):
+        listing = await fetch_earliest_listing_date(symbol)
+        if listing:
+            backfill_start = listing
+
+    requests: list[dict] = []
+    for interval in STANDARD_INTERVALS:
+        last_open = last_by_interval.get(interval)
+        start_date = last_open.date().isoformat() if last_open else backfill_start
+        requests.append(
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "coin_id": coin.id,
+                "quote_asset": "USDT",
+                "start_date": start_date,
+                "end_date": today,
+                "name": f"{symbol} {interval} {start_date}→{today}",
+            }
+        )
+    return requests
+
+
+@router.post("/refresh-coin")
+async def refresh_coin_data(
+    task_service: TaskServiceDep,
+    session: DbSession,
+    coin_service: CoinServiceDep,
+    kline_service: KlineServiceDep,
+    coin_id: Annotated[str, Query(description="Coin UUID")],
+) -> dict:
+    """Update all standard intervals for a coin (USDT pair) from Binance.
+
+    Enqueues one background import per interval in STANDARD_INTERVALS: loaded
+    intervals are topped up from their last bar, missing intervals are back-filled
+    from the earliest available data. Returns the enqueued tasks; poll each via
+    GET /binance-import/tasks/{id}.
+    """
+    from crypto_ai.tasks.imports import run_binance_import_task
+
+    coin = await coin_service.get(coin_id)
+    if not coin:
+        raise HTTPException(status_code=404, detail="Coin not found")
+
+    enqueued: list[tuple[str, dict]] = []
+    for request_data in await _plan_coin_refresh(coin, kline_service):
+        task_id = str(uuid.uuid4())
+        await task_service.create(
+            task_id, "import", None, name=request_data["name"], request_data=request_data
+        )
+        enqueued.append((task_id, request_data))
+
+    # Commit all records before enqueuing so workers can't race the inserts.
+    await session.commit()
+    for task_id, request_data in enqueued:
+        run_binance_import_task.apply_async(args=[request_data], task_id=task_id)
+
+    tasks = [
+        {
+            "task_id": task_id,
+            "name": rd["name"],
+            "quote_asset": rd["quote_asset"],
+            "interval": rd["interval"],
+        }
+        for task_id, rd in enqueued
+    ]
+    return {"tasks": tasks, "count": len(tasks)}
+
+
+@router.post("/refresh-coins")
+async def refresh_coins_data(
+    task_service: TaskServiceDep,
+    session: DbSession,
+    coin_service: CoinServiceDep,
+    kline_service: KlineServiceDep,
+    coin_ids: Annotated[list[str], Query(description="Coin UUIDs")],
+) -> dict:
+    """Update all standard intervals (USDT pair) for several coins at once.
+
+    Same per-coin behavior as /refresh-coin; unknown coin ids are skipped. Returns
+    the combined set of enqueued tasks across all coins.
+    """
+    from crypto_ai.tasks.imports import run_binance_import_task
+
+    enqueued: list[tuple[str, dict]] = []
+    for coin_id in coin_ids:
+        coin = await coin_service.get(coin_id)
+        if not coin:
+            continue
+        for request_data in await _plan_coin_refresh(coin, kline_service):
+            task_id = str(uuid.uuid4())
+            await task_service.create(
+                task_id, "import", None, name=request_data["name"], request_data=request_data
+            )
+            enqueued.append((task_id, request_data))
+
+    # Commit all records before enqueuing so workers can't race the inserts.
+    await session.commit()
+    for task_id, request_data in enqueued:
+        run_binance_import_task.apply_async(args=[request_data], task_id=task_id)
+
+    tasks = [
+        {
+            "task_id": task_id,
+            "name": rd["name"],
+            "quote_asset": rd["quote_asset"],
+            "interval": rd["interval"],
+        }
+        for task_id, rd in enqueued
+    ]
+    return {"tasks": tasks, "count": len(tasks)}
 
 
 @router.get("/tasks/{task_id}")

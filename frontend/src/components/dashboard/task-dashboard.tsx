@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { X, Loader2, Info, CheckCircle2, XCircle, AlertTriangle, RefreshCw } from "lucide-react"
 import { AnimatedActivity, AnimatedFlask, AnimatedCookingPot, AnimatedSettings } from "@/components/icons/animated-icons"
 import { AnimateIcon } from "@/components/animate-ui/icons/icon"
+import { CloudDownload } from "@/components/animate-ui/icons/cloud-download"
 import { Pickaxe } from "@/components/animate-ui/icons/pickaxe"
 import { useAnimation } from "motion/react"
 import { formatDistanceToNow } from "date-fns"
@@ -61,7 +62,16 @@ function TaskCard({ task, customerName, activeTaskIds, onTaskClick }: { task: Ta
   })
 
   const iconControls = useAnimation()
+  const [hovered, setHovered] = useState(false)
   const Icon = task.type === "prediction" ? AnimatedActivity : task.type === "finetune" ? AnimatedCookingPot : task.type === "optimization" ? AnimatedSettings : AnimatedFlask
+  // Import tasks use the animate-ui CloudDownload icon (its own `animate`
+  // trigger); other types use the motion-controls animated-icons set.
+  const renderIcon = (className: string) =>
+    task.type === "import" ? (
+      <CloudDownload className={className} animate={hovered} />
+    ) : (
+      <Icon className={className} controls={iconControls} />
+    )
 
   const timeRef = task.completed_at ?? task.started_at ?? task.created_at
   const timeStr = timeRef
@@ -86,8 +96,8 @@ function TaskCard({ task, customerName, activeTaskIds, onTaskClick }: { task: Ta
     <div
       className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:bg-[var(--accent)]/30 transition-colors cursor-pointer"
       onClick={handleClick}
-      onMouseEnter={() => iconControls.start("animate")}
-      onMouseLeave={() => iconControls.start("normal")}
+      onMouseEnter={() => { setHovered(true); iconControls.start("animate") }}
+      onMouseLeave={() => { setHovered(false); iconControls.start("normal") }}
     >
       <div className="flex flex-col items-center gap-1.5 shrink-0">
         <div
@@ -105,7 +115,7 @@ function TaskCard({ task, customerName, activeTaskIds, onTaskClick }: { task: Ta
           {task.status === "started" ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <Icon className="h-4 w-4" controls={iconControls} />
+            renderIcon("h-4 w-4")
           )}
         </div>
         <TooltipProvider delayDuration={100}>
@@ -536,6 +546,22 @@ export function TaskDashboard() {
     },
   })
 
+  // Running/Pending are fetched by status so they're never hidden by the
+  // created_at-ordered 100-row window of the main list — a large backlog
+  // pushes the (FIFO, oldest-created) running task out of that window.
+  const { data: runningData } = useQuery({
+    queryKey: ["tasks", "started"],
+    queryFn: () => tasksApi.list({ status: "started", limit: 50 }),
+    staleTime: 0,
+    refetchInterval: 5_000,
+  })
+  const { data: pendingData } = useQuery({
+    queryKey: ["tasks", "pending"],
+    queryFn: () => tasksApi.list({ status: "pending", limit: 50 }),
+    staleTime: 0,
+    refetchInterval: (query) => ((query.state.data?.items?.length ?? 0) > 0 ? 5_000 : 30_000),
+  })
+
   const { data: activeWorkerTasks } = useQuery({
     queryKey: ["tasks-active"],
     queryFn: () => tasksApi.active(),
@@ -563,11 +589,11 @@ export function TaskDashboard() {
 
   const COLUMN_LIMIT = 10
   const tasks = tasksData?.items ?? []
-  const pending = tasks
+  const pending = (pendingData?.items ?? [])
     .filter((t) => t.status === "pending")
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .slice(0, COLUMN_LIMIT)
-  const running = tasks
+  const running = (runningData?.items ?? [])
     .filter((t) => t.status === "started")
     .sort((a, b) =>
       (b.started_at ?? b.created_at) < (a.started_at ?? a.created_at) ? -1 : 1

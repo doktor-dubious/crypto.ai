@@ -22,6 +22,7 @@ from crypto_ai.prediction.engine import (
     PredictionEngine,
     interpolate_quantile,
 )
+from crypto_ai.prediction.engines.chronos_pipeline_engine import _sanitize_nan
 from crypto_ai.prediction.preprocessor import DataPreprocessor
 from crypto_ai.schemas.prediction import PredictionResult
 
@@ -363,10 +364,12 @@ class SundialEngine(PredictionEngine):
         for i, item in enumerate(items):
             preds_norm, lower_norm, upper_norm, quantiles_norm = raw_results[i]
             pp = prepared[i]["preprocessor"]
-            preds = pp.denormalize(preds_norm)
-            lower = pp.denormalize(lower_norm)
-            upper = pp.denormalize(upper_norm)
-            quantiles = pp.denormalize(quantiles_norm)
+            # Sanitize NaN like the TimesFM/Chronos engines: a NaN forward
+            # pass otherwise propagates into stored predictions and metrics.
+            preds = _sanitize_nan(pp.denormalize(preds_norm))
+            lower = _sanitize_nan(pp.denormalize(lower_norm))
+            upper = _sanitize_nan(pp.denormalize(upper_norm))
+            quantiles = _sanitize_nan(pp.denormalize(quantiles_norm))
 
             # PAD adjustment — applied per-date, not via Ridge
             pad_adj = self.compute_pad_adjustments(
@@ -484,8 +487,9 @@ class SundialEngine(PredictionEngine):
                 use_cache=False,
             )
         # output.logits shape: (batch, num_samples, output_token_len)
-        # Trim to exact horizon.
-        forecast_np = output.logits.cpu().numpy()[:, :, :horizon]
+        # Trim to exact horizon. .float() first: numpy can't convert bfloat16
+        # tensors, so precision=bfloat16 would crash here without it.
+        forecast_np = output.logits.cpu().float().numpy()[:, :, :horizon]
 
         results = []
         ridge_infos = []

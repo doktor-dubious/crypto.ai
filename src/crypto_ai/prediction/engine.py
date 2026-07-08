@@ -115,6 +115,13 @@ class PredictionEngine(ABC):
     """Abstract base class for all prediction engines."""
 
     allow_fallback: bool = True
+    # True only for engines whose covariate_handling="native" invokes a REAL
+    # model-side covariate API (e.g. TimesFM forecast_with_covariates). Engines
+    # without one fall back to the shared residual-Ridge layer, which fits on
+    # min(len(values), horizon) samples and DEGENERATES at horizon=1 (single
+    # residual point pins the forecast to the last value) — so horizon-1
+    # walk-forwards must only feed covariates to native-capable engines.
+    supports_native_covariates: bool = False
 
     @abstractmethod
     async def predict(

@@ -7,7 +7,7 @@ import {
   addMonths, subMonths, addYears, subYears,
   startOfMonth, endOfMonth, eachDayOfInterval,
   getDay, isSameDay, isToday, isBefore, isAfter,
-  differenceInCalendarDays, format,
+  differenceInCalendarDays, format, parseISO,
 } from "date-fns"
 import {
   ChevronDown, ChevronLeft, ChevronRight, Check,
@@ -19,10 +19,17 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
-  predictionEnginesApi, customersApi, outletGroupsApi, finetuneApi, tasksApi,
+  predictionEnginesApi, coinsApi, klinesApi, finetuneApi, tasksApi,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+
+// Order timeframes by real duration (shortest first), e.g. 5m, 15m, 1h, 4h, 1d.
+const INTERVAL_UNIT_MIN: Record<string, number> = { m: 1, h: 60, d: 1440, w: 10080, M: 43200 }
+function intervalMinutes(s: string): number {
+  const m = /^(\d+)\s*([mhdwM])$/.exec(s.trim())
+  return m ? parseInt(m[1], 10) * (INTERVAL_UNIT_MIN[m[2]] ?? 1) : Number.MAX_SAFE_INTEGER
+}
 
 // ─── localStorage helpers ─────────────────────────────────────────────────────
 
@@ -187,9 +194,10 @@ export default function AIModelFinetunePage() {
   const [ftName, setFtName] = useState<string>(() => loadJson<string>("ftName", ""))
   const [ftDescription, setFtDescription] = useState<string>(() => loadJson<string>("ftDescription", ""))
 
-  // ── Finetune state
-  const [ftCustomerId, setFtCustomerId] = useState<string | null>(() => loadJson<string | null>("ftCustomerId", null))
-  const [ftGroupId, setFtGroupId] = useState<string | null>(() => loadJson<string | null>("ftGroupId", null))
+  // ── Finetune target (coin / trading pair / timeframe)
+  const [coinId, setCoinId] = useState<string | null>(() => loadJson<string | null>("ftCoinId", null))
+  const [quoteAsset, setQuoteAsset] = useState<string | null>(() => loadJson<string | null>("ftQuoteAsset", null))
+  const [timeframe, setTimeframe] = useState<string | null>(() => loadJson<string | null>("ftTimeframe", null))
   const [startDate, setStartDate] = useState<Date | undefined>(() => {
     const v = loadJson<string | null>("ftStartDate", null)
     return v ? new Date(v) : undefined
@@ -211,17 +219,33 @@ export default function AIModelFinetunePage() {
     [engines, selectedEngineId],
   )
 
-  const { data: ftCustomers = [] } = useQuery({
-    queryKey: ["customers"],
-    queryFn: () => customersApi.list({ limit: 100 }),
-    staleTime: 5 * 60 * 1000,
+  const { data: coins = [] } = useQuery({
+    queryKey: ["coins"],
+    queryFn: () => coinsApi.list({ limit: 1000 }),
   })
+  const selectedCoin = coins.find((c) => c.id === coinId)
 
-  const { data: ftGroups = [] } = useQuery({
-    queryKey: ["outlet-groups", ftCustomerId],
-    queryFn: () => outletGroupsApi.list(ftCustomerId!),
-    enabled: !!ftCustomerId,
+  const { data: pairsResp } = useQuery({
+    queryKey: ["ftPairs", coinId],
+    queryFn: () => klinesApi.getTradingPairs(coinId!),
+    enabled: !!coinId,
   })
+  const pairs = pairsResp?.pairs ?? []
+
+  const { data: tfResp } = useQuery({
+    queryKey: ["ftTimeframes", coinId, quoteAsset],
+    queryFn: () => klinesApi.getTimeframes(coinId!, quoteAsset!),
+    enabled: !!coinId && !!quoteAsset,
+  })
+  const timeframes = [...(tfResp?.timeframes ?? [])].sort((a, b) => intervalMinutes(a) - intervalMinutes(b))
+
+  const { data: rangeResp } = useQuery({
+    queryKey: ["ftRange", coinId, quoteAsset, timeframe],
+    queryFn: () => klinesApi.getDateRange(coinId!, quoteAsset!, timeframe!),
+    enabled: !!coinId && !!quoteAsset && !!timeframe,
+  })
+  const dataMin = rangeResp?.start_date ? parseISO(rangeResp.start_date) : undefined
+  const dataMax = rangeResp?.end_date ? parseISO(rangeResp.end_date) : undefined
 
   const { data: allWorkers = [] } = useQuery({
     queryKey: ["workers"],
@@ -250,20 +274,26 @@ export default function AIModelFinetunePage() {
 
   function handleStartFinetune() {
     if (!selectedEngineId) return
-    if (!ftCustomerId) { toast.error(t("finetuneErrorNoCustomer")); return }
+    if (!coinId || !quoteAsset || !timeframe) { toast.error(t("finetuneErrorNoCoin")); return }
     const resolvedName = ftName.trim() || `Fine-tune ${format(new Date(), "yyyy-MM-dd HH:mm")}`
     finetuneMutation.mutate({
       prediction_engine_id: selectedEngineId,
-      customer_id: ftCustomerId,
+      coin_id: coinId,
+      quote_asset: quoteAsset,
+      interval: timeframe,
       name: resolvedName,
       description: ftDescription.trim() || undefined,
-      outlet_group_id: ftGroupId,
       start_date: startDate ? format(startDate, "yyyy-MM-dd") : undefined,
       end_date: endDate ? format(endDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
       context_length: loadJson<number>("ftContextLength", 512),
       horizon: loadJson<number>("ftHorizon", 64),
       epochs: loadJson<number>("ftEpochs", 50),
-      early_stopping_patience: loadJson<number>("ftEarlyStoppingPatience", 0),
+      early_stopping_method: loadJson<string>("ftEarlyStoppingMethod", "training"),
+      // Patience only applies to the training-loss method; force 0 for validation.
+      early_stopping_patience: loadJson<string>("ftEarlyStoppingMethod", "training") === "validation"
+        ? 0 : loadJson<number>("ftEarlyStoppingPatience", 0),
+      // UI stores the split as a percentage; the API expects a 0–1 fraction.
+      validation_split: loadJson<number>("ftValidationSplit", 20) / 100,
       learning_rate: loadJson<number>("ftLearningRate", 0.001),
       batch_size: loadJson<number>("ftBatchSize", 32),
       worker: ftWorker,
@@ -282,8 +312,9 @@ export default function AIModelFinetunePage() {
     setFtName("")
     setFtDescription("")
     setSelectedEngineId(null)
-    setFtCustomerId(null)
-    setFtGroupId(null)
+    setCoinId(null)
+    setQuoteAsset(null)
+    setTimeframe(null)
     setStartDate(undefined)
     setEndDate(undefined)
     setFtWorker(null)
@@ -297,11 +328,24 @@ export default function AIModelFinetunePage() {
   useEffect(() => { saveJson("ftEngineId", selectedEngineId) }, [selectedEngineId])
   useEffect(() => { saveJson("ftName", ftName) }, [ftName])
   useEffect(() => { saveJson("ftDescription", ftDescription) }, [ftDescription])
-  useEffect(() => { saveJson("ftCustomerId", ftCustomerId) }, [ftCustomerId])
-  useEffect(() => { saveJson("ftGroupId", ftGroupId) }, [ftGroupId])
+  useEffect(() => { saveJson("ftCoinId", coinId) }, [coinId])
+  useEffect(() => { saveJson("ftQuoteAsset", quoteAsset) }, [quoteAsset])
+  useEffect(() => { saveJson("ftTimeframe", timeframe) }, [timeframe])
   useEffect(() => { saveJson("ftStartDate", startDate?.toISOString() ?? null) }, [startDate])
   useEffect(() => { saveJson("ftEndDate", endDate?.toISOString() ?? null) }, [endDate])
   useEffect(() => { saveJson("ftWorker", ftWorker) }, [ftWorker])
+
+  // Once the kline date range loads, default an empty selection to the full
+  // data span (earliest → latest), and clamp any existing selection into it so
+  // a stale value from another pair/timeframe stays valid.
+  useEffect(() => {
+    if (!rangeResp?.start_date || !rangeResp?.end_date) return
+    const lo = parseISO(rangeResp.start_date)
+    const hi = parseISO(rangeResp.end_date)
+    const clamp = (d: Date) => (isBefore(d, lo) ? lo : isAfter(d, hi) ? hi : d)
+    setStartDate((d) => (d ? clamp(d) : lo))
+    setEndDate((d) => (d ? clamp(d) : hi))
+  }, [rangeResp?.start_date, rangeResp?.end_date])
 
   // Clear worker if filtered out
   useEffect(() => {
@@ -359,59 +403,84 @@ export default function AIModelFinetunePage() {
           </DropdownMenu>
         </FieldRow>
 
-        {/* Customer */}
-        <FieldRow label={t("finetuneCustomer")}>
+        {/* Coin */}
+        <FieldRow label={t("finetuneCoin")}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer">
-                <span className={cn(!ftCustomerId && "text-[var(--muted-foreground)]")}>
-                  {ftCustomerId ? ftCustomers.find((c) => c.id === ftCustomerId)?.name ?? "—" : t("finetuneCustomerPlaceholder")}
+                <span className={cn("truncate", !coinId && "text-[var(--muted-foreground)]")}>
+                  {selectedCoin ? `${selectedCoin.symbol} — ${selectedCoin.name}` : t("finetuneCoinPlaceholder")}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
-              {ftCustomers.map((c) => (
+              {coins.map((c) => (
                 <DropdownMenuItem
                   key={c.id}
-                  onClick={() => { setFtCustomerId(c.id); setFtGroupId(null) }}
+                  onClick={() => { setCoinId(c.id); setQuoteAsset(null); setTimeframe(null) }}
                   className="flex items-center justify-between"
                 >
-                  <span className="truncate">{c.name}</span>
-                  {ftCustomerId === c.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                  <span className="truncate">{c.symbol} — {c.name}</span>
+                  {coinId === c.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </FieldRow>
 
-        {/* Outlet Group */}
-        <FieldRow label={t("finetuneOutletGroup")}>
+        {/* Trading Pair */}
+        <FieldRow label={t("finetuneTradingPair")}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer" disabled={!ftCustomerId}>
-                <span className={cn(!ftGroupId && "text-[var(--muted-foreground)]")}>
-                  {ftGroupId ? ftGroups.find((g) => g.id === ftGroupId)?.name ?? "—" : t("finetuneOutletGroupPlaceholder")}
+              <button
+                disabled={!coinId}
+                className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span className={cn("truncate", !quoteAsset && "text-[var(--muted-foreground)]")}>
+                  {quoteAsset ? `${selectedCoin?.symbol ?? ""}${quoteAsset}` : t("finetuneTradingPairPlaceholder")}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
-              <DropdownMenuItem
-                onClick={() => setFtGroupId(null)}
-                className="flex items-center justify-between"
-              >
-                <span className="text-[var(--muted-foreground)]">{t("finetuneOutletGroupPlaceholder")}</span>
-                {ftGroupId === null && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
-              </DropdownMenuItem>
-              {ftGroups.map((g) => (
+              {pairs.map((p) => (
                 <DropdownMenuItem
-                  key={g.id}
-                  onClick={() => setFtGroupId(g.id)}
+                  key={p}
+                  onClick={() => { setQuoteAsset(p); setTimeframe(null) }}
                   className="flex items-center justify-between"
                 >
-                  <span className="truncate">{g.name} ({g.outlet_count})</span>
-                  {ftGroupId === g.id && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                  <span className="truncate">{selectedCoin?.symbol}{p}</span>
+                  {quoteAsset === p && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </FieldRow>
+
+        {/* Timeframe */}
+        <FieldRow label={t("finetuneTimeframe")}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                disabled={!quoteAsset}
+                className="flex items-center justify-between h-8 w-72 px-3 rounded-md border border-[var(--input-border,var(--border))] bg-transparent text-sm hover:bg-[var(--muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span className={cn("truncate", !timeframe && "text-[var(--muted-foreground)]")}>
+                  {timeframe ?? t("finetuneTimeframePlaceholder")}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-50 ml-2 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72 max-h-60 overflow-y-auto">
+              {timeframes.map((tf) => (
+                <DropdownMenuItem
+                  key={tf}
+                  onClick={() => setTimeframe(tf)}
+                  className="flex items-center justify-between"
+                >
+                  <span>{tf}</span>
+                  {timeframe === tf && <Check className="h-3.5 w-3.5 ml-2 shrink-0" />}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -472,7 +541,8 @@ export default function AIModelFinetunePage() {
               <MiniCalendar
                 selected={startDate}
                 onSelect={handleStartSelect}
-                maxDate={endDate}
+                minDate={dataMin}
+                maxDate={endDate ?? dataMax}
               />
             </div>
           </div>
@@ -492,18 +562,26 @@ export default function AIModelFinetunePage() {
               <MiniCalendar
                 selected={endDate}
                 onSelect={setEndDate}
-                minDate={startDate}
+                minDate={startDate ?? dataMin}
+                maxDate={dataMax}
                 disabled={!startDate}
               />
             </div>
           </div>
         </div>
 
-        {dayCount !== null && (
-          <div className="absolute top-[4.25rem] left-1/2 -translate-x-1/2 z-20 bg-background px-2">
-            <span className="text-xs text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
-              {dayCount} {dayCount === 1 ? "day" : "days"}
-            </span>
+        {(dayCount !== null || (dataMin && dataMax)) && (
+          <div className="absolute top-[3.5rem] left-1/2 -translate-x-1/2 z-20 bg-background px-2 flex flex-col items-center gap-0.5">
+            {dataMin && dataMax && (
+              <span className="text-[11px] text-[var(--muted-foreground)] whitespace-nowrap">
+                {t("finetuneDataAvailable")}: {format(dataMin, "d MMM yyyy")} – {format(dataMax, "d MMM yyyy")}
+              </span>
+            )}
+            {dayCount !== null && (
+              <span className="text-xs text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
+                {dayCount} {dayCount === 1 ? "day" : "days"}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -516,7 +594,7 @@ export default function AIModelFinetunePage() {
         <Button
           size="sm"
           onClick={handleStartFinetune}
-          disabled={finetuneMutation.isPending || !selectedEngineId}
+          disabled={finetuneMutation.isPending || !selectedEngineId || !coinId || !quoteAsset || !timeframe}
           className="cursor-pointer"
         >
           {finetuneMutation.isPending ? t("finetuneStarting") : t("finetuneStart")}

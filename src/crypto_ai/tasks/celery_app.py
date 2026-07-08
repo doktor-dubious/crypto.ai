@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import threading
 
 from celery import Celery
 from celery.signals import (
@@ -23,8 +24,19 @@ celery_app = Celery(
     "crypto_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["crypto_ai.tasks.predictions", "crypto_ai.tasks.simulations", "crypto_ai.tasks.finetuning", "crypto_ai.tasks.optimization", "crypto_ai.tasks.finetune_examination", "crypto_ai.tasks.kline_simulations", "crypto_ai.tasks.imports"],
+    include=["crypto_ai.tasks.predictions", "crypto_ai.tasks.simulations", "crypto_ai.tasks.finetuning", "crypto_ai.tasks.optimization", "crypto_ai.tasks.finetune_examination", "crypto_ai.tasks.kline_simulations", "crypto_ai.tasks.imports", "crypto_ai.tasks.orchestration", "crypto_ai.tasks.metadata", "crypto_ai.tasks.paper_trade"],
 )
+
+# Periodic schedule (run the worker with embedded beat, ``celery worker -B``).
+# The paper-trade engine ticks ~once a minute, stepping every running run
+# forward by any newly-closed bars.
+celery_app.conf.beat_schedule = {
+    "step-paper-trades": {
+        "task": "crypto_ai.tasks.paper_trade.step_paper_trades",
+        "schedule": 60.0,
+    },
+}
+celery_app.conf.timezone = "UTC"
 
 # Celery configuration
 @worker_process_init.connect
@@ -56,15 +68,18 @@ def get_current_metrics(task_id: str) -> tuple[float | None, float | None]:
         return None, None
 
 
-def _refresh_worker_registry() -> None:
+def _refresh_worker_registry(hostname: str | None = None) -> None:
     """Refresh this worker's TTL in the Redis registry.
 
     Called from Celery signals (prerun/postrun) and can also be called
     from within a running task via ``refresh_worker_registry()`` to keep
-    long-running tasks alive in the registry.
+    long-running tasks alive in the registry. The idle heartbeat passes the
+    hostname explicitly (a background thread can't rely on the current-worker
+    lookup).
     """
     try:
-        hostname = celery_app.current_worker.hostname  # type: ignore[union-attr]
+        if hostname is None:
+            hostname = celery_app.current_worker.hostname  # type: ignore[union-attr]
         r = _get_redis()
         r.setex(f"{WORKER_REGISTRY_PREFIX}{hostname}", WORKER_REGISTRY_TTL, "1")
         models = _get_worker_models()
@@ -162,6 +177,44 @@ WORKER_GPU_COUNT_PREFIX = "gorm:worker-gpu-count:"
 WORKER_STARTED_PREFIX = "gorm:worker-started:"
 WORKER_REGISTRY_TTL = 7200  # 2 hours – covers long-running simulation tasks
 TASK_STOP_PREFIX = "gorm:task-stop:"
+
+
+# Keeps this worker's registry keys alive while idle. task_prerun refreshes the
+# TTL on task start, but a worker idle longer than the TTL would expire and drop
+# out of /tasks/workers/list despite being alive. Runs in the worker main
+# process (not the pool), so it fires whether idle or busy, and refreshes its
+# OWN key (a beat task couldn't guarantee that). 4 beats per TTL tolerates misses.
+WORKER_HEARTBEAT_INTERVAL = WORKER_REGISTRY_TTL // 4  # 30 min
+
+_heartbeat_stop = threading.Event()
+_heartbeat_thread: threading.Thread | None = None
+
+
+def _start_registry_heartbeat(hostname: str) -> None:
+    """Start a daemon thread that periodically refreshes this worker's registry."""
+    global _heartbeat_thread
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        return
+    _heartbeat_stop.clear()
+
+    def _beat() -> None:
+        # Event.wait returns True on stop (shutdown), False on timeout (beat).
+        while not _heartbeat_stop.wait(WORKER_HEARTBEAT_INTERVAL):
+            _refresh_worker_registry(hostname)
+
+    _heartbeat_thread = threading.Thread(
+        target=_beat, name="worker-registry-heartbeat", daemon=True
+    )
+    _heartbeat_thread.start()
+    logger.info(
+        "Worker %s: registry heartbeat started (every %ss, TTL %ss)",
+        hostname, WORKER_HEARTBEAT_INTERVAL, WORKER_REGISTRY_TTL,
+    )
+
+
+def _stop_registry_heartbeat() -> None:
+    """Signal the heartbeat thread to exit (called on worker shutdown)."""
+    _heartbeat_stop.set()
 
 
 def request_graceful_stop(task_id: str) -> None:
@@ -285,10 +338,15 @@ def on_worker_ready(sender, **kwargs):
     except Exception:
         pass
 
+    # Keep the registry keys alive while the worker sits idle between tasks.
+    if hostname:
+        _start_registry_heartbeat(hostname)
+
 
 @worker_shutdown.connect
 def on_worker_shutdown(sender, **kwargs):
     """Remove this worker from the Redis registry."""
+    _stop_registry_heartbeat()
     hostname = sender.hostname
     try:
         r = _get_redis()

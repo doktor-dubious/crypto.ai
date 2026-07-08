@@ -45,11 +45,25 @@ yinglong = [
 autogluon = [
     "autogluon.timeseries>=1.2.0",
 ]
+# Chronos-2 (real amazon/chronos-2) requires the 2.x pipeline line.
 chronos = [
-    "chronos-forecasting>=1.4.0",
+    "chronos-forecasting>=2.2.0",
 ]
 toto = [
     "toto-ts",
+]
+# Toto 2.0 (Datadog): separate package/distribution from toto-ts (Toto 1.0).
+# Installs the `toto2` import. Requires Python 3.12+. Install in its own worker.
+toto2 = [
+    # toto-models requires Python >=3.12; gate it so the lock still resolves on
+    # the 3.11 base image. A toto2 worker must run a 3.12 image to get it.
+    "toto-models; python_version >= '3.12'",
+]
+# TabPFN-TS (Prior Labs) — LOCAL-ONLY. The local `tabpfn` package is mandatory
+# so the engine never falls back to the cloud client. Install in its own worker.
+tabpfn = [
+    "tabpfn-time-series",
+    "tabpfn>=6.0.6",
 ]
 # MOIRAI-2 (Salesforce): cannot coexist with autogluon-timeseries due to
 # gluonts version conflict (uni2ts needs ~=0.14.3, autogluon needs >=0.15).
@@ -106,6 +120,58 @@ conflicts = [
     [
         { extra = "toto" },
         { extra = "flowstate" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "flowstate" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "toto" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "autogluon" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "moirai" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "yinglong" },
+    ],
+    [
+        { extra = "tabpfn" },
+        { extra = "kairos" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "moirai" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "autogluon" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "toto" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "kairos" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "flowstate" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "yinglong" },
+    ],
+    [
+        { extra = "toto2" },
+        { extra = "tabpfn" },
     ],
 ]
 

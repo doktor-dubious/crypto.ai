@@ -9,10 +9,16 @@ from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.kline_simulation import KlineSimulation
 from crypto_ai.database.models.kline_simulation_prediction import KlineSimulationPrediction
 from crypto_ai.database.models.kline_strategy import KlineStrategy, KlineStrategyParameter
+from crypto_ai.database.models.paper_trade import PaperTrade
+from crypto_ai.database.models.paper_trade_equity import PaperTradeEquity
+from crypto_ai.database.models.paper_trade_run import PaperTradeRun
+from crypto_ai.database.models.strategy_template import StrategyTemplate
 from crypto_ai.database.models.covariate import Covariate, CovariateOutlet
 from crypto_ai.database.models.last_prediction import LastPrediction
 from crypto_ai.database.models.currency import Currency
 from crypto_ai.database.models.customer import Customer
+from crypto_ai.database.models.elasticity_event import ElasticityEvent
+from crypto_ai.database.models.price_change_event import PriceChangeEvent
 from crypto_ai.database.models.finetune_examination import FinetuneExamination
 from crypto_ai.database.models.finetune_progress import FinetuneProgress
 from crypto_ai.database.models.fine_tune import FineTune
@@ -26,6 +32,7 @@ from crypto_ai.database.models.llm_submodel import LlmSubmodel
 from crypto_ai.database.models.prediction_adjustment import PredictionAdjustment
 from crypto_ai.database.models.financial_date import FinancialDate, OutletFinancialDate
 from crypto_ai.database.models.optimization_run import OptimizationRun
+from crypto_ai.database.models.orchestration_group import OrchestrationGroup
 from crypto_ai.database.models.outlet import Outlet
 from crypto_ai.database.models.outlet_delivery import OutletDelivery
 from crypto_ai.database.models.outlet_financials import OutletFinancials
@@ -59,6 +66,10 @@ __all__ = [
     "KlineSimulationPrediction",
     "KlineStrategy",
     "KlineStrategyParameter",
+    "StrategyTemplate",
+    "PaperTradeRun",
+    "PaperTrade",
+    "PaperTradeEquity",
     "Configuration",
     "ConfigurationCovariate",
     "Covariate",
@@ -66,7 +77,9 @@ __all__ = [
     "Currency",
     "LastPrediction",
     "Customer",
+    "ElasticityEvent",
     "FinetuneExamination",
+    "PriceChangeEvent",
     "FinetuneProgress",
     "FineTune",
     "FinetuneLog",
@@ -78,6 +91,7 @@ __all__ = [
     "FinancialDate",
     "OutletFinancialDate",
     "OptimizationRun",
+    "OrchestrationGroup",
     "Outlet",
     "OutletDelivery",
     "OutletFinancials",

@@ -196,6 +196,73 @@ def configure_logging(
     llm_logger = logging.getLogger("crypto_ai.llm")
     llm_logger.addHandler(llm_handler)
 
+    # --- Binance data file handler (binance.log) ---
+    # Captures warnings/errors from the Binance kline pipeline (imports + the live
+    # ingester) so they surface as the "Binance Data" log on system/logs. Level is
+    # WARNING so it stays an error/warning feed, not a full activity log. Loggers
+    # still propagate to root, so console/text logs are unaffected.
+    binance_path = os.path.join(log_dir, "binance.log")
+    binance_handler = logging.handlers.RotatingFileHandler(
+        binance_path,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    # Own formatter that keeps the structured kwargs (symbol/interval/error) — the
+    # error detail is the whole point of this log.
+    _binance_meta_keys = {"level", "event", "timestamp", "logger", "stack_info", "exception"}
+
+    def _inject_binance_tag(
+        logger: logging.Logger,
+        method_name: str,
+        event_dict: dict,
+    ) -> dict:
+        level = event_dict.get("level", "info")
+        event = event_dict.get("event", "")
+        ts = event_dict.get("timestamp", "")
+        extras = " ".join(
+            f"{k}={v}" for k, v in event_dict.items() if k not in _binance_meta_keys
+        )
+        line = f"{ts} [{level:<9s}] {event}"
+        if extras:
+            line += f" {extras}"
+        return {"_final": line}
+
+    binance_formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            _inject_binance_tag,
+            _RawRenderer(),
+        ],
+        foreign_pre_chain=shared_processors,
+    )
+    binance_handler.setFormatter(binance_formatter)
+    binance_handler.setLevel(logging.WARNING)
+    for bn_logger_name in (
+        "crypto_ai.services.live_ingest",
+        "crypto_ai.services.live_ingest_control",
+        "crypto_ai.services.binance_import",
+        "crypto_ai.services.binance",
+        "crypto_ai.tasks.imports",
+        "crypto_ai.api.routes.binance_import",
+    ):
+        logging.getLogger(bn_logger_name).addHandler(binance_handler)
+
+    # --- Trade AI file handler (trade_ai.log) ---
+    # Every AI trade-confirmation verdict (verdict + explanation + trade card
+    # identity) plus advisor failures, surfaced as "Trade AI" on system/logs.
+    # INFO level — the verdict lines ARE the log, not just its errors. Same
+    # key=value renderer as the Binance handler.
+    trade_ai_path = os.path.join(log_dir, "trade_ai.log")
+    trade_ai_handler = logging.handlers.RotatingFileHandler(
+        trade_ai_path,
+        maxBytes=50 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    trade_ai_handler.setFormatter(binance_formatter)
+    logging.getLogger("crypto_ai.services.trade_advisor").addHandler(trade_ai_handler)
+
     # Attach all handlers to the root logger
     root = logging.getLogger()
     root.handlers.clear()

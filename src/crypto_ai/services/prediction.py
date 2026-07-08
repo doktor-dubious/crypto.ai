@@ -75,7 +75,13 @@ class PredictionService:
             strategy = await self._load_strategy(request.prediction_strategy_id)
             if strategy:
                 defaults = self._strategy_defaults(strategy)
-                updates = {k: v for k, v in defaults.items() if getattr(request, k, None) in (None, False)}
+                # `is` checks, not `in (None, False)`: 0/0.0 == False, so a
+                # membership test would treat an explicit 0 as "unset" and let
+                # the strategy default silently override it.
+                updates = {
+                    k: v for k, v in defaults.items()
+                    if getattr(request, k, None) is None or getattr(request, k, None) is False
+                }
                 if updates:
                     request = request.model_copy(update=updates)
                 if strategy.prediction_engine:
@@ -278,6 +284,12 @@ class PredictionService:
             batch_size=request.batch_size,
         )
 
+        # Snapshot the ridge results NOW: they are aligned with this batch's
+        # valid_outlet_ids. The weekday-only reruns below call predict_batch
+        # again with a filtered outlet subset, which would overwrite
+        # _last_ridge_results and misalign coefficients with outlets.
+        ridge_results = getattr(engine, "_last_ridge_results", None)
+
         # Weekday-only override: for dates whose weekday has weekday_only=True,
         # re-run predict_batch with history filtered to that weekday only.
         weekday_only_flags = await self._resolve_weekday_only(request.customer_id)
@@ -314,7 +326,9 @@ class PredictionService:
                 )
                 ri = date_idx[wo_date]
                 for wo_oid, wo_res in zip(wo_ids, wo_results):
-                    if wo_res:
+                    # Engines cap horizon at their max, so a result list can be
+                    # shorter than the requested horizon — guard the index.
+                    if wo_res and ri < len(all_results[outlet_idx[wo_oid]]):
                         all_results[outlet_idx[wo_oid]][ri] = wo_res[0]
 
         # Zero out predictions on closed days — the customer is not open.
@@ -358,7 +372,6 @@ class PredictionService:
                             quantiles=[0.0] * n_q if n_q else None,
                         )
 
-        ridge_results = getattr(engine, "_last_ridge_results", None)
         weekday_corrections: dict[str, dict[int, float]] = {}
         if ridge_results:
             weekday_corrections = self._extract_weekday_corrections(valid_outlet_ids, ridge_results)
@@ -747,14 +760,20 @@ class PredictionService:
         }
         base = eo if eo is not None else predicted
 
+        # A zero base is an explicitly zeroed day (closed day / dead outlet):
+        # the ≥1 rounding floor and min/add constraints must not resurrect it.
+        # An explicit `fixed` delivery override (checked below) still wins.
+        zeroed = base == 0
+
         # Per-outlet increases applied before delivery constraints
-        if outlet_increase_num:
-            base += outlet_increase_num
-        if outlet_increase_pct:
-            base += base * outlet_increase_pct / 100.0
+        if not zeroed:
+            if outlet_increase_num:
+                base += outlet_increase_num
+            if outlet_increase_pct:
+                base += base * outlet_increase_pct / 100.0
 
         if delivery is None:
-            return _round(base), applied
+            return (0 if zeroed else _round(base)), applied
 
         # 1. Fixed override (0 means not set)
         if not ignore_fixed and delivery.fixed:
@@ -764,6 +783,9 @@ class PredictionService:
             if delivery.add_pct is not None:
                 applied["add_pct"] = float(delivery.add_pct)
             return _round(delivery.fixed), applied
+
+        if zeroed:
+            return 0, applied
 
         delivered = base
 
@@ -894,6 +916,12 @@ class PredictionService:
         Falls back to a sigmoid centred on P50 when quantiles are unavailable.
         """
         if p10 is not None and p90 is not None:
+            # Degenerate forecast (P90 <= 0, e.g. a dead outlet with all-zero
+            # quantiles): demand essentially can't exceed anything — without
+            # this, the zero-width segments interpolate to t=0.5 and a dead
+            # outlet scores P(demand>0)=0.95, outranking healthy outlets.
+            if p90 <= 0:
+                return 0.001
             # CDF anchors: (demand_value, cumulative_probability)
             anchors = [(0.0, 0.0), (p10, 0.10), (p50, 0.50), (p90, 0.90)]
             for i in range(len(anchors) - 1):
@@ -2701,7 +2729,10 @@ class PredictionService:
                     OutletFinancials.weekday,
                     OutletFinancials.cost_per_unit,
                     OutletFinancials.profit_per_unit,
-                ).where(OutletFinancials.outlet_id.in_(all_oids))
+                ).where(
+                    OutletFinancials.outlet_id.in_(all_oids),
+                    OutletFinancials.active.is_(True),
+                )
             )
             fin_map = {
                 (r.outlet_id, r.weekday): (r.cost_per_unit, r.profit_per_unit)
@@ -2734,7 +2765,7 @@ class PredictionService:
                 returned = float(round(max(0.0, s_draw - actual_sale)))
 
                 if actual_draw is not None:
-                    weekday = r.date.weekday()
+                    weekday = r.date.weekday() + 1  # OutletFinancials: 1=Mon, 7=Sun
                     cost, profit_unit = fin_map.get((r.outlet_id, weekday), (None, None))
                     _cost = (cost if cost is not None else default_cost) or 0.0
                     _profit = (profit_unit if profit_unit is not None else default_profit) or 0.0

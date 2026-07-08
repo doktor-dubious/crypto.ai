@@ -78,6 +78,35 @@ services:
           cpus: '4'
           memory: 12G
 
+  live-ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Continuously keeps the klines table current from Binance (WebSocket push,
+    # REST gap-fill on reconnect) and publishes live stats to Redis. Created as a
+    # normal service so it can be started/stopped/restarted from the app's Workers
+    # page (Docker control). On networks where stream.binance.com is unreachable it
+    # just reconnect-loops harmlessly — set LIVE_INGEST_MODE=poll to use the REST
+    # mirror instead, or stop it from the Workers page.
+    command: python -m crypto_ai.live_ingest_main
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://gorm:gorm@db:5432/crypto_ai
+      - REDIS_URL=redis://redis:6379/0
+      - LIVE_INGEST_MODE=${LIVE_INGEST_MODE:-ws}
+      - LIVE_INGEST_INTERVALS=${LIVE_INGEST_INTERVALS:-5m,15m,30m,1h,4h,1d,1w,1M}
+      - LIVE_INGEST_POLL_SECONDS=${LIVE_INGEST_POLL_SECONDS:-5}
+    volumes:
+      - ./src:/app/src
+      - ./log:/app/log
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     image: timescale/timescaledb:latest-pg16
     shm_size: '1g'

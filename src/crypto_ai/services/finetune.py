@@ -105,7 +105,10 @@ class FinetuneService:
         on the engine's slug.
         """
         engine_id = request_data["prediction_engine_id"]
-        customer_id = request_data["customer_id"]
+        customer_id = request_data.get("customer_id")
+        coin_id = request_data.get("coin_id")
+        quote_asset = request_data.get("quote_asset")
+        interval = request_data.get("interval")
         outlet_group_id = request_data.get("outlet_group_id")
         start_date_str = request_data.get("start_date")
         end_date_str = request_data.get("end_date")
@@ -115,6 +118,8 @@ class FinetuneService:
         learning_rate = request_data.get("learning_rate", 0.001)
         batch_size = request_data.get("batch_size", 32)
         early_stopping_patience = request_data.get("early_stopping_patience", 0)
+        early_stopping_method = request_data.get("early_stopping_method", "training")
+        validation_split = request_data.get("validation_split", 0.0)
 
         start_date = date.fromisoformat(start_date_str) if start_date_str else None
         end_date = date.fromisoformat(end_date_str) if end_date_str else date.today()
@@ -122,7 +127,13 @@ class FinetuneService:
         # ── Resolve engine and find the right training function ──────────
         engine = await self._resolve_engine(engine_id)
         slug = engine.slug
-        output_dir = engine.finetuned_model_path or f"models/finetune/{slug}"
+        if coin_id:
+            # Per-(coin/pair/timeframe) checkpoint so different targets don't
+            # overwrite each other; inference resolves the same path.
+            from crypto_ai.prediction.finetune_paths import finetune_checkpoint_dir
+            output_dir = finetune_checkpoint_dir(slug, coin_id, quote_asset, interval)
+        else:
+            output_dir = engine.finetuned_model_path or f"models/finetune/{slug}"
 
         runner = _resolve_finetune_runner(slug)
         if runner is None:
@@ -134,54 +145,130 @@ class FinetuneService:
 
         logger.info("Fine-tuning engine '%s' (slug=%s), output=%s", engine.name, slug, output_dir)
 
-        if on_progress:
-            await on_progress(1, f"Loading sales data for {engine.name}")
+        # The training runner is series-agnostic: it takes a dict of
+        # {series_id: list[float]} and fine-tunes on each series.  We build
+        # that dict either from crypto klines (coin/pair/timeframe) or from
+        # customer sales, depending on which target the request carries.
+        #
+        # ``record_count`` and ``series_ids`` only feed the result summary /
+        # per-outlet progress; ``write_progress`` is the kline-aware flag that
+        # disables the outlet-keyed FinetuneProgress writes for crypto runs.
+        write_progress = True
 
-        # ── Fetch outlets ────────────────────────────────────────────────
-        query = select(Outlet.id).where(
-            Outlet.customer_id == customer_id,
-            Outlet.active.is_(True),
-        )
-        if outlet_group_id:
-            query = query.join(
-                OutletGroupMember,
-                OutletGroupMember.outlet_id == Outlet.id,
-            ).where(OutletGroupMember.group_id == outlet_group_id)
+        if coin_id:
+            from crypto_ai.database.models.kline import Kline
 
-        result = await self._session.execute(query)
-        outlet_ids = [row[0] for row in result.all()]
+            if not quote_asset or not interval:
+                raise ValueError("Fine-tuning a coin requires a quote asset and interval")
 
-        if not outlet_ids:
-            raise ValueError("No active outlets found for this customer/group")
+            if on_progress:
+                await on_progress(1, f"Loading klines for {engine.name}")
 
-        if on_progress:
-            await on_progress(2, f"Found {len(outlet_ids)} outlets")
+            base_filter = (
+                Kline.coin_id == coin_id,
+                Kline.quote_asset == quote_asset,
+                Kline.interval == interval,
+                Kline.active.is_(True),
+            )
 
-        # ── Fetch sales data ─────────────────────────────────────────────
-        sales_query = select(Sale).where(
-            Sale.customer_id == customer_id,
-            Sale.outlet_id.in_(outlet_ids),
-            Sale.active.is_(True),
-        )
-        if start_date:
-            sales_query = sales_query.where(Sale.date >= start_date)
-        if end_date:
-            sales_query = sales_query.where(Sale.date <= end_date)
+            # ── Fine-tune period — the bars the model is trained to predict ──
+            period_query = select(Kline.close).where(*base_filter)
+            if start_date:
+                period_query = period_query.where(func.date(Kline.open_time) >= start_date)
+            if end_date:
+                period_query = period_query.where(func.date(Kline.open_time) <= end_date)
+            period_query = period_query.order_by(Kline.open_time)
 
-        sales_query = sales_query.order_by(Sale.outlet_id, Sale.date)
-        result = await self._session.execute(sales_query)
-        sales = result.scalars().all()
+            period_result = await self._session.execute(period_query)
+            period_closes = [float(c) for c in period_result.scalars().all()]
 
-        if not sales:
-            raise ValueError("No sales data found for the given parameters")
+            if not period_closes:
+                raise ValueError(
+                    "No kline data found for the given coin/pair/timeframe and date range"
+                )
 
-        if on_progress:
-            await on_progress(3, f"Loaded {len(sales)} sales records")
+            # ── Pre-period history — used only as forecast context ───────────
+            # Prepend up to `context_length` bars from *before* the period so
+            # the earliest in-period bars still get a full lookback window.
+            # Because we take at most context_length bars, every sliding window
+            # the runner builds has its target inside the fine-tune period
+            # (the first target sits at index >= context_length >= len(history)),
+            # so the history is never itself a training target.
+            history_closes: list[float] = []
+            if start_date and context_length > 0:
+                history_query = (
+                    select(Kline.close)
+                    .where(*base_filter, func.date(Kline.open_time) < start_date)
+                    .order_by(Kline.open_time.desc())
+                    .limit(context_length)
+                )
+                history_result = await self._session.execute(history_query)
+                # Fetched newest-first; reverse back to chronological order.
+                history_closes = [float(c) for c in history_result.scalars().all()][::-1]
 
-        # Group by outlet
-        outlet_series: dict[str, list[float]] = defaultdict(list)
-        for s in sales:
-            outlet_series[s.outlet_id].append(float(s.sold))
+            closes = history_closes + period_closes
+            series_key = f"{quote_asset}@{interval}"
+            outlet_series: dict[str, list[float]] = {series_key: closes}
+            series_ids = [series_key]
+            record_count = len(period_closes)
+            write_progress = False  # No outlet rows for a crypto series
+
+            if on_progress:
+                await on_progress(
+                    3,
+                    f"Loaded {len(period_closes)} klines "
+                    f"(+{len(history_closes)} prior bars for context)",
+                )
+        else:
+            if on_progress:
+                await on_progress(1, f"Loading sales data for {engine.name}")
+
+            # ── Fetch outlets ────────────────────────────────────────────
+            query = select(Outlet.id).where(
+                Outlet.customer_id == customer_id,
+                Outlet.active.is_(True),
+            )
+            if outlet_group_id:
+                query = query.join(
+                    OutletGroupMember,
+                    OutletGroupMember.outlet_id == Outlet.id,
+                ).where(OutletGroupMember.group_id == outlet_group_id)
+
+            result = await self._session.execute(query)
+            series_ids = [row[0] for row in result.all()]
+
+            if not series_ids:
+                raise ValueError("No active outlets found for this customer/group")
+
+            if on_progress:
+                await on_progress(2, f"Found {len(series_ids)} outlets")
+
+            # ── Fetch sales data ─────────────────────────────────────────
+            sales_query = select(Sale).where(
+                Sale.customer_id == customer_id,
+                Sale.outlet_id.in_(series_ids),
+                Sale.active.is_(True),
+            )
+            if start_date:
+                sales_query = sales_query.where(Sale.date >= start_date)
+            if end_date:
+                sales_query = sales_query.where(Sale.date <= end_date)
+
+            sales_query = sales_query.order_by(Sale.outlet_id, Sale.date)
+            result = await self._session.execute(sales_query)
+            sales = result.scalars().all()
+
+            if not sales:
+                raise ValueError("No sales data found for the given parameters")
+
+            record_count = len(sales)
+            if on_progress:
+                await on_progress(3, f"Loaded {record_count} sales records")
+
+            # Group by outlet
+            outlet_series = defaultdict(list)
+            for s in sales:
+                outlet_series[s.outlet_id].append(float(s.sold))
 
         if on_progress:
             await on_progress(5, f"Starting fine-tuning ({slug})")
@@ -193,6 +280,14 @@ class FinetuneService:
         # local server the checkpoint is written directly to the model path.
         env_sync = os.environ.get("SYNC_TARGET")
         sync_target = (engine.finetune_sync_target or env_sync) if env_sync else None
+        # Namespace the remote destination by the same per-target suffix as the
+        # local checkpoint, so each coin/pair/timeframe syncs to its own remote
+        # dir instead of all targets colliding in one.
+        if sync_target and coin_id:
+            from crypto_ai.prediction.finetune_paths import finetune_target_subdir
+            sub = finetune_target_subdir(coin_id, quote_asset, interval)
+            if sub:
+                sync_target = sync_target.rstrip("/") + "/" + sub
         sync_every = engine.finetune_sync_every or int(os.environ.get("SYNC_EVERY", "5"))
 
         # ── Per-outlet progress callback ─────────────────────────────────
@@ -247,7 +342,7 @@ class FinetuneService:
             batch_size=batch_size,
             output_dir=output_dir,
             on_progress=on_progress,
-            on_outlet_done=_on_outlet_done,
+            on_outlet_done=_on_outlet_done if write_progress else None,
             sync_target=sync_target,
             sync_every=sync_every,
             early_stopping_patience=early_stopping_patience,
@@ -255,6 +350,8 @@ class FinetuneService:
             sane_check_epochs=engine.finetune_sane_epochs,
             max_sane_loss=engine.finetune_max_mae,
             allow_new_checkpoint=engine.finetune_allow_new_checkpoint,
+            early_stopping_method=early_stopping_method,
+            validation_split=validation_split,
         )
 
         # Handle both old bool returns and new dict returns
@@ -269,16 +366,14 @@ class FinetuneService:
 
         if stopped:
             if on_progress:
-                await on_progress(
-                    5 + int(94 * (len(outlet_ids) / max(len(outlet_ids), 1))),
-                    "Stopped — final sync done",
-                )
+                await on_progress(99, "Stopped — final sync done")
             return {
                 "engine_id": engine_id,
                 "engine_slug": slug,
                 "customer_id": customer_id,
-                "outlets_processed": len(outlet_ids),
-                "sales_records": len(sales),
+                "coin_id": coin_id,
+                "outlets_processed": len(series_ids),
+                "sales_records": record_count,
                 "stopped": True,
                 "finetuned_count": finetuned_count,
                 "pathological_count": pathological_count,
@@ -291,8 +386,9 @@ class FinetuneService:
             "engine_id": engine_id,
             "engine_slug": slug,
             "customer_id": customer_id,
-            "outlets_processed": len(outlet_ids),
-            "sales_records": len(sales),
+            "coin_id": coin_id,
+            "outlets_processed": len(series_ids),
+            "sales_records": record_count,
             "finetuned_count": finetuned_count,
             "pathological_count": pathological_count,
         }

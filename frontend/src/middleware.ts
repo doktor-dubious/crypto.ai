@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from "next/server"
 
 const PUBLIC_PATHS = ["/login", "/share"]
-const SKIP_PREFIXES = ["/api/", "/backend/", "/_next/", "/favicon"]
+const SKIP_PREFIXES = ["/api/", "/_next/", "/favicon"]
+// Unauthenticated GETs allowed through the backend proxy: the public /share
+// page reads its conversation through this endpoint without a session.
+const PUBLIC_BACKEND_GETS = [/^\/backend\/api\/v1\/chat\/sessions\/[^/]+$/]
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (SKIP_PREFIXES.some((p) => pathname.startsWith(p))) {
+    return NextResponse.next()
+  }
+
+  // The /backend/* rewrite proxies straight to FastAPI, which has no auth of
+  // its own — every proxied call must carry a valid session (API traffic gets
+  // a 401, not a login redirect).
+  const isBackend = pathname.startsWith("/backend/")
+  if (
+    isBackend &&
+    request.method === "GET" &&
+    PUBLIC_BACKEND_GETS.some((re) => re.test(pathname))
+  ) {
     return NextResponse.next()
   }
 
@@ -20,12 +35,20 @@ export async function middleware(request: NextRequest) {
     const data = await res.json()
     session = data?.session ?? null
   } catch {
+    if (isBackend) {
+      return NextResponse.json({ detail: "Unauthorized" }, { status: 401 })
+    }
     if (isPublic) return NextResponse.next()
     return NextResponse.redirect(new URL("/login", request.url))
   }
 
-  if (!session && !isPublic) {
-    return NextResponse.redirect(new URL("/login", request.url))
+  if (!session) {
+    if (isBackend) {
+      return NextResponse.json({ detail: "Unauthorized" }, { status: 401 })
+    }
+    if (!isPublic) {
+      return NextResponse.redirect(new URL("/login", request.url))
+    }
   }
 
   if (session && isPublic && !pathname.startsWith("/share")) {

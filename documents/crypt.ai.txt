@@ -1,4 +1,748 @@
 hest@hest.com / ChangeMe123!
+----------------------------------------------------------------------------------------------------
+
+── Wednesday 8 July
+* Data
+  1) Added 10 random coins (+data, categories)
+    NOM
+    OPN
+    1000CHEEMS
+    BANK
+    HEMI
+    FOGO
+    DOLO
+    BNSOL
+    TURTLE
+    ZRO
+  2) Added 10 random coins (+data, categories)
+    MET
+    ROSE
+    REQ
+    ALPINE
+    HOME
+    CATI
+    PROVE
+    NBISB
+    CHZ
+    SPYB
+  3) Added 10 random coins (+data, categories)
+    BOME
+    KMNO
+    INTCB
+    RIF
+    ID
+    BFUSD
+    BTTC
+    U
+    KERNEL
+    JTO
+  4) Added 10 random coins (+data, categories)
+    PARTI
+    ONG
+    GNS
+    TUT
+    LA
+    ARPA
+    RLUSD
+    POLYX
+    NIGHT
+    STX
+  5) Added 10 random coins (+data, categories)
+* PAGE trading/paper:
+  1) Profit/Loss displayed as amount + percentage.
+  2) When starting a trade => popup, added: trading amount.
+  3) Added pagination to trading history.
+
+
+PAGE trading/paper:
+Add pagination to the trade history (tab trades), same as on the master table on the same page.
+
+
+
+------
+
+Adjust Position size after confirmation level
+
+
+
+
+
+Page trading/strategies/trend-swings/analytics (and other strategy pages)
+Regarding:
+---
+Require model confirmation
+The one place an AI model can participate: select a completed simulation of the same coin/pair/timeframe in the picker, tick Require model confirmation, and entries additionally need the model's stored next-bar P(up) to agree with the trade direction. Comparing results with and without measures whether the forecast adds anything beyond the raw signals.
+---
+
+Model confirmation was made in another conversation, but can you tell men how can a simulation next-bar P(up) made on some arbitrary historic data help determing trade direction in live data?
+
+----
+
+But why would adding an extra check on the analysis page help, if the same check cannot be applied when live? This just distances the analysis from real world scenario?
+
+What I'm worried about is the analysis showing better results with the strategy than a live implementation would, because the model confirmation removes trades that would otherwise have gone through when live. What if the gating confirmation is the thing which separates a good strategy from a bad?
+2
+
+
+
+PAGE: trading/paper
+
+
+
+
+
+
+1) Yes, can you implement this and put the functionality on the Trading Strategy template. To be applied on the page trading/paper.
+Add a new tab to the table: AI. Put it between the tabs Data and Trades.
+Put a switch there, something like: External AI trade confirmation.
+
+2) Also create a log for the trade AI. And insert it here: page system/logs, to the right of the "Binance Data" log
+Log all instances where the AI has given a verdict. The verdict and the explanation.
+
+
+Is there a table the stores all trades? If not one should be created.
+It should store the trade specifics. What was bought, when, how much, at what price, sold when, sold at what price, etc.
+But also everything to do with the strategy template. Template ID, and all parameters (in case they change)
+Also make room for AI verdict (GO/No GO) and AI verdict explanation.
+
+They're already finished. 
+Add 10 more random coins from Binance and import the data, and fetch categories from CoinGeek
+
+
+
+Perhaps the trade amount should be modified by how strong the signal is? The stronger the signal, the larger the investment?
+
+
+I want to explore the possibility to ask an AI for a second oppinion about a trade.
+Like, if the technical analysis says go-for-trade, then send all the data to the AI + plus ask it to research whatever extra it wants.
+Come back with
+1) A verdict (GO/No GO)
+2) An analysis if its reasoning for the verdict
+
+On the trade side (when we come to that), there should be an option to ask the AI for the second oppinio and only execute the trade if the AI is also GO on the trade.
+
+What do you think of this plan? Any suggestions? Improvements? 
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Tuesday 7 July
+* Data
+  1) Added 10 random coins (+data, categories)
+    DODO
+    KNC
+    WCT
+    ETC
+    SKY
+    ERA
+    ROBO    
+    JUV     
+    TKO     
+    BROCCOLI714 (not on CoinGecko)
+  2) Added 10 random coins (+data, categories)
+    HOT     Holo
+    ADA     TOLY's DOG
+    COW     Cow
+    SPCXB   SpaceX (bStocks Tokenized Stock)
+    FORM    Four
+    BIGTIME Big Time
+    AGLD    Adventure Gold
+    ORDI    ORDI
+    CKB     Nervos Network
+    SIGN    Sign
+  3) Added ingest coin data from Binance websocket functionality. 
+    A) Added control to worker page.
+  4) Added 10 random coins (+data, categories)
+    TIA     Celestia
+    BABY    Babylon
+    STRK    Starknet
+    PORTO   FC Porto Fan Token
+    ZKC     (Boundless)
+    QNT     Quant
+    C ?     -
+    FTT     FTX Token
+    HOLO    Holoworld
+    UMA     UMA
+  5) Added 10 random coins (+data, categories)
+    AR      Arweave
+    MOVE    Movement
+    ILV     Illuvium
+    GIGGLE  (meme)
+    MSFTB   (tokenized Microsoft stock)
+    SOPH    Sophon
+    BAT     Basic Attention Token
+    TFUEL   Theta Fuel
+    CHR     Chromia
+    LQTV    Liquity
+  6) Added 10 random coins (+data, categories)
+    AEUR
+    CFG
+    LUNA
+    ARDR
+    EIGEN
+    POL
+    SNX
+    MUBARAK
+    ONT
+    ENSO
+  7) Added 10 random coins (+data, categories)
+    1000CAT
+    SSV
+    FLOW
+    STORJ
+    PROM
+    AVNT
+    ALT
+    ALICE
+    RUNE
+    ETHFI
+  8) Added 10 random coins (+data, categories)
+    BEL
+    GRAM
+    ARKM
+    MORPHO
+    PLTRB
+    USDC
+    AMP
+    SOLV
+    PHA
+    USDS
+  9) Added 10 random coins (+data, categories)
+    AEVO
+    DCR
+    LISTA
+    RPL
+    API3
+    LUNC
+    FF
+    NIL
+    FLUX
+    BEAMX
+  10) Added 10 random coins (+data, categories)
+    ZIL
+    MOVR
+    PORTAL
+    ESP
+    CYBER
+    GUN
+    XVS
+    1INCH
+    FIL
+    XAUT    
+  11) Added 10 random coins (+data, categories)
+    WIF
+    GALA
+    HBAR
+    FET
+    DYDX
+    G
+    ATM
+    SNDKB
+    TSLAB
+    SHIB
+  12) Added 10 random coins (+data, categories)
+    YFI
+    SUSHI
+    SAND
+    XNO
+    ICP
+    RENDER
+    WAXP
+    QUICK
+    CRV
+    IMX
+  13) Added 100 random coins (+data, categories)
+    ┌────────┬──────────────────────────────────────────────────────────────────────┐
+    │   #    │                                Coins                                 │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 1–10   │ SAHARA, SANTOS, SUPER, QKC, SAGA, GOOGLB, COOKIE, CETUS, KAIA, NEIRO │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 11–20  │ ADX, OPEN, RONIN, STG, RLC, PIXEL, STO, CVC, XPL, KAITO              │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 21–30  │ EUL, SXT, ACX, JOE, PEPE, YB, PSG, APE, PAXG, WBTC                   │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 31–40  │ NXPC, WDCB, ALLO, ZBT, MEGA, PENGU, NEO, STRAX, QI, T                │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 41–50  │ TNSR, 1MBABYDOGE, MBL, PNUT, WLFI, KAT, LSK, REZ, ALGO, BANANAS31    │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 51–60  │ MEME, AIXBT, CVX, THE, AWE, XEC, VET, 2Z, ONE, USDE                  │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 61–70  │ PYR, THETA, PUMP, ZKP, ZEC, GNO, SCR, POWR, EPIC, ACH                │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 71–80  │ BICO, ZRX, TRUMP, USTC, VTHO, KSM, JST, KAVA, EUR, ANIME             │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 81–90  │ WOO, SCRT, MASK, HYPER, CGPT, COINB, BARD, LINEA, SPK, ENA           │
+    ├────────┼──────────────────────────────────────────────────────────────────────┤
+    │ 91–100 │ SLP, GTC, BONK, SOMI, DIA, SFP, BAR, GLWB, SKL, F                    │
+    └────────┴──────────────────────────────────────────────────────────────────────┘
+* Database
+  1) Created trades table.
+* AI
+  1) Created external AI trade confirmation functioality.
+* Dashboard
+  1) Added Trading Strategy template icon.
+  2) Added Trading Strategy modal.
+    A) Left side: list of templates.
+    B) Right side: selected template details: name, description, notes.
+* New sidemenu organization:
+      Trading
+      ├── Strategies
+          ├── Price Direction
+          ├── Trend Swings
+              ├── Paper Trade
+              └── Analytics
+          └── Scalping
+              ├── Order Book
+                  ├── Paper Trade
+                  └── Analytics
+              ├── Range
+                  ├── Paper Trade
+                  └── Analytics
+              ├── Momentum
+                  ├── Paper Trade
+                  └── Analytics
+              ├── Indicator
+                  ├── Paper Trade
+                  └── Analytics
+              ├── Streak Reversion
+                  ├── Paper Trade
+                  └── Analytics
+              ├── Sweep
+                  ├── Paper Trade
+                  └── Analytics
+              └── Taker Flow
+                  ├── Paper Trade
+                  └── Analytics
+* General
+  1) New hireachy for trading pages:
+    A) Paper Trade.
+    B) Analytics.
+  2) Added template functionality to all strategy pages.
+  3) Added selection persistance (local storage) to all strategy pages.
+  4) Removed template functionality from all strategy pages => moved to popup modal.
+  5) Added scope (coin, trading pair, timeframe) to templates.
+* PAGE coins:
+  1) The ticker symbol on tab Details: read-only + copy to clipboard.
+  2) Changed page title from Home to Coins.
+* PAGE system/workers:
+  1) Added Live Data Ingester worker to functionality.
+  2) Reworked Live Data Ingester.
+    A) Remove special data Ingester on the page, put in the Ingester worker.
+      Added relevant information to the Details, Statistics, and Action tabs.
+    B) Enable start/stop container from page.
+  3) For 
+* PAGE system/logs:
+  1) Added Binance Data error log.
+* PAGE trading/paper:
+  1) Created.
+  2) Active trading area.
+    A) Strategy Name; Profit/Loss; etc.
+  3) Table of defined strategy templates.
+  4) Change save functionality => show Cancel/Save Changes bar.
+  5) Data tab: fixed "paramValues [object Object]"
+  6) Added tab pane (Active, Strategies)
+  7) Added count of open positions.
+  8) Sorted by open/last trades.
+  9) List max 4 strategies, the remaining as cards.
+  10) Remove text in profit/loss card. Only display number.
+  11) Added All Time metrics.
+  12) Transformed Stop button to an icon.
+  13) Added Minimize icon to active strategies.
+  14) Resize metrics boxes, and moved the text to a tooltip.
+  15) Added pagination to Strategy Template table.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Monday 6 July
+* Data
+  1) Loaded / Updated data for all coins.
+  2) Added 10 random coins (+data, categories)
+    COMP      Compound
+    HFT       Hashflow
+    BANANA    ApeSwap
+    RSR       Reserve Rights
+    NMR       Numeraire
+    GMX       GMX
+    TURBO     Based Turbo
+    XTZ       Binance-Peg Tezos Token
+    WIN       WIN
+    VELODROME VELODROME
+* Simulation
+  1) Added external covariate handling (in addition to the native on TimesMF/Chronos)
+* Dashboard:
+  1) Changed icon for import tasks.
+  2) Added information icon to top/right toolbar.
+  3) Added information drawer.
+* Sidemenus:
+  1) Added new Trading menu/submenus:
+      Trading
+      ├── Strategies
+          ├── Price Direction
+          ├── Trend Swings
+          └── Scalping
+              ├── Order Book
+              ├── Range
+              ├── Momentum
+              └── Indicator
+* PAGE simulations/completed:
+  1) Added percentage to each signal component.
+  2) Added Auto-optimize button/functionality.
+* PAGE coins:
+  1) Tab action / Upddate Data: Load/Update data for all time intervals. Including non existing on coin (create)
+  2) Master table: Select region now displays update data button.
+  3) Master table: Added Last Updated column.
+  4) Added average daily volume
+  5) Added coin categories (from CoinGecko)
+  6) Added functionalty (under Actions) to update all loaded data with most recent data. From same source as original data was loaded (Binance)
+* PAGE trading/strategies/trend-swings:
+  1) Created
+  2) Moved Swing tab from Simulation/Completed to this page.
+  3) Created information drawer.
+* PAGE trading/strategies/scalping/range:
+  1) Created.
+  2) Created information drawer.
+  3) Added Vol-regime gate.
+* PAGE trading/strategies/scalping/momentum:
+  1) Created.
+  2) Created information drawer.
+  3) Added Vol-regime gate.
+* PAGE trading/strategies/scalping/indicator:
+  1) Created.
+  2) Created information drawer.
+  3) Added Vol-regime gate.
+* PAGE simulations/completed:
+  1) Information drawer for the backtest tab.
+* PAGE trading/strategies/scalping/streak-reversion:
+      Streak Reversion — the proven signal as a standalone page. Threshold = required run length (default 3), with the Volume divergence conditioner as a knob (the "require the run to be advancing on falling volume" filter that doubled the fade edge in the research).
+  1) Created.
+  2) Added Vol-regime gate.
+* PAGE trading/strategies/scalping/sweep:
+      Sweep — the stop-hunt fade: price pokes beyond the prior N-bar extreme, fails, closes back inside. Threshold = sweep depth in ATRs; extreme-window knob. Raw baseline: −4.9 bps — the drawer suggests where to dig (deeper sweeps, longer windows, calm gate, short holds), and notes its complementarity with Momentum (close-beyond-on-volume = their trade; close-back-inside = this one's).
+  1) Created.
+  2) Added Vol-regime gate.
+* PAGE trading/strategies/scalping/taker-flow:
+      Taker Flow — the order-flow-lite page using your stored taker-buy volumes: rolling imbalance z-score with a With the flow / Fade the flow direction knob. First reading: fade (−2.8 bps) beats with-flow (−5.2), consistent with the exhaustion pattern seen at swing points — and the drawer frames it correctly as the project's most unexplored signal, since prior research only ruled out single-bar taker prediction, never sustained campaigns.
+  1) Created.
+  2) Added Vol-regime gate.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Sunday 5 July
+* Simulation
+  1) Fixed issue where simulations kept all forecasts in memory. Crashing the computer. (bug not on Gorm)
+* PAGE simulations/completed:
+  1) Added pagination to master table.
+  2) Score column measured two different things depending on if the strategy had "Forecast volatility" turned on: 1) volatility, price direction. The column has now been split into two seperate columns: Score, Vol (Volatility)
+  3) Added new tab: Swings. (Major)
+  4) Added Rerun button to Actions tab.
+    A) Signal slider
+    B) Hold Barrel
+    C) Fees
+    D) Side
+    E) Require Model Confirmation
+    F) Overview
+    G) Graph
+  5) Displayed each component signal (11 in all)
+    A) Streak state
+    B) Volume Spike
+    C) Range Spike
+    D) Participation
+    E) Avg Trade Size
+    F) Wick Pressure
+    G) Taker Tilt
+    H) Stretch (z20)
+    I) Sweep
+    J) Volume divergence
+    K) Deceleration
+  6) Signals displayed as a separate graph.
+  7) Added Stop Loss (SL) strategies:
+    A) None
+    B) Fixed %
+    C) ATR x
+    D) Swing Structure
+    E) Trailing ATX x
+  8) Added Take Profit (TP) strategies:
+    A) None (hold max)
+    B) Fixed %
+    C) Resistance (prior extreme)
+    D) Mean Touch (SMA20)
+    E) Opposite signal
+  9) Better tooltip formatting for SL & TP.
+  10) Tooltip: ATR explained "Wilder's Average True Range".
+  11) Maximize / Normalize for the 2 charts.
+  12) Hover on charts restyled.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Saturday 4 July
+* Prediction/Simulation
+  1) Degrading models removed.
+* Workers
+  1) Implemented a number of worker improvens from Gorm.ai. Incl. worker page.
+* Sidemenu
+  1) Redone AI-models
+        AI Models
+        ├── Models
+        ├── Fine-tune
+        │   ├── New
+        │   ├── Completed
+        │   ├── Start Analysis
+        │   └── Analysis
+        └── Model Orchestration
+            ├── New
+            └── Groups
+* PAGE ai-models/orchestration/new
+  1) Reordered input fields.
+    A) First coins
+    B) Then Quote Asset and Interval
+  2) Quote Asset dropdown, dependent on what coins has been selected.
+* PAGE simulations/new
+  1) Title "New Simulation" removed.
+  2) Input "Orchestration Group" removed, Model Orchestration groups inserted into the Simulation Strategy drop down.
+  3) Added tabs to top of page:
+      A) Simulation (the current content)
+      B) Parameters
+      C) Batch
+  4) Bacth tab:
+    A) Combination Count
+    B) Coins
+    C) Trading Pairs
+    D) Timeframes
+    E) Simulation Strategies
+    F) Buttons: Cancel/Run Simulation Batch
+  5) Name fiels now takes inline parameters
+      [COIN] => expand to coin
+      [PAIR]  => expand to trading pair
+      [TIMEFRAME]  => expand to timefram
+      [STRATEGY] => expand to Simulation Strategy 
+      [DATES] => expand to from-to
+* PAGE simulations/completed
+  1) Status badge added to master table.
+* PAGE simulations/strategies:
+  1) Tab: Strategies
+    A) Added "Forecast Horizon"
+* PAGE simulations/completed:
+  1) Add column: Sig. Should be >= 4 for it to have meaningful price information.
+
+
+
+
+Are there other trend reversal signals that may be interesting? I.e., perhaps the size of the bars tend to decrease around swing points?
+
+
+Kan du spørge den om flere trend reversal signaler? Plejer vist også at være noget med en faldende bar størrelse
+
+
+
+1) Yes, please build those two a,b. Where would they fit in, on the frontend?
+
+2) Could including volatility (or some other metric, volume perhaps) in the crest/swing forecast be helpful? For instance, perhaps volatility or volume tend to increase/decrease around the cresting?
+
+3) Regarding: "- The mean next return after a 4–5 candle streak is 2–8 bps. Binance round-trip taker fees are ~10–20 bps on spot. The edge exists but sits at or below the cost of harvesting it — which is exactly why it's allowed to persist; arbitrageurs have ground it down to the fee boundary."
+
+If I run simulations on a thousand coins / trading pairs / timeframes - and in this number there is a single combination that has forecastable, profitable and actionable price direction. How would I identify this without going through all simulations? Is there a score which can be added to the table - same as the volatility score - which I can sort the table for this?
+
+
+
+
+Yes, implement your suggestion: a score (the target-aware skill) to the stored result, expose it as a sortable column on simulations/completed, and fix the returns-vs-levels correlation while I'm in there.
+
+
+Vala
+
+
+
+
+FIXES IN GORM:
+finetuning: 
+* When making a finetune run, it should always take as much back history as possible (context_length), but this should not be part of the finetune period. So when finetuning 2025.01.01 - 2025.01.31 it should take historic sales data from outside the finetune period (2017-2025.01.01)
+
+* Set the horizon to something resembling how the model is being used. Probably no the default 64. Perhaps 7.
+
+* One thing worth flagging (quality, not correctness)
+
+  Early stopping here just halts; it does not roll back to the best-scoring epoch's weights (the snapshot-restore in _train_outlet only fires for the pathological sane-check, not for
+  early stopping). So your final model is the epoch-8 weights (avg MSE 1.34), even though epoch 1 scored 0.02. On a noisy 31-window run that's a meaningful gap — you may be keeping
+  worse weights than you trained through.
+
+  If you'd like, I can make early stopping restore the best-loss snapshot before returning, so the saved checkpoint is the best epoch rather than the last one. That's a small,
+  well-contained change to _train_outlet. Want me to do it?
+
+-> 
+Here's the change (_finetune_timesfm.py, _train_outlet):
+  - Each epoch, if avg_loss is a new best, deep-copy the weights into best_state.
+  - After the loop (early stop or full run), load best_state so the saved checkpoint is the best epoch, not the last one.
+
+-> - The MOIRAI-2 runner has its own _train_outlet and doesn't do best-restore/early-stopping the same way. Want me to apply the equivalent fix there too, in case you fine-tune with
+  MOIRAI-2?
+
+-> Yes, also fix for MOIRAI-2.
+
+
+NEW EARLY STOPPING IN FINETUNING:
+-------------------------------
+Fine-tuning improvements to port from crypto.ai → gorm.ai
+
+  Both projects share the same fine-tuning architecture (it was copied), so file/function names should match. Package root differs (crypto_ai → your gorm_ai). The flow is: UI
+  (ai-models page, localStorage) → FinetuneRequest → FinetuneService.run_finetune → engine runner (_finetune_timesfm.py / _finetune_moirai2.py) → _train_outlet.
+
+  There are two independent changes. Change 1 is small and high-value; Change 2 is a feature.
+
+  Change 1 — Best-epoch checkpoint restore (+ a latent sane-check bug fix)
+
+  Problem: _train_outlet saved whichever epoch it stopped on, not the best one. On noisy data the last epoch is often worse than an earlier one. Also, best_loss was only updated inside
+  if patience > 0, so when early stopping was disabled (patience=0) the pathological sane-check saw best_loss = inf and could wrongly skip every series.
+
+  Fix (in _train_outlet, both _finetune_timesfm.py and _finetune_moirai2.py):
+  - Track best_loss and best_state every epoch (not gated on patience):
+  if avg_loss < best_loss:
+      best_loss = avg_loss
+      best_state = copy.deepcopy(nn_module.state_dict())
+      stale = 0
+  else:
+      stale += 1
+  - After the epoch loop (early-stop OR full run), restore best:
+  if best_state is not None:
+      nn_module.load_state_dict(best_state)
+  nn_module.eval()
+  - Keep the existing pathological snapshot restore separate (it restores the pre-training weights on sane-check failure; best_state restores the best weights at the end).
+
+  Change 2 — "Early Stopping Method" setting: training-loss vs. validation-set
+
+  Goal: add a dropdown on the ai-models fine-tune tab (above "Early Stopping Patience") to choose how the best epoch is selected:
+  - Training loss (patience) — existing behavior; stop when training loss hasn't improved for patience epochs.
+  - Validation set (best epoch) — hold out the most-recent N% of each series' windows (never trained on), run all epochs, keep the epoch with the best validation loss. Generalization
+  guard against overfitting. When this is selected, hide the patience field and show a "Validation Split (%)" field instead.
+
+  Backend
+
+  a) _SlidingWindowDataset (both runners): add a constructor to build from a pre-sliced window list:
+  @classmethod
+  def from_windows(cls, windows):
+      obj = cls.__new__(cls)
+      obj.windows = windows
+      return obj
+
+  b) Factor the forward/loss into reusable helpers so train and validation share one code path:
+  - TimesFM: _forecast_batch(nn_module, ctx_batch, p, o, q, horizon) and _eval_avg_loss(nn_module, loader, p, o, q, horizon, device) (the latter wraps torch.no_grad() +
+  nn_module.eval()).
+  - MOIRAI-2: factor its branchy loss into _batch_loss(nn_module, ctx_batch, tgt_batch, context_length, horizon, device), plus an _eval_avg_loss using it.
+
+  c) _train_outlet new params early_stopping_method: str = "training", validation_split: float = 0.0, and logic:
+  full = _SlidingWindowDataset([series], ctx_len, horizon)
+  if len(full) == 0: return False
+
+  use_val = early_stopping_method == "validation" and 0.0 < validation_split < 1.0 and len(full) >= 2
+  if use_val:
+      n_val = max(1, int(round(len(full) * validation_split)))
+      n_val = min(n_val, len(full) - 1)               # keep ≥1 training window
+      train_ds = _SlidingWindowDataset.from_windows(full.windows[:-n_val])
+      val_ds   = _SlidingWindowDataset.from_windows(full.windows[-n_val:])   # most-recent windows
+  else:
+      train_ds, val_ds = full, None
+  # loaders: train shuffled, val not. val_loader = None when not use_val.
+  Per epoch: train on train_ds; compute train_avg; if val_loader, val_avg = _eval_avg_loss(...). Then:
+  - monitor = val_avg if use_val else train_avg
+  - best-restore on monitor (deepcopy on improvement)
+  - sane-check stays on training loss (track best_train = min(best_train, train_avg); its threshold is tuned for training MSE)
+  - patience early-stop applies only when not use_val: if not use_val and patience > 0 and stale >= patience: break
+  - net effect: validation method runs the full epoch budget and keeps the best-validation epoch (no patience).
+
+  d) run_finetune signatures (both runners): add early_stopping_method: str = "training", validation_split: float = 0.0, and pass them into the _train_outlet call.
+
+  e) FinetuneService.run_finetune: extract from request_data and pass to the runner:
+  early_stopping_method = request_data.get("early_stopping_method", "training")
+  validation_split = request_data.get("validation_split", 0.0)
+  # ... runner(..., early_stopping_method=early_stopping_method, validation_split=validation_split)
+
+  f) FinetuneRequest (route schema): add
+  early_stopping_method: str = "training"   # "training" | "validation"
+  validation_split: float = 0.0             # 0–1 fraction held out when method == "validation"
+
+  ▎ ⚠️ If gorm's MOIRAI-2 run_finetune signature doesn't already accept sane_check_epochs/max_sane_loss, add them too (accepted-but-unused is fine) — the service passes them by keyword
+  ▎ and a missing kwarg is a TypeError. (This was a latent bug in crypto.ai.)
+
+  Frontend
+
+  - api.ts FinetuneRequest: add early_stopping_method?: string, validation_split?: number.
+  - ai-models page (settings, localStorage gorm:aiModels: prefix): add state ftEarlyStoppingMethod (default "training") and ftValidationSplit (default 20, a percentage) + their
+  saveJson effects. Render a <select> ("Training loss (patience)" / "Validation set (best epoch)") above the patience field, then conditionally render patience (training) or Validation
+  Split (%) (validation).
+  - ai-models/finetune run page (builds the request from localStorage): send
+  early_stopping_method: loadJson("ftEarlyStoppingMethod", "training"),
+  validation_split: loadJson("ftValidationSplit", 20) / 100,        // % → fraction
+  early_stopping_patience: method === "validation" ? 0 : loadJson("ftEarlyStoppingPatience", 0),
+  - i18n (en.json): add finetuneEarlyStoppingMethod(+Info), finetuneEarlyStoppingMethodTraining, finetuneEarlyStoppingMethodValidation, finetuneValidationSplit(+Info).
+
+  Behavior notes
+
+  - Validation runs all epochs (slower, more robust); best-restore picks the best-validation epoch.
+  - Graceful fallback: series too short to split → use_val is False → training-loss path (with patience 0 → all epochs, best-train restore).
+  - Worker must reload src (volume reload/restart) to pick up runner changes.
+
+  Optional (broadly useful, but needs gorm-specific data plumbing)
+
+  Pre-period history as context. When fine-tuning a date range [start, end], also fetch up to context_length data points from before start and prepend them to the series, so the
+  earliest in-period targets get a full lookback window without being trained to predict stale data. (Cap history at exactly context_length so no training target falls in the history
+  region.) In gorm this means fetching each outlet's sales before start_date and prepending per-outlet. Lowers the in-period requirement from context_length + horizon down to just
+  horizon.
+
+  Do NOT port (crypto-specific)
+
+  - Per-(coin/pair/timeframe) checkpoint namespacing (finetune_paths.py, configure_checkpoint, sim wiring) — gorm has no coin/pair/interval.
+  - Log wording "outlet" → "series" — gorm is outlet-based, so "outlet" is correct there; keep it.
+  - Coin/pair/timeframe request fields and the kline data branch in FinetuneService.
+------------------------
+
+
+
+
+
+----------------------------------------------------------------------------------------------------
+1) Why does it matter if the data is dated and no longer relevant. Supposedly the AI model would discard irrelevant data when doing forecasts? None (or very little) of the data the foundation AI model is trained on, is crypto data at all.
+
+2) Should I not make one finetune model on say 1h interval data, and another on 30min interval data. If those are the intervals used when doing forecast? 
+
+
+Yes, restore the best-loss snapshot when early stopping.
+But I don't understand. From the log I can see that only 8 finetuning epochs were run through.
+1) Why does it early stop already here? It is set to early stop if there have been no improvements for 8 consecutive epochs,
+2) What was actually finetuned here?
+
+If I had run two finetuning 1) for 2025.01.01 -> 2025.01.15 and 2) 2025.01.15 -> 2025.01.31, would this have produced the same finetuning results as one finetuning for the period 2025.01.01 -> 2025.01.31?
+
+
+
+---
+Do a single run, but treat the span as a tunable rather than maxing it out:
+
+1. Train candidate A: 2020→2026 (all-history baseline).
+2. Train candidate B: a recent span, e.g. 2023-or-2024 → 2026.
+3. Compare both on a held-out recent window (e.g. the last 1–2 months you didn't train on). Whichever forecasts recent conditions better wins — usually B, but let the data decide.
+
+
+
+
+
+I set the horizon to 1, and ran the finetune for 2025-01-01 -> 2025.01.31 again.
+
+This is the log:
+
+[info     ][CRYPTO] TimesFM fine-tuning done: 1/1 series trained
+[info     ][CRYPTO]   Early stopping at epoch 8 (no improvement for 7 epochs)
+[info     ][CRYPTO]   Epoch 8/50 — avg MSE: 1.337720
+[info     ][CRYPTO]   Epoch 7/50 — avg MSE: 1.041612
+[info     ][CRYPTO]   Epoch 6/50 — avg MSE: 11.666934
+[info     ][CRYPTO]   Epoch 5/50 — avg MSE: 4.587358
+[info     ][CRYPTO]   Epoch 4/50 — avg MSE: 0.950410
+[info     ][CRYPTO]   Epoch 3/50 — avg MSE: 0.358789
+[info     ][CRYPTO]   Epoch 2/50 — avg MSE: 8.186049
+[info     ][CRYPTO]   Epoch 1/50 — avg MSE: 0.020371
+[info     ][CRYPTO]   Training on series USDT@1d (543 points)
+
+It looks like it finetuned a single point. Why is it not finetuning every day in the time period (it is TimesFM, BTC, BTCUSDT, 1d)
+
 
 
 The concrete walkthrough — None, prices 2.3 → 2.5 → 2.9 → 3.2 → 4.9
@@ -104,6 +848,75 @@ What is listed but will FAIL at predict time (library missing)
 │ flowstate                                      │ granite_tsfm (also needs transformers <4.51 — conflicts with the 4.57.6 installed) │
 └────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────┘
 
+I get this error: No existing checkpoint found and allow_new_checkpoint is disabled. Cannot start fine-tuning from the base model — this would overwrite a previously trained checkpoint on sync. Enable 'Allow New Checkpoint' in the engine settings to start from scratch.
+
+
+
+I ran a finetuning for 1 month (2025.01.01)
+It reports finetuned = 0, pathological = 0, duration = 0
+
+This is in the log:
+[info     ][CRYPTO] TimesFM fine-tuning done: 0/1 outlets trained
+[info     ][CRYPTO]   Outlet USDT@1d: too short (31) — skipping
+[info     ][CRYPTO] TimesFM loaded from 'google/timesfm-2.5-200m-pytorch'
+
+It says "  Outlet USDT@1d" - there are no outlets in this project.
+But perhaps the other part "too short (31) — skipping" which made the finetuning not produce anything?
+
+
+With the default context_length=512 and horizon=64, each series needs ≥ 576 data points. One month of daily candles is only 31 → skipped → finetuned=0, nothing trained, ~0 duration.
+
+When making a finetune run, it should always take as much back history as possible (context_length), but this should not be part of the finetune period.
+So when finetuning 2025.01.01 - 2025.01.31 it should take historic sales data from outside the finetune period (2017-2025.01.01)
+
+
+
+
+
+
+
+
+
+
+
+
+
+Claude to run a large number of simulations on a varity of coins, trading pairs, timeframes =>
+analyse results.
+List the most promising.
+
+See if one or more 
+
+
+We only try to trade when the forecast is that price goes up. Is there a way to monetize trading when the forecast shows price going down?
+Is there a way to monetize 
+
+I ran a simulation (ID: 72fed584-bbf7-4512-8e11-a69ba8e056b4). On the tab prediction it shows 186 forecasts, 91 of which are positive.
+But on the backtest tab it only makes 1 trade/2 fills our of 186 bars.
+volatility strategy = none
+Position sizing = None
+Only trade when forecast covers fee = off
+
+why is it not generating 91 trades/fills? One trade for each interval it forecast to go up.
+
+
+
+
+
+
+The page ai-models/finetune:
+1) Remove the fields Customer and Outlet Group. 
+2) Add Coin, Trading Pair, and Timeframe (take from page simulations/new)
+3) Adjust functionality so it finetunes on the correct data (coin, pair, fimeframe)
+
+
+
+
+
+I ran a new simulation (ID: 7f531d33-4b2c-42e0-bd9c-25a632ac9e2c)
+On the page simulations/completed, tab: predictions
+Why are all Predicted Direction rows = +0?
+See attached image
 
 
 On page simulations/completed, tab: model fit

@@ -65,6 +65,13 @@ function getStatusInfo(item: FineTuneResponse): { key: StatusKey; variant: "succ
   }
 }
 
+function getTargetLabel(item: FineTuneResponse): string {
+  if (item.coin_symbol && item.quote_asset) {
+    return `${item.coin_symbol}${item.quote_asset}${item.interval ? ` · ${item.interval}` : ""}`
+  }
+  return item.outlet_group_name ?? "—"
+}
+
 function getDuration(item: FineTuneResponse): string {
   if (!item.started_at) return "—"
   const start = new Date(item.started_at)
@@ -161,7 +168,7 @@ export default function FineTuneCompletedPage() {
           i.name.toLowerCase().includes(q) ||
           (i.engine_name ?? "").toLowerCase().includes(q) ||
           (i.worker_name ?? "").toLowerCase().includes(q) ||
-          (i.outlet_group_name ?? "").toLowerCase().includes(q),
+          getTargetLabel(i).toLowerCase().includes(q),
       )
     }
     if (showOnlySelected) {
@@ -174,7 +181,7 @@ export default function FineTuneCompletedPage() {
         case "name": cmp = a.name.localeCompare(b.name); break
         case "engine_name": cmp = (a.engine_name ?? "").localeCompare(b.engine_name ?? ""); break
         case "end_condition": cmp = (a.end_condition ?? "").localeCompare(b.end_condition ?? ""); break
-        case "outlet_group_name": cmp = (a.outlet_group_name ?? "").localeCompare(b.outlet_group_name ?? ""); break
+        case "outlet_group_name": cmp = getTargetLabel(a).localeCompare(getTargetLabel(b)); break
         case "finetuned_outlets": cmp = a.finetuned_outlets - b.finetuned_outlets; break
         case "pathological_outlets": cmp = a.pathological_outlets - b.pathological_outlets; break
         case "worker_name": cmp = (a.worker_name ?? "").localeCompare(b.worker_name ?? ""); break
@@ -337,7 +344,7 @@ export default function FineTuneCompletedPage() {
                 <SortHeader field="name" label={t("colName")} />
                 <SortHeader field="engine_name" label={t("colEngine")} />
                 <SortHeader field="end_condition" label={t("colStatus")} />
-                <SortHeader field="outlet_group_name" label={t("colGroup")} />
+                <SortHeader field="outlet_group_name" label={t("colTarget")} />
                 <SortHeader field="finetuned_outlets" label={t("colFinetuned")} className="text-right" />
                 <SortHeader field="pathological_outlets" label={t("colPathological")} className="text-right" />
                 <SortHeader field="worker_name" label={t("colWorker")} />
@@ -377,7 +384,7 @@ export default function FineTuneCompletedPage() {
                         {t(status.key)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-xs">{item.outlet_group_name ?? "—"}</TableCell>
+                    <TableCell className="text-xs">{getTargetLabel(item)}</TableCell>
                     <TableCell className="text-xs text-right tabular-nums">{item.finetuned_outlets}</TableCell>
                     <TableCell className="text-xs text-right tabular-nums">{item.pathological_outlets}</TableCell>
                     <TableCell className="text-xs">{item.worker_name ?? "—"}</TableCell>

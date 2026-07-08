@@ -20,6 +20,8 @@ GORM_LOG_FILE = LOG_DIR / "crypto_ai.log"
 CLAUDE_LOG_FILE = LOG_DIR / "claude.log"
 LLM_LOG_FILE = LOG_DIR / "llm.txt"
 FINETUNE_LOG_FILE = LOG_DIR / "finetune.log"
+BINANCE_LOG_FILE = LOG_DIR / "binance.log"
+TRADE_AI_LOG_FILE = LOG_DIR / "trade_ai.log"
 
 # File-based log sources (not Docker)
 FILE_LOG_MAP = {
@@ -27,6 +29,8 @@ FILE_LOG_MAP = {
     "claude": CLAUDE_LOG_FILE,
     "llm": LLM_LOG_FILE,
     "finetuning": FINETUNE_LOG_FILE,
+    "binance": BINANCE_LOG_FILE,
+    "trade-ai": TRADE_AI_LOG_FILE,
 }
 
 CONTAINER_PREFIX = "gormai"

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, type ElementType } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
@@ -31,6 +31,16 @@ import {
   RefreshCw,
   BookMarked,
   TrendingUp,
+  CandlestickChart,
+  Waves,
+  Zap,
+  BookOpen,
+  MoveHorizontal,
+  Gauge,
+  Repeat2,
+  Crosshair,
+  ArrowLeftRight,
+  Wallet,
   PieChart,
   Store,
   Coins,
@@ -97,6 +107,50 @@ const SIMULATIONS_SUBNAV_ITEMS = [
   { href: "/simulations/completed", icon: LineChart, labelKey: "simulationsCompleted" },
 ] as const
 
+// Trading → Strategies. Price Direction is a single page; every other strategy
+// expands to Paper Trade + Analytics sub-pages (Scalping nests one level deeper).
+const TRADING_PRICE_DIRECTION = {
+  href: "/trading/strategies/price-direction", icon: TrendingUp, labelKey: "tradingPriceDirection",
+} as const
+
+const TRADING_TREND_SWINGS = {
+  base: "/trading/strategies/trend-swings", icon: Waves, labelKey: "tradingTrendSwings",
+} as const
+
+const TRADING_SCALPING_STRATEGIES = [
+  { base: "/trading/strategies/scalping/order-book", icon: BookOpen, labelKey: "tradingScalpOrderBook" },
+  { base: "/trading/strategies/scalping/range", icon: MoveHorizontal, labelKey: "tradingScalpRange" },
+  { base: "/trading/strategies/scalping/momentum", icon: Gauge, labelKey: "tradingScalpMomentum" },
+  { base: "/trading/strategies/scalping/indicator", icon: Activity, labelKey: "tradingScalpIndicator" },
+  { base: "/trading/strategies/scalping/streak-reversion", icon: Repeat2, labelKey: "tradingScalpStreak" },
+  { base: "/trading/strategies/scalping/sweep", icon: Crosshair, labelKey: "tradingScalpSweep" },
+  { base: "/trading/strategies/scalping/taker-flow", icon: ArrowLeftRight, labelKey: "tradingScalpTakerFlow" },
+] as const
+
+// A strategy submenu: the strategy name expands to Paper Trade + Analytics.
+function StrategySubmenu({ base, icon: Icon, labelKey }: { base: string; icon: ElementType; labelKey: string }) {
+  const t = useTranslations()
+  const router = useRouter()
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <Icon className="h-4 w-4" />
+        {t(`nav.${labelKey}` as Parameters<typeof t>[0])}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuItem onClick={() => router.push(`${base}/paper`)}>
+          <Wallet className="h-4 w-4" />
+          {t("nav.tradingPaperTrade")}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push(`${base}/analytics`)}>
+          <LineChart className="h-4 w-4" />
+          {t("nav.tradingAnalytics")}
+        </DropdownMenuItem>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
 const STATISTICS_SUBNAV_ITEMS = [
   { href: "/statistics/sales", icon: CreditCard, labelKey: "statisticsSales" },
   { href: "/statistics/sold-out", icon: PackageX, labelKey: "statisticsSoldOut" },
@@ -120,11 +174,16 @@ const AI_MODELS_SUBNAV_TOP = [
   { href: "/ai-models", icon: List, labelKey: "aiModelsModels" },
 ] as const
 
-const AI_MODELS_SUBNAV_BOT = [
-  { href: "/ai-models/finetune", icon: Sparkles, labelKey: "aiModelsFinetuneNew" },
+const AI_MODELS_FINETUNE = [
+  { href: "/ai-models/finetune", icon: Plus, labelKey: "aiModelsFinetuneNew" },
   { href: "/ai-models/finetune/completed", icon: CheckCircle, labelKey: "aiModelsFinetuneRuns" },
   { href: "/simulations/finetune-new", icon: Plus, labelKey: "aiModelsFinetuneAnalysis" },
   { href: "/simulations/finetune-completed", icon: CheckCircle, labelKey: "aiModelsFinetuneCompleted" },
+] as const
+
+const AI_MODELS_ORCHESTRATION = [
+  { href: "/ai-models/orchestration/new", icon: Plus, labelKey: "aiModelsOrchestrationNew" },
+  { href: "/ai-models/orchestration", icon: List, labelKey: "aiModelsOrchestrationGroups" },
 ] as const
 
 const SYSTEM_SUBNAV_ITEMS = [
@@ -400,6 +459,48 @@ export function AppSidebar() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 
+            {/* Trading */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <CandlestickChart className="h-4 w-4" />
+                {t("nav.trading")}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {/* Paper Trade — directly under Trading, above Strategies */}
+                <DropdownMenuItem onClick={() => router.push("/trading/paper")}>
+                  <Wallet className="h-4 w-4" />
+                  {t("nav.tradingPaperTrade")}
+                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {t("nav.tradingStrategies")}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {/* Price Direction — single page, no sub-pages */}
+                    <DropdownMenuItem onClick={() => router.push(TRADING_PRICE_DIRECTION.href)}>
+                      <TrendingUp className="h-4 w-4" />
+                      {t("nav.tradingPriceDirection")}
+                    </DropdownMenuItem>
+                    {/* Trend Swings — Paper Trade + Analytics */}
+                    <StrategySubmenu {...TRADING_TREND_SWINGS} />
+                    {/* Scalping — each sub-strategy has Paper Trade + Analytics */}
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        <Zap className="h-4 w-4" />
+                        {t("nav.tradingScalping")}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        {TRADING_SCALPING_STRATEGIES.map((s) => (
+                          <StrategySubmenu key={s.base} {...s} />
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
             <DropdownMenuSeparator />
 
             {/* Import */}
@@ -491,12 +592,38 @@ export function AppSidebar() {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                {AI_MODELS_SUBNAV_BOT.map((item) => (
-                  <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
-                    <item.icon className="h-4 w-4" />
-                    {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
-                  </DropdownMenuItem>
-                ))}
+
+                {/* Fine-tune submenu */}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Sparkles className="h-4 w-4" />
+                    {t("nav.aiModelsFinetune")}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {AI_MODELS_FINETUNE.map((item) => (
+                      <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                        <item.icon className="h-4 w-4" />
+                        {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+
+                {/* Model Orchestration submenu */}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Cpu className="h-4 w-4" />
+                    {t("nav.aiModelsOrchestration")}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {AI_MODELS_ORCHESTRATION.map((item) => (
+                      <DropdownMenuItem key={item.href} onClick={() => router.push(item.href)}>
+                        <item.icon className="h-4 w-4" />
+                        {t(`nav.${item.labelKey}` as Parameters<typeof t>[0])}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
 

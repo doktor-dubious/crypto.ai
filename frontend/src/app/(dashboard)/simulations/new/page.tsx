@@ -1,12 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   addMonths, subMonths, addYears, subYears,
   startOfMonth, endOfMonth, eachDayOfInterval,
@@ -16,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { coinsApi, klinesApi, klineSimulationsApi, klineStrategiesApi, tasksApi } from "@/lib/api"
+import { coinsApi, klinesApi, klineSimulationsApi, klineStrategiesApi, orchestrationsApi, tasksApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -30,6 +32,22 @@ const STRATEGY_OPTIONS = [
 
 function strategyLabel(v: string | null | undefined) {
   return STRATEGY_OPTIONS.find((s) => s.value === v)?.label ?? (v || "—")
+}
+
+// Inline placeholders usable in the simulation Name; expanded per run (works for
+// batch too). See `expandName`.
+const NAME_PLACEHOLDERS = [
+  { token: "[COIN]", desc: "coin" },
+  { token: "[PAIR]", desc: "trading pair" },
+  { token: "[TIMEFRAME]", desc: "timeframe" },
+  { token: "[STRATEGY]", desc: "strategy" },
+  { token: "[DATES]", desc: "from – to" },
+] as const
+
+// A Simulation-Strategy selection can be either a kline strategy (its id) or a
+// ready orchestration group, encoded as `orch:<group_id>`.
+function isOrchValue(v: string | null | undefined): v is string {
+  return !!v && v.startsWith("orch:")
 }
 
 // Order timeframes by real duration (shortest first), e.g. 5m, 15m, 1h, 4h, 1d.
@@ -158,6 +176,50 @@ function StepCircle({ n, active }: { n: number; active: boolean }) {
   )
 }
 
+// A labelled checkbox grid for one batch dimension (coins / pairs / etc.).
+function CheckboxRegion({
+  label, items, selected, onToggle, empty,
+}: {
+  label: string
+  items: { value: string; label: string; disabled?: boolean }[]
+  selected: Set<string>
+  onToggle: (v: string) => void
+  empty: string
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium text-[var(--muted-foreground)]">{label}</label>
+        {selected.size > 0 && (
+          <span className="text-xs text-[var(--muted-foreground)] tabular-nums">{selected.size} selected</span>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-[var(--muted-foreground)]">{empty}</p>
+      ) : (
+        <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto rounded-md border border-input p-2">
+          {items.map((it) => (
+            <label
+              key={it.value}
+              className={cn(
+                "flex items-center gap-2 text-sm select-none",
+                it.disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+              )}
+            >
+              <Checkbox
+                checked={selected.has(it.value)}
+                disabled={it.disabled}
+                onCheckedChange={() => !it.disabled && onToggle(it.value)}
+              />
+              <span className="truncate">{it.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const SELECT_CLASS = "h-9 w-72 px-3 rounded-md border border-input bg-background text-sm disabled:opacity-50"
 const FORM_KEY = "crypt:newSimForm"
 const DEFAULT_START = new Date(2025, 0, 1)   // 2025-01-01
@@ -178,11 +240,19 @@ export default function NewSimulationPage() {
   const [coinId, setCoinId] = useState<string | null>(null)
   const [quoteAsset, setQuoteAsset] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<string | null>(null)
+  // Either a kline strategy id or `orch:<group_id>` for a ready orchestration group.
   const [strategyId, setStrategyId] = useState<string | null>(null)
   // Worker is ephemeral (depends on live availability), so not persisted.
   const [worker, setWorker] = useState<string | null>(null)
   const [startDate, setStartDate] = useState<Date | undefined>(DEFAULT_START)
   const [endDate, setEndDate] = useState<Date | undefined>(DEFAULT_END)
+
+  const [activeTab, setActiveTab] = useState<"simulation" | "parameters" | "batch">("simulation")
+  // Batch tab: multi-select each dimension; the run is their cartesian product.
+  const [batchCoins, setBatchCoins] = useState<Set<string>>(new Set())
+  const [batchPairs, setBatchPairs] = useState<Set<string>>(new Set())
+  const [batchTfs, setBatchTfs] = useState<Set<string>>(new Set())
+  const [batchStrategies, setBatchStrategies] = useState<Set<string>>(new Set())
 
   // Persist the whole form so it survives a refresh or navigating away and back.
   const [loaded, setLoaded] = useState(false)
@@ -245,11 +315,29 @@ export default function NewSimulationPage() {
     setEndDate((d) => (d ? clampDate(d, lo, hi) : d))
   }, [rangeResp?.start_date, rangeResp?.end_date])
   const { data: strategies = [] } = useQuery({ queryKey: ["klineStrategies"], queryFn: () => klineStrategiesApi.list() })
-  const selectedStrategy = strategies.find((s) => s.id === strategyId) ?? null
+
+  // Orchestration groups appear in the Simulation Strategy dropdown — only ready
+  // ones are runnable, encoded as `orch:<group_id>`.
+  const { data: orchGroups = [] } = useQuery({ queryKey: ["orchestration-groups"], queryFn: () => orchestrationsApi.list() })
+  const readyGroups = useMemo(() => orchGroups.filter((g) => g.status === "ready"), [orchGroups])
+
+  // Resolve the current selection to either a strategy or an orchestration group.
+  const selectedStrategy = !isOrchValue(strategyId)
+    ? (strategies.find((s) => s.id === strategyId) ?? null)
+    : null
+  const selectedGroup = isOrchValue(strategyId)
+    ? (readyGroups.find((g) => `orch:${g.id}` === strategyId) ?? null)
+    : null
+  // Drop the selection if it points at a group that's gone or no longer ready.
+  useEffect(() => {
+    if (isOrchValue(strategyId) && !readyGroups.some((g) => `orch:${g.id}` === strategyId)) {
+      setStrategyId(null)
+    }
+  }, [strategyId, readyGroups])
   const { data: strategyParams = [] } = useQuery({
     queryKey: ["klineStrategyParams", strategyId],
     queryFn: () => klineStrategiesApi.listParameters(strategyId!),
-    enabled: !!strategyId,
+    enabled: !!strategyId && !isOrchValue(strategyId),
   })
   const selectedParams = strategyParams.filter((p) => p.selected)
 
@@ -275,25 +363,79 @@ export default function NewSimulationPage() {
   const selectedCoin = coins.find((c) => c.id === coinId)
   const dayCount = startDate && endDate ? differenceInCalendarDays(endDate, startDate) + 1 : null
 
-  const createMutation = useMutation({
-    mutationFn: () => klineSimulationsApi.create({
-      coin_id: coinId!,
-      quote_asset: quoteAsset!,
-      interval: timeframe!,
+  // Expand inline name placeholders against one run's concrete parameters, so a
+  // single template name works for both single and batch runs. Case-insensitive.
+  function expandName(
+    template: string,
+    ctx: { coinSymbol: string; quoteAsset: string; interval: string; strategyName: string },
+  ): string {
+    const dates = startDate && endDate
+      ? `${format(startDate, "yyyy.MM.dd")} - ${format(endDate, "yyyy.MM.dd")}`
+      : ""
+    return template
+      .replace(/\[coin\]/gi, ctx.coinSymbol)
+      .replace(/\[pair\]/gi, `${ctx.coinSymbol}${ctx.quoteAsset}`)
+      .replace(/\[timeframe\]/gi, ctx.interval)
+      .replace(/\[strategy\]/gi, ctx.strategyName)
+      .replace(/\[dates\]/gi, dates)
+      .trim()
+  }
+
+  // Build a create payload for one (coin, pair, interval, strategy-selection). The
+  // selection is either a strategy id or `orch:<group_id>`. Shared by the single
+  // run and the batch run.
+  function payloadFor(opts: {
+    coinId: string; quoteAsset: string; interval: string; sel: string
+    name?: string | null; params?: Record<string, string>
+  }) {
+    const coinSymbol = coins.find((c) => c.id === opts.coinId)?.symbol ?? ""
+    const strategyName = isOrchValue(opts.sel)
+      ? (readyGroups.find((g) => `orch:${g.id}` === opts.sel)?.name ?? "")
+      : (strategies.find((s) => s.id === opts.sel)?.name ?? "")
+    const rawName = (opts.name ?? "").trim()
+    const expandedName = rawName
+      ? expandName(rawName, {
+          coinSymbol, quoteAsset: opts.quoteAsset, interval: opts.interval, strategyName,
+        }) || null
+      : null
+    const base = {
+      coin_id: opts.coinId,
+      quote_asset: opts.quoteAsset,
+      interval: opts.interval,
       start_date: format(startDate!, "yyyy-MM-dd"),
       end_date: format(endDate!, "yyyy-MM-dd"),
-      models: [selectedStrategy!.forecast_engine!],
-      name: name.trim() || null,
+      name: expandedName,
       description: description.trim() || null,
-      strategy: selectedStrategy!.simulation_strategy,
-      forecast_vol: selectedStrategy!.forecast_vol,
       worker: worker || undefined,
-      config: {
-        strategy_id: selectedStrategy!.id,
-        strategy_name: selectedStrategy!.name,
-        parameters: Object.fromEntries(selectedParams.map((p) => [p.name, p.value])),
-      },
-    }),
+    }
+    if (isOrchValue(opts.sel)) {
+      const grp = readyGroups.find((g) => `orch:${g.id}` === opts.sel)
+      return {
+        ...base,
+        models: [opts.sel],
+        strategy: "price",
+        forecast_vol: false,
+        config: grp ? { orchestration_group_id: grp.id, orchestration_group_name: grp.name } : null,
+      }
+    }
+    const strat = strategies.find((s) => s.id === opts.sel)!
+    return {
+      ...base,
+      models: [strat.forecast_engine!],
+      strategy: strat.simulation_strategy,
+      forecast_vol: strat.forecast_vol,
+      horizon: strat.horizon || 1,
+      covariate_mode: strat.covariate_mode || "off",
+      config: { strategy_id: strat.id, strategy_name: strat.name, parameters: opts.params ?? {} },
+    }
+  }
+
+  const createMutation = useMutation({
+    mutationFn: () => klineSimulationsApi.create(payloadFor({
+      coinId: coinId!, quoteAsset: quoteAsset!, interval: timeframe!, sel: strategyId!,
+      name,
+      params: Object.fromEntries(selectedParams.map((p) => [p.name, p.value])),
+    })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
       // Keep the form persisted after a run so the user can return and tweak a
@@ -304,10 +446,119 @@ export default function NewSimulationPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to start simulation"),
   })
 
+  // ── Batch tab: multi-select dimensions, run their cartesian product ─────────
+  const toggleIn = (
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>, v: string,
+  ) => setter((prev) => {
+    const n = new Set(prev)
+    if (n.has(v)) n.delete(v); else n.add(v)
+    return n
+  })
+
+  const batchCoinList = useMemo(() => [...batchCoins], [batchCoins])
+  const batchPairQueries = useQueries({
+    queries: batchCoinList.map((id) => ({
+      queryKey: ["simFormPairs", id],
+      queryFn: () => klinesApi.getTradingPairs(id),
+      enabled: !!id,
+    })),
+  })
+  const batchPairsKey = batchPairQueries.map((q) => (q.data?.pairs ?? []).join(",")).join("|")
+  const batchAvailablePairs = useMemo(() => {
+    const s = new Set<string>()
+    for (const q of batchPairQueries) for (const p of q.data?.pairs ?? []) s.add(p)
+    return [...s].sort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchPairsKey])
+  // Prune pair selections no longer offered by the chosen coins.
+  useEffect(() => {
+    setBatchPairs((prev) => {
+      const next = new Set([...prev].filter((p) => batchAvailablePairs.includes(p)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [batchAvailablePairs])
+
+  const batchComboList = useMemo(() => {
+    const out: { coin: string; pair: string }[] = []
+    for (const c of batchCoins) for (const p of batchPairs) out.push({ coin: c, pair: p })
+    return out
+  }, [batchCoins, batchPairs])
+  const batchTfQueries = useQueries({
+    queries: batchComboList.map(({ coin, pair }) => ({
+      queryKey: ["simFormTfs", coin, pair],
+      queryFn: () => klinesApi.getTimeframes(coin, pair),
+      enabled: !!coin && !!pair,
+    })),
+  })
+  const batchTfsKey = batchTfQueries.map((q) => (q.data?.timeframes ?? []).join(",")).join("|")
+  const batchAvailableTfs = useMemo(() => {
+    const s = new Set<string>()
+    for (const q of batchTfQueries) for (const tf of q.data?.timeframes ?? []) s.add(tf)
+    return [...s].sort((a, b) => intervalMinutes(a) - intervalMinutes(b))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchTfsKey])
+  useEffect(() => {
+    setBatchTfs((prev) => {
+      const next = new Set([...prev].filter((tf) => batchAvailableTfs.includes(tf)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [batchAvailableTfs])
+
+  // Strategy dimension for the batch: kline strategies + ready orchestration groups.
+  const batchStrategyOptions = useMemo(() => [
+    ...strategies.map((s) => ({ value: s.id, label: s.name, disabled: !s.forecast_engine })),
+    ...readyGroups.map((g) => ({ value: `orch:${g.id}`, label: `${g.name} (orchestration)`, disabled: false })),
+  ], [strategies, readyGroups])
+
+  const batchDims = [batchCoins.size, batchPairs.size, batchTfs.size, batchStrategies.size]
+  const combinationCount = batchDims.some((n) => n > 0)
+    ? batchDims.filter((n) => n > 0).reduce((a, b) => a * b, 1)
+    : 0
+
+  const batchMutation = useMutation({
+    mutationFn: async () => {
+      const combos: { coin: string; pair: string; tf: string; sel: string }[] = []
+      for (const coin of batchCoins)
+        for (const pair of batchPairs)
+          for (const tf of batchTfs)
+            for (const sel of batchStrategies) {
+              // Skip strategies with no forecast engine — nothing to run.
+              if (!isOrchValue(sel) && !strategies.find((s) => s.id === sel)?.forecast_engine) continue
+              combos.push({ coin, pair, tf, sel })
+            }
+      if (combos.length === 0) throw new Error("No runnable combinations selected")
+      const results = await Promise.allSettled(combos.map((c) => {
+        // Use the Name template (expanded per combo in payloadFor). When it's
+        // empty, fall back to an auto label so batch runs are still identifiable.
+        const sym = coins.find((x) => x.id === c.coin)?.symbol ?? ""
+        const label = isOrchValue(c.sel)
+          ? (readyGroups.find((g) => `orch:${g.id}` === c.sel)?.name ?? "orchestration")
+          : (strategies.find((s) => s.id === c.sel)?.name ?? "")
+        const autoName = `${sym}${c.pair} ${c.tf} · ${label}`
+        return klineSimulationsApi.create(payloadFor({
+          coinId: c.coin, quoteAsset: c.pair, interval: c.tf, sel: c.sel,
+          name: name.trim() ? name : autoName,
+        }))
+      }))
+      const ok = results.filter((r) => r.status === "fulfilled").length
+      return { ok, failed: results.length - ok }
+    },
+    onSuccess: ({ ok, failed }) => {
+      queryClient.invalidateQueries({ queryKey: ["klineSimulations"] })
+      toast.success(`Queued ${ok} simulation${ok === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}`)
+      router.push("/simulations/completed")
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Failed to start batch"),
+  })
+
   function handleClear() {
     setName(""); setDescription(""); setCoinId(null); setQuoteAsset(null); setTimeframe(null)
     setStrategyId(null); setWorker(null)
     setStartDate(DEFAULT_START); setEndDate(DEFAULT_END)
+  }
+
+  function handleBatchClear() {
+    setBatchCoins(new Set()); setBatchPairs(new Set()); setBatchTfs(new Set()); setBatchStrategies(new Set())
   }
 
   function handleStartSelect(d: Date) {
@@ -315,18 +566,55 @@ export default function NewSimulationPage() {
     if (endDate && isBefore(endDate, d)) setEndDate(undefined)
   }
 
-  const valid = coinId && quoteAsset && timeframe && strategyId && selectedStrategy?.forecast_engine
+  const strategyReady = isOrchValue(strategyId)
+    ? !!selectedGroup
+    : !!(selectedStrategy && selectedStrategy.forecast_engine)
+  const valid = coinId && quoteAsset && timeframe && strategyReady
     && startDate && endDate && !isAfter(startDate, endDate)
+  const batchValid = batchCoins.size > 0 && batchPairs.size > 0 && batchTfs.size > 0
+    && batchStrategies.size > 0 && startDate && endDate && !isAfter(startDate, endDate)
+
+  // Tab underline indicator.
+  const tabsListRef = useRef<HTMLDivElement>(null)
+  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 })
+  useEffect(() => {
+    if (!tabsListRef.current) return
+    const el = tabsListRef.current.querySelector("[data-state='active']") as HTMLElement | null
+    if (el) setIndicatorStyle({ left: el.offsetLeft, width: el.offsetWidth })
+  }, [activeTab])
+
+  const TAB_CLASS = "bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer"
 
   return (
     <div className="max-w-5xl px-6 py-6">
-      <h1 className="text-lg font-semibold mb-6">New Simulation</h1>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex flex-col gap-0">
+        <div className="relative w-full mb-6">
+          <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-[var(--border)] rounded-none p-0 h-auto flex">
+            <TabsTrigger value="simulation" className={TAB_CLASS}>Simulation</TabsTrigger>
+            <TabsTrigger value="parameters" className={TAB_CLASS}>Parameters</TabsTrigger>
+            <TabsTrigger value="batch" className={TAB_CLASS}>Batch</TabsTrigger>
+          </TabsList>
+          <div
+            className="absolute bottom-0 h-0.5 bg-foreground transition-all duration-300 ease-in-out z-0"
+            style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
+          />
+        </div>
 
+        <TabsContent value="simulation">
       <div className="flex flex-col gap-5">
         {/* Name */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-[var(--muted-foreground)]">Name</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. BTC 2025 Volatility Test" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sim [COIN] [PAIR] [TIMEFRAME] — [STRATEGY]" />
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[var(--muted-foreground)]">
+            <span className="w-full">Placeholders (expand per run):</span>
+            {NAME_PLACEHOLDERS.map((p) => (
+              <span key={p.token} className="inline-flex items-center gap-1">
+                <code className="rounded bg-[var(--muted)] px-1 py-0.5 font-mono text-[11px]">{p.token}</code>
+                <span>{p.desc}</span>
+              </span>
+            ))}
+          </div>
         </div>
 
         {/* Description */}
@@ -362,12 +650,21 @@ export default function NewSimulationPage() {
           </select>
         </div>
 
-        {/* Simulation Strategy (preset) */}
+        {/* Simulation Strategy — kline strategies plus ready orchestration groups */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-[var(--muted-foreground)]">Simulation Strategy</label>
           <select value={strategyId ?? ""} onChange={(e) => setStrategyId(e.target.value || null)} className={SELECT_CLASS}>
-            <option value="">{strategies.length === 0 ? "No strategies — create one first" : "Select strategy..."}</option>
-            {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="">{strategies.length === 0 && readyGroups.length === 0 ? "No strategies — create one first" : "Select strategy..."}</option>
+            {strategies.length > 0 && (
+              <optgroup label="Strategies">
+                {strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </optgroup>
+            )}
+            {readyGroups.length > 0 && (
+              <optgroup label="Model Orchestration">
+                {readyGroups.map((g) => <option key={g.id} value={`orch:${g.id}`}>{g.name}</option>)}
+              </optgroup>
+            )}
           </select>
           {selectedStrategy && (
             <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
@@ -376,12 +673,19 @@ export default function NewSimulationPage() {
                 ? <span className="font-mono">{selectedStrategy.forecast_engine}</span>
                 : <span className="text-amber-500">none set</span>}
               {selectedStrategy.forecast_vol ? " · volatility forecast on" : ""}
+              {selectedStrategy.horizon > 1 ? ` · horizon: ${selectedStrategy.horizon} bars` : ""}
+              {selectedStrategy.covariate_mode && selectedStrategy.covariate_mode !== "off" ? ` · covariates: ${selectedStrategy.covariate_mode}` : ""}
               {selectedParams.length ? ` · ${selectedParams.length} parameter${selectedParams.length === 1 ? "" : "s"}` : ""}
             </p>
           )}
           {selectedStrategy && !selectedStrategy.forecast_engine && (
             <p className="text-xs text-amber-500 max-w-2xl">
               This strategy has no Forecast Engine set — choose one on the Strategies page before running.
+            </p>
+          )}
+          {selectedGroup && (
+            <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
+              Model Orchestration · {Object.keys(selectedGroup.model_composition ?? {}).length} model{Object.keys(selectedGroup.model_composition ?? {}).length === 1 ? "" : "s"} · runs the calibrated blend
             </p>
           )}
         </div>
@@ -471,6 +775,77 @@ export default function NewSimulationPage() {
           </Button>
         </div>
       </div>
+        </TabsContent>
+
+        {/* Parameters — placeholder for now. */}
+        <TabsContent value="parameters">
+          <div className="flex items-center justify-center h-40 text-sm text-[var(--muted-foreground)]">
+            No parameters yet.
+          </div>
+        </TabsContent>
+
+        {/* Batch — run the cartesian product of the selected dimensions. */}
+        <TabsContent value="batch">
+          <div className="flex flex-col gap-5">
+            {/* Combination count */}
+            <div className="flex items-baseline gap-2">
+              <span className="text-sm font-medium">Combination Count:</span>
+              <span className="text-lg font-semibold tabular-nums">{combinationCount.toLocaleString()}</span>
+            </div>
+
+            <CheckboxRegion
+              label="Coins"
+              items={coins.map((c) => ({ value: c.id, label: c.symbol }))}
+              selected={batchCoins}
+              onToggle={(v) => toggleIn(setBatchCoins, v)}
+              empty="No coins available."
+            />
+
+            <CheckboxRegion
+              label="Trading Pairs"
+              items={batchAvailablePairs.map((p) => ({ value: p, label: p }))}
+              selected={batchPairs}
+              onToggle={(v) => toggleIn(setBatchPairs, v)}
+              empty={batchCoins.size === 0 ? "Select coins first." : "No trading pairs for the selected coins."}
+            />
+
+            <CheckboxRegion
+              label="Timeframes"
+              items={batchAvailableTfs.map((tf) => ({ value: tf, label: tf }))}
+              selected={batchTfs}
+              onToggle={(v) => toggleIn(setBatchTfs, v)}
+              empty={batchPairs.size === 0 ? "Select trading pairs first." : "No timeframes for the selection."}
+            />
+
+            <CheckboxRegion
+              label="Simulation Strategies"
+              items={batchStrategyOptions}
+              selected={batchStrategies}
+              onToggle={(v) => toggleIn(setBatchStrategies, v)}
+              empty="No strategies — create one first."
+            />
+
+            <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
+              Each simulation uses the date range set on the Simulation tab
+              ({startDate ? format(startDate, "d MMM yyyy") : "—"} – {endDate ? format(endDate, "d MMM yyyy") : "—"}).
+              Every selected combination is queued as its own run.
+            </p>
+
+            {/* Batch actions */}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={handleBatchClear} className="cursor-pointer">Cancel</Button>
+              <Button
+                size="sm"
+                onClick={() => batchMutation.mutate()}
+                disabled={!batchValid || batchMutation.isPending}
+                className="cursor-pointer"
+              >
+                {batchMutation.isPending ? "Starting…" : `Run Simulation Batch${combinationCount > 0 ? ` (${combinationCount})` : ""}`}
+              </Button>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

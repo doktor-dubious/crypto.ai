@@ -34,6 +34,7 @@ class CoinResponse(CoinBase):
 
     id: str
     active: bool
+    categories: list[str] = []
     created_at: datetime
     updated_at: datetime
 

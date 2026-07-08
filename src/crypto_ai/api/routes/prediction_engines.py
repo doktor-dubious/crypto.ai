@@ -21,10 +21,15 @@ from crypto_ai.schemas.prediction import (
 class FinetuneRequest(BaseModel):
     """Schema for fine-tuning request."""
     prediction_engine_id: str
-    customer_id: str
+    # Crypto kline target (coin + pair + timeframe).
+    coin_id: str | None = None
+    quote_asset: str | None = None
+    interval: str | None = None
+    # Legacy sales target (customer + optional outlet group).
+    customer_id: str | None = None
+    outlet_group_id: str | None = None
     name: str = ""
     description: str | None = None
-    outlet_group_id: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     context_length: int = 512
@@ -33,6 +38,8 @@ class FinetuneRequest(BaseModel):
     learning_rate: float = 0.001
     batch_size: int = 32
     early_stopping_patience: int = 0
+    early_stopping_method: str = "training"  # "training" | "validation"
+    validation_split: float = 0.0            # fraction held out when method == "validation"
     worker: str | None = None
 
 
@@ -166,6 +173,27 @@ async def delete_engine_parameter(
 # ── Fine-tuning ──────────────────────────────────────────────────────────────
 
 
+def _safe_finetune_dir(path: str | None) -> str | None:
+    """Resolve a checkpoint path only if it stays inside the models/ root.
+
+    ``finetuned_model_path`` is editable via PATCH, so without containment a
+    caller could point it at an arbitrary directory and have the reset endpoint
+    rmtree it (or the listing endpoint enumerate it).
+    """
+    import os
+
+    if not path:
+        return None
+    root = os.path.realpath("models")
+    resolved = os.path.realpath(path)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise HTTPException(
+            status_code=400,
+            detail="finetuned_model_path must be inside the models/ directory",
+        )
+    return resolved
+
+
 @router.get("/{engine_id}/finetune/models")
 async def list_finetune_models(
     engine_id: str,
@@ -177,10 +205,8 @@ async def list_finetune_models(
     engine = await engine_service.get(engine_id)
     if not engine:
         raise HTTPException(status_code=404, detail="Engine not found")
-    if not engine.finetuned_model_path:
-        return []
-    base = engine.finetuned_model_path
-    if not os.path.isdir(base):
+    base = _safe_finetune_dir(engine.finetuned_model_path)
+    if not base or not os.path.isdir(base):
         return []
     return sorted(
         name
@@ -211,8 +237,8 @@ async def reset_finetune(
     if not engine:
         raise HTTPException(status_code=404, detail="Engine not found")
 
-    # Delete checkpoint files
-    base = engine.finetuned_model_path
+    # Delete checkpoint files (path validated to stay inside models/)
+    base = _safe_finetune_dir(engine.finetuned_model_path)
     if base and os.path.isdir(base):
         shutil.rmtree(base, ignore_errors=True)
 
@@ -262,10 +288,28 @@ async def start_finetune(
         from datetime import date as date_type
         finetune_to = date_type.fromisoformat(data.end_date)
 
+    if not data.coin_id and not data.customer_id:
+        raise HTTPException(
+            status_code=422,
+            detail="A coin (with trading pair and timeframe) or a customer must be provided",
+        )
+
     ft_service = FineTuneTrackingService(session)
-    ft_name = data.name or f"Finetune {data.customer_id[:8]}"
+    if data.coin_id:
+        if not data.quote_asset or not data.interval:
+            raise HTTPException(
+                status_code=422,
+                detail="A trading pair and timeframe are required when fine-tuning a coin",
+            )
+        default_name = f"Finetune {data.quote_asset} {data.interval}"
+    else:
+        default_name = f"Finetune {data.customer_id[:8]}"
+    ft_name = data.name or default_name
     ft_row = await ft_service.create(
         customer_id=data.customer_id,
+        coin_id=data.coin_id,
+        quote_asset=data.quote_asset,
+        interval=data.interval,
         name=ft_name,
         description=data.description,
         prediction_engine_id=data.prediction_engine_id,

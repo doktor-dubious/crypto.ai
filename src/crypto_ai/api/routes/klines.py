@@ -88,6 +88,22 @@ async def get_pair_counts(service: KlineServiceDep) -> dict[str, int]:
     return await service.get_pair_counts_by_coin()
 
 
+@router.get("/last-updated")
+async def get_last_updated(service: KlineServiceDep) -> dict[str, str]:
+    """Most recent data-update timestamp (ISO 8601) per coin id."""
+    data = await service.get_last_updated_by_coin()
+    return {coin_id: ts.isoformat() for coin_id, ts in data.items()}
+
+
+@router.get("/avg-daily-volume")
+async def get_avg_daily_volume(
+    service: KlineServiceDep,
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+) -> dict[str, float]:
+    """Average daily traded value in USDT over the last `days` 1d bars, per coin id."""
+    return await service.get_avg_daily_volume_by_coin(days)
+
+
 @router.get("/{kline_id}", response_model=KlineResponse)
 async def get_kline(kline_id: str, service: KlineServiceDep) -> KlineResponse:
     """Get a specific kline."""

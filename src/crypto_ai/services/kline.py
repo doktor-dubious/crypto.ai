@@ -160,6 +160,51 @@ class KlineService:
         result = await self.session.execute(stmt)
         return {str(coin_id): count for coin_id, count in result.all()}
 
+    async def get_last_updated_by_coin(self) -> dict[str, datetime]:
+        """Most recent updated_at across loaded klines, per coin id.
+
+        Reflects when we last imported new data for the coin (re-imports only touch
+        rows they insert), so it drives the "Last updated" column on the coins page.
+        """
+        stmt = (
+            select(Kline.coin_id, func.max(Kline.updated_at))
+            .where(Kline.active == True)  # noqa: E712
+            .group_by(Kline.coin_id)
+        )
+        result = await self.session.execute(stmt)
+        return {str(coin_id): ts for coin_id, ts in result.all()}
+
+    async def get_avg_daily_volume_by_coin(self, days: int = 30) -> dict[str, float]:
+        """Average quote-asset volume over the most recent `days` daily bars, per coin.
+
+        Uses the 1d/USDT series and averages the last N bars (by recency, not a
+        calendar window) so the metric stays stable when imports lag. The result
+        is a coin's typical traded value in USDT — a size/liquidity ranking that
+        drives the "Volume (30d)" column on the coins page.
+        """
+        rn = func.row_number().over(
+            partition_by=Kline.coin_id,
+            order_by=desc(Kline.open_time),
+        ).label("rn")
+        recent = (
+            select(Kline.coin_id.label("coin_id"), Kline.quote_asset_volume.label("qv"), rn)
+            .where(
+                and_(
+                    Kline.interval == "1d",
+                    Kline.quote_asset == "USDT",
+                    Kline.active == True,  # noqa: E712
+                )
+            )
+            .subquery()
+        )
+        stmt = (
+            select(recent.c.coin_id, func.avg(recent.c.qv))
+            .where(recent.c.rn <= days)
+            .group_by(recent.c.coin_id)
+        )
+        result = await self.session.execute(stmt)
+        return {str(coin_id): float(avg) for coin_id, avg in result.all() if avg is not None}
+
     async def get_date_range(
         self, coin_id: str, quote_asset: str, interval: str
     ) -> tuple[datetime | None, datetime | None]:
@@ -174,6 +219,23 @@ class KlineService:
         )
         lo, hi = (await self.session.execute(stmt)).one()
         return lo, hi
+
+    async def get_loaded_combos(
+        self, coin_id: str
+    ) -> list[tuple[str, str, datetime | None]]:
+        """Every (quote_asset, interval) with data for a coin, plus its latest bar time.
+
+        Used to refresh all loaded series from Binance in one go: each combo is
+        topped up from its last bar to now.
+        """
+        stmt = (
+            select(Kline.quote_asset, Kline.interval, func.max(Kline.open_time))
+            .where(and_(Kline.coin_id == coin_id, Kline.active == True))  # noqa: E712
+            .group_by(Kline.quote_asset, Kline.interval)
+            .order_by(Kline.quote_asset, Kline.interval)
+        )
+        result = await self.session.execute(stmt)
+        return [(qa, iv, hi) for qa, iv, hi in result.all()]
 
     async def get_intervals_by_coin_and_quote(self, coin_id: str, quote_asset: str) -> list[str]:
         """Get all unique intervals for a trading pair."""

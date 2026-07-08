@@ -7,8 +7,9 @@ import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown,
-  ChevronDown, ChevronUp, CalendarIcon,
+  ChevronDown, ChevronUp, CalendarIcon, RefreshCw, Tags,
 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
@@ -36,13 +37,16 @@ import {
 } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { coinsApi, klinesApi, type CoinResponse, type CoinUpdate, type PredictionEngine } from "@/lib/api"
+import { coinsApi, klinesApi, binanceImportApi, type CoinResponse, type CoinUpdate, type PredictionEngine } from "@/lib/api"
 import { KlineChart } from "@/components/coins/kline-chart"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
-type SortField = "symbol" | "name" | "tradingPairs" | "type" | "starred"
+type SortField = "symbol" | "name" | "tradingPairs" | "volume" | "type" | "lastUpdated" | "starred"
+
+// Compact USD-ish formatter for traded-volume figures (e.g. $1.2B, $345M, $12K).
+const compactUsd = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +99,7 @@ export default function CoinsPage() {
   const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadJson<string[]>("starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
   const [search, setSearch] = useState("")
+  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
   const [sortField, setSortField] = useState<SortField>("name")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)
@@ -143,6 +148,18 @@ export default function CoinsPage() {
   const { data: pairCounts = {} } = useQuery({
     queryKey: ["klinesPairCounts"],
     queryFn: () => klinesApi.getPairCounts(),
+  })
+
+  // Most recent data-update timestamp (ISO 8601) per coin, for the "Last updated" column
+  const { data: lastUpdated = {} } = useQuery({
+    queryKey: ["klinesLastUpdated"],
+    queryFn: () => klinesApi.getLastUpdated(),
+  })
+
+  // Avg daily traded value (USDT, last 30 1d bars) per coin, for the "Volume (30d)" column
+  const { data: avgVolume = {} } = useQuery({
+    queryKey: ["klinesAvgVolume"],
+    queryFn: () => klinesApi.getAvgDailyVolume(30),
   })
 
   // Fetch available trading pairs for selected coin
@@ -264,6 +281,46 @@ export default function CoinsPage() {
     onError: () => { toast.error(t("toastDeleteError")) },
   })
 
+  const refreshDataMutation = useMutation({
+    mutationFn: (coinId: string) => binanceImportApi.refreshCoin(coinId),
+    onSuccess: (res) => {
+      if (res.count === 0) {
+        toast.info(t("refreshDataNone"))
+        return
+      }
+      // The new import tasks show up in the sidebar task list, which polls itself.
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("refreshDataQueued", { count: res.count }))
+    },
+    onError: () => { toast.error(t("refreshDataError")) },
+  })
+
+  const refreshSelectedMutation = useMutation({
+    mutationFn: (coinIds: string[]) => binanceImportApi.refreshCoins(coinIds),
+    onSuccess: (res) => {
+      if (res.count === 0) {
+        toast.info(t("refreshDataNone"))
+        return
+      }
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("refreshDataQueued", { count: res.count }))
+    },
+    onError: () => { toast.error(t("refreshDataError")) },
+  })
+
+  const refreshCategoriesMutation = useMutation({
+    mutationFn: (coinIds?: string[]) => coinsApi.refreshCategories(coinIds),
+    onSuccess: (res) => {
+      if (!res.task_id || res.count === 0) {
+        toast.info(t("categoriesNone"))
+        return
+      }
+      queryClient.invalidateQueries({ queryKey: ["tasks"] })
+      toast.success(t("categoriesQueued", { count: res.count }))
+    },
+    onError: () => { toast.error(t("categoriesError")) },
+  })
+
   const klinesDeleteMutation = useMutation({
     mutationFn: () => klinesApi.deleteAll(selectedCoin!.id, selectedQuoteAsset!, selectedTimeframe!),
     onSuccess: async (result) => {
@@ -322,17 +379,28 @@ export default function CoinsPage() {
 
   // ── Derived / filtering / sorting / pagination ─────────────────────────────
 
+  // All distinct categories present across coins, for the filter dropdown.
+  const allCategories = useMemo(
+    () => Array.from(new Set(coins.flatMap((c) => c.categories ?? []))).sort((a, b) => a.localeCompare(b)),
+    [coins]
+  )
+
   const filtered = useMemo(() => {
     let items = showOnlySelected
       ? coins.filter((c) => selectedIds.has(c.id))
       : coins
+
+    if (categoryFilter.size > 0) {
+      items = items.filter((c) => (c.categories ?? []).some((cat) => categoryFilter.has(cat)))
+    }
 
     if (search.trim()) {
       const q = search.toLowerCase()
       items = items.filter(
         (c) => c.name.toLowerCase().includes(q) ||
                c.description?.toLowerCase().includes(q) ||
-               c.type?.toLowerCase().includes(q)
+               c.type?.toLowerCase().includes(q) ||
+               (c.categories ?? []).some((cat) => cat.toLowerCase().includes(q))
       )
     }
 
@@ -342,13 +410,18 @@ export default function CoinsPage() {
         case "symbol": va = a.symbol; vb = b.symbol; break
         case "name": va = a.name; vb = b.name; break
         case "tradingPairs": va = pairCounts[a.id] ?? 0; vb = pairCounts[b.id] ?? 0; break
+        case "volume": va = avgVolume[a.id] ?? 0; vb = avgVolume[b.id] ?? 0; break
         case "type": va = a.type ?? ""; vb = b.type ?? ""; break
+        case "lastUpdated":
+          va = lastUpdated[a.id] ? Date.parse(lastUpdated[a.id]) : 0
+          vb = lastUpdated[b.id] ? Date.parse(lastUpdated[b.id]) : 0
+          break
         case "starred": va = starredIds.has(a.id) ? 1 : 0; vb = starredIds.has(b.id) ? 1 : 0; break
       }
       const cmp = va < vb ? -1 : va > vb ? 1 : 0
       return sortDir === "asc" ? cmp : -cmp
     })
-  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds, pairCounts])
+  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds, pairCounts, lastUpdated, avgVolume, categoryFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
   const safePage = Math.min(currentPage, totalPages)
@@ -356,9 +429,13 @@ export default function CoinsPage() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
+  // Quantity/time columns read best biggest/newest-first, so they default to
+  // descending on first click; text columns default to ascending (A→Z).
+  const DESC_FIRST_FIELDS = new Set<SortField>(["tradingPairs", "volume", "lastUpdated", "starred"])
+
   function handleSort(field: SortField) {
     if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
-    else { setSortField(field); setSortDir("asc") }
+    else { setSortField(field); setSortDir(DESC_FIRST_FIELDS.has(field) ? "desc" : "asc") }
   }
 
   const allPageSelected = pageItems.length > 0 && pageItems.every((c) => selectedIds.has(c.id))
@@ -383,6 +460,11 @@ export default function CoinsPage() {
   function handleRowClick(coin: CoinResponse) {
     setSelectedCoin(coin)
     setActiveTab("details")
+    // Reset pair/timeframe/page — carrying them over queries the new coin
+    // with the old coin's selection (phantom combos, blank timeframe select).
+    setSelectedQuoteAsset(null)
+    setSelectedTimeframe(null)
+    setKlinesPage(1)
   }
 
   function handleRowRightClick(e: React.MouseEvent, id: string) {
@@ -445,7 +527,68 @@ export default function CoinsPage() {
       {/* ── Top: Master table ── */}
       <div className={cn("flex flex-col shrink-0", detailMaximized && selectedCoin && "hidden")}>
         {/* Toolbar */}
-        <div className="flex items-center justify-end px-4 py-2 shrink-0 bg-background">
+        <div className="flex items-center justify-end gap-2 px-4 py-2 shrink-0 bg-background">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 cursor-pointer"
+            disabled={refreshCategoriesMutation.isPending}
+            onClick={() => refreshCategoriesMutation.mutate(undefined)}
+            title={t("categoriesFetchAllTitle")}
+          >
+            <Tags className={cn("h-3.5 w-3.5 mr-1.5", refreshCategoriesMutation.isPending && "animate-pulse")} />
+            {t("categoriesFetch")}
+          </Button>
+
+          {/* Category filter */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn("h-7 cursor-pointer", categoryFilter.size > 0 && "border-primary text-primary")}
+                disabled={allCategories.length === 0}
+              >
+                <Focus className="h-3.5 w-3.5 mr-1.5" />
+                {categoryFilter.size > 0 ? t("categoryFilterActive", { count: categoryFilter.size }) : t("categoryFilter")}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-56 p-2">
+              <div className="flex items-center justify-between px-1 pb-2">
+                <span className="text-xs font-medium text-muted-foreground">{t("categoryFilter")}</span>
+                {categoryFilter.size > 0 && (
+                  <button
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setCategoryFilter(new Set())}
+                  >
+                    {t("clear")}
+                  </button>
+                )}
+              </div>
+              <div className="max-h-64 overflow-y-auto space-y-0.5">
+                {allCategories.map((cat) => (
+                  <label
+                    key={cat}
+                    className="flex items-center gap-2 rounded px-1.5 py-1 text-sm cursor-pointer hover:bg-accent"
+                  >
+                    <Checkbox
+                      checked={categoryFilter.has(cat)}
+                      onCheckedChange={(checked) => {
+                        setCategoryFilter((prev) => {
+                          const n = new Set(prev)
+                          checked ? n.add(cat) : n.delete(cat)
+                          return n
+                        })
+                        setCurrentPage(1)
+                      }}
+                    />
+                    <span className="truncate">{cat}</span>
+                  </label>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
@@ -506,7 +649,9 @@ export default function CoinsPage() {
                   <TableHead><SortHeader field="symbol" label={t("colSymbol")} /></TableHead>
                   <TableHead><SortHeader field="name" label={t("colName")} /></TableHead>
                   <TableHead><SortHeader field="tradingPairs" label={t("colTradingPairs")} /></TableHead>
-                  <TableHead><SortHeader field="type" label={t("colType")} /></TableHead>
+                  <TableHead><SortHeader field="volume" label={t("colVolume")} /></TableHead>
+                  <TableHead>{t("colCategories")}</TableHead>
+                  <TableHead><SortHeader field="lastUpdated" label={t("colLastUpdated")} /></TableHead>
                   <TableHead className="w-10 text-center">
                     <button
                       onClick={() => handleSort("starred")}
@@ -548,8 +693,39 @@ export default function CoinsPage() {
                         <span className="text-muted-foreground">0</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-xs max-w-[120px] truncate">
-                      {coin.type ?? "—"}
+                    <TableCell className="text-sm tabular-nums whitespace-nowrap">
+                      {avgVolume[coin.id] != null ? (
+                        `$${compactUsd.format(avgVolume[coin.id])}`
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-[220px]">
+                      {coin.categories?.length ? (
+                        <div className="flex flex-wrap gap-1">
+                          {coin.categories.slice(0, 3).map((cat) => (
+                            <Badge key={cat} variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
+                              {cat}
+                            </Badge>
+                          ))}
+                          {coin.categories.length > 3 && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 font-normal"
+                              title={coin.categories.slice(3).join(", ")}
+                            >
+                              +{coin.categories.length - 3}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap tabular-nums">
+                      {lastUpdated[coin.id]
+                        ? format(new Date(lastUpdated[coin.id]), "yyyy-MM-dd HH:mm")
+                        : "—"}
                     </TableCell>
                     <TableCell className="text-center w-10" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -630,6 +806,17 @@ export default function CoinsPage() {
               <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
+                  size="sm"
+                  className="h-7 cursor-pointer"
+                  disabled={refreshSelectedMutation.isPending}
+                  onClick={() => refreshSelectedMutation.mutate([...selectedIds])}
+                  title={t("refreshSelectedTitle", { count: selectedIds.size })}
+                >
+                  <RefreshCw className={cn("h-4 w-4 mr-1.5", refreshSelectedMutation.isPending && "animate-spin")} />
+                  {t("refreshDataButton")}
+                </Button>
+                <Button
+                  variant="ghost"
                   size="icon"
                   className="h-7 w-7 cursor-pointer"
                   onClick={() => setShowOnlySelected((v) => !v)}
@@ -705,11 +892,19 @@ export default function CoinsPage() {
                   </div>
                 </FieldRow>
                 <FieldRow label={t("fieldSymbol")}>
-                  <Input
-                    value={draft.symbol ?? ""}
-                    onChange={(e) => setDraft((d) => ({ ...d, symbol: e.target.value }))}
-                    className="px-4 py-2.5 font-mono focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:border-transparent"
-                  />
+                  <div className="relative">
+                    <Input value={selectedCoin.symbol} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono" />
+                    <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                      <CopyIcon
+                        size={16}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedCoin.symbol)
+                          toast.success(t("toastCopied"))
+                        }}
+                      />
+                    </AnimateIcon>
+                  </div>
                 </FieldRow>
                 <FieldRow label={t("fieldName")}>
                   <Input
@@ -1266,7 +1461,12 @@ export default function CoinsPage() {
                       <h3 className="font-semibold text-sm">Volatility Analysis</h3>
                       {(() => {
                         const returns = klinesData.map((k) => Math.log(k.close / k.open))
-                        const volatility = Math.sqrt(returns.reduce((sum, r) => sum + r * r, 0) / returns.length) * Math.sqrt(252)
+                        // Annualize by bars-per-year for the selected timeframe
+                        // (crypto trades 365d) — a flat √252 treats every bar
+                        // as a daily equity bar and understates intraday vol.
+                        const barMinutes: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080, "1M": 43200 }
+                        const perYear = (365 * 24 * 60) / (barMinutes[selectedTimeframe ?? "1d"] ?? 1440)
+                        const volatility = Math.sqrt(returns.reduce((sum, r) => sum + r * r, 0) / returns.length) * Math.sqrt(perYear)
                         const priceRange = klinesData.map((k) => (k.high - k.low) / k.open)
                         const avgRange = priceRange.reduce((a, b) => a + b, 0) / priceRange.length
                         const rangeStdDev = Math.sqrt(
@@ -1326,6 +1526,38 @@ export default function CoinsPage() {
 
               {/* ─ Actions ─ */}
               <TabsContent value="actions" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
+                <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold">{t("refreshDataTitle")}</p>
+                    <p className="text-xs text-muted-foreground">{t("refreshDataDescription")}</p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!selectedCoin || refreshDataMutation.isPending}
+                    onClick={() => selectedCoin && refreshDataMutation.mutate(selectedCoin.id)}
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", refreshDataMutation.isPending && "animate-spin")} />
+                    {t("refreshDataButton")}
+                  </Button>
+                </div>
+                <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold">{t("categoriesTitle")}</p>
+                    <p className="text-xs text-muted-foreground">{t("categoriesDescription")}</p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!selectedCoin || refreshCategoriesMutation.isPending}
+                    onClick={() => selectedCoin && refreshCategoriesMutation.mutate([selectedCoin.id])}
+                  >
+                    <Tags className={cn("h-3.5 w-3.5 mr-1.5", refreshCategoriesMutation.isPending && "animate-pulse")} />
+                    {t("categoriesFetch")}
+                  </Button>
+                </div>
                 <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <p className="text-sm font-semibold text-destructive">{t("deleteButton")}</p>

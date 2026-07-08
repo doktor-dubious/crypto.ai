@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, Text, text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +48,20 @@ class KlineSimulation(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Price skill in [-1, 1]: the directional return IC of the best model.
+    # Every run computes it (the price walk-forward always happens).
+    score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    # Significance of the price score: t-statistic of the same correlation
+    # under the no-signal null (r * sqrt((n-2)/(1-r^2))). Sample-size aware, so
+    # sorting by it surfaces the statistically REAL edges when screening many
+    # runs; under pure chance the max |t| across ~1000 runs is ~3.5, look for >= 4.
+    score_t: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    # Volatility skill: Pearson corr of predicted vs realized range-vol, plus
+    # its t-statistic. Only set for runs with forecast_vol on — kept as its own
+    # pair of columns (not merged into score) because IC and vol-corr live on
+    # different scales and must not share a sort order.
+    score_vol: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    score_vol_t: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     starred: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

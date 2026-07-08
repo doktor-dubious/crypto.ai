@@ -43,6 +43,23 @@ class Settings(BaseSettings):
     # Anthropic / Claude
     claude_api: str | None = None
 
+    # CoinGecko (coin categories / metadata). Optional — the public API works
+    # without a key, a Demo key just raises the rate limit.
+    coingecko_api_key: str | None = None
+
+    # Live kline ingestion — continuously updates coin data for paper/live trading.
+    # WebSocket is the push path; the REST mirror is used for gap-fill on reconnect
+    # and as a fallback "poll" mode where the WS host is unreachable (e.g. a network
+    # that TLS-intercepts stream.binance.com but allows data-api.binance.vision).
+    binance_rest_base: str = "https://data-api.binance.vision"
+    binance_ws_base: str = "wss://stream.binance.com:9443"
+    live_ingest_mode: str = "ws"  # "ws" (push) | "poll" (periodic REST)
+    # Comma-separated intervals to keep live. Defaults to the same set the batch
+    # importer loads (STANDARD_INTERVALS) so every timeframe the app uses stays
+    # current — each interval is its own Binance stream, closing on its own cadence.
+    live_ingest_intervals: str = "5m,15m,30m,1h,4h,1d,1w,1M"
+    live_ingest_poll_seconds: int = 5  # poll-mode cadence between full sweeps
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 

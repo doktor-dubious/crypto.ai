@@ -18,6 +18,11 @@ class EngineRegistry:
 
         self.register(PredictionEngineEnum.STATISTICAL, StatisticalEngine)
 
+        # Streak-reversal baseline (pure Python/numpy, always available).
+        from crypto_ai.prediction.engines.streak_reversal import StreakReversalEngine
+
+        self.register(PredictionEngineEnum.STREAK_REVERSAL, StreakReversalEngine)
+
         # Register TimesFM stub (interface only)
         try:
             from crypto_ai.prediction.engines.timesfm import TimesFMEngine
@@ -137,6 +142,30 @@ class EngineRegistry:
             self.register(PredictionEngineEnum.FLOWSTATE, FlowStateEngine)
         except ImportError:
             pass  # tsfm_public not available
+
+        # Register TinyTimeMixer engine (IBM Research, same tsfm_public package)
+        try:
+            from crypto_ai.prediction.engines.ttm_engine import TTMEngine
+
+            self.register(PredictionEngineEnum.TTM, TTMEngine)
+        except ImportError:
+            pass  # tsfm_public not available
+
+        # Register TabPFN-TS engine (Prior Labs, local-only)
+        try:
+            from crypto_ai.prediction.engines.tabpfn_engine import TabPFNTSEngine
+
+            self.register(PredictionEngineEnum.TABPFN, TabPFNTSEngine)
+        except ImportError:
+            pass  # tabpfn-time-series not available
+
+        # Register direct Toto 2.0 engine (Datadog, separate toto2 package)
+        try:
+            from crypto_ai.prediction.engines.toto2_engine import Toto2DirectEngine
+
+            self.register(PredictionEngineEnum.TOTO2, Toto2DirectEngine)
+        except ImportError:
+            pass  # toto2 (toto-models) not available
 
 
     def register(

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import date, timedelta
 
 import numpy as np
@@ -37,6 +38,11 @@ BATCH_SIZE = 32
 
 class TimesFMEngine(PredictionEngine):
     """Google TimesFM 2.5 (200M, PyTorch) prediction engine."""
+
+    # covariate_handling="native" invokes TimesFM's forecast_with_covariates
+    # (XReg) — a genuine model-side covariate fit over the full history, safe
+    # at horizon 1 (unlike the shared residual-Ridge fallback).
+    supports_native_covariates = True
 
     def __init__(self):
         self.preprocessor = DataPreprocessor(fill_missing=True, normalize=True)
@@ -816,11 +822,15 @@ class TimesFMEngine(PredictionEngine):
             self._compile_for_context(1024)
             logger.info("TimesFM 2.5 model loaded successfully")
         except Exception as e:
+            # Leave _model_loaded False when fallback is disabled so the next
+            # call retries the load (and raises again) instead of skipping the
+            # load and silently serving the stub forecast.
             if not self.allow_fallback:
-                raise RuntimeError(f"TimesFM model failed to load and engine fallback is disabled") from e
+                raise RuntimeError("TimesFM model failed to load and engine fallback is disabled") from e
             logger.warning(f"Failed to load TimesFM model, falling back to stub: {e}")
             self._model = None
-        finally:
+            self._model_loaded = True
+        else:
             self._model_loaded = True
 
     def _compile_for_context(self, max_context: int) -> None:
