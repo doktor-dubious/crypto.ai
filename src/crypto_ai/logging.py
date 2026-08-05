@@ -261,7 +261,7 @@ def configure_logging(
         encoding="utf-8",
     )
     trade_ai_handler.setFormatter(binance_formatter)
-    logging.getLogger("crypto_ai.services.trade_advisor").addHandler(trade_ai_handler)
+    logging.getLogger("crypto_ai.trade_ai").addHandler(trade_ai_handler)
 
     # Attach all handlers to the root logger
     root = logging.getLogger()

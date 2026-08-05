@@ -482,3 +482,8 @@ already integrated for classification). Honest expectations first:
    into the daily models as a covariate. Skip headline-latency trading.
 7. Security: rotate `BETTER_AUTH_SECRET`, bind port 8000 to localhost, and get
    the Docker socket out of the API container (§2, items 1–3).
+
+
+
+
+scans news sites, for indications that would move the price of coins

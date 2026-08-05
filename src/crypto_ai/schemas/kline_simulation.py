@@ -4,6 +4,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from crypto_ai.schemas.paper_trade_analysis import PaperTradeAnalysis
+
 
 class KlineSimulationCreate(BaseModel):
     """Request to create + enqueue a walk-forward simulation."""
@@ -142,6 +144,26 @@ class BacktestTradeMarker(BaseModel):
     exit_timestamp: datetime | None = None
 
 
+class BacktestTradeRow(BaseModel):
+    """One backtested round-trip, in full — the rows behind the chart markers.
+
+    The explorers show a short list of these under the charts so a backtest can
+    be read trade by trade, the way a paper run's Trades tab reads. Only the
+    first ``_MAX_TRADE_ROWS`` are returned: a year-long scalp backtest can run to
+    thousands of trades, and shipping them all would cost more than the analysis.
+    """
+
+    seq: int  # 1-based, in entry order
+    side: str  # "long" | "short"
+    entry_time: datetime
+    entry_price: float
+    exit_time: datetime
+    exit_price: float
+    bars_held: int
+    ret_bps: float  # fee-inclusive return, basis points
+    exit_reason: str  # stop | take_profit | reversal | hold_max
+
+
 class BacktestResponse(BaseModel):
     """Fee-aware long-only backtest of a confidence-thresholded strategy."""
 
@@ -247,6 +269,11 @@ class SwingAnalysisResponse(BaseModel):
     tp_value: float = 3.0
     # Per-member contribution multipliers actually applied (1.0 = baseline).
     weights: dict[str, float] = {}
+    # Higher-timeframe trend gate (see ScalpAnalysisResponse for the semantics).
+    htf_gate: str = "off"
+    htf_tf: str = "4h"
+    htf_level: float = 0.5
+    htf_bars: int = 0
     # How trades actually exited: stop / take_profit / reversal / hold_max.
     exit_counts: dict[str, int] = {}
     use_model: bool
@@ -263,6 +290,11 @@ class SwingAnalysisResponse(BaseModel):
     # spikes survive). Which side the component values describe:
     signal_curve: list[SwingSignalPoint] = []
     components_side: str = "long"
+    # First N round-trips in full, for the trade list under the charts.
+    trade_rows: list[BacktestTradeRow] = []
+    # Hour/weekday/session/side/exit-reason cuts of this backtest's trades —
+    # the Analytics tab. Only computed when the caller asks (``buckets=true``).
+    bucket_analysis: PaperTradeAnalysis | None = None
 
 
 class SwingOptimizeStats(BaseModel):
@@ -304,6 +336,12 @@ class SwingOptimizeResponse(BaseModel):
     fee_bps: float
     use_model: bool
     model_available: bool
+    # The gate is a fixed conditioner on every swept combo, never a swept
+    # dimension — its direction is nearly free to fit in-sample.
+    htf_gate: str = "off"
+    htf_tf: str = "4h"
+    htf_level: float = 0.5
+    htf_bars: int = 0
     split_at: datetime  # first bar of the validation half
     results: list[SwingOptimizeCombo]
 
@@ -331,6 +369,13 @@ class ScalpAnalysisResponse(BaseModel):
     # (14-bar ATR vs its trailing 200-bar median, compared to vol_level).
     vol_gate: str = "off"
     vol_level: float = 1.0
+    # Higher-timeframe trend gate: entries restricted by the trend read over
+    # ``htf_bars`` base bars (the span of ~16 htf_tf bars). htf_bars = 0 means
+    # htf_tf wasn't actually higher than the scope's interval → gate inert.
+    htf_gate: str = "off"  # "off" | "align" | "flat" | "counter"
+    htf_tf: str = "4h"
+    htf_level: float = 0.5
+    htf_bars: int = 0
     threshold: float
     hold_bars: int
     fee_bps: float
@@ -347,6 +392,12 @@ class ScalpAnalysisResponse(BaseModel):
     equity_curve: list[BacktestPoint]
     trade_markers: list[BacktestTradeMarker]
     signal_curve: list[ScalpSignalPoint]
+    # First N round-trips in full, for the trade list under the charts.
+    trade_rows: list[BacktestTradeRow] = []
+    # Hour/weekday/session/side/exit-reason cuts of this backtest's trades —
+    # the Analytics tab. Only computed when the caller asks (``buckets=true``),
+    # since it carries the raw trade rows and most calls don't need them.
+    bucket_analysis: PaperTradeAnalysis | None = None
 
 
 class KlineSimulationStatusResponse(BaseModel):

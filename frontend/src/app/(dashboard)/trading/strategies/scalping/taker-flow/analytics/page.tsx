@@ -1,21 +1,21 @@
 "use client"
 
-// Trading → Strategies → Scalping → taker-flow imbalance scalping — kline-data analysis, no simulation.
-import { useTradingScope } from "@/components/trading/scope-picker"
+// Trading → Strategies → New → Scalping → Taker Flow — kline-data analysis, no
+// simulation. The workbench shell owns the four tabs and the Create Strategy
+// buttons; the explorer renders the region belonging to the active tab.
+import { StrategyWorkbench } from "@/components/trading/strategy-workbench"
 import { ScalpExplorer } from "@/components/trading/scalp-explorer"
 
 export default function Page() {
-  const { scope, picker } = useTradingScope()
   return (
-    <div className="px-6 py-6 space-y-4">
-      {picker}
-      {scope ? (
-        <ScalpExplorer scope={scope} strategy="takerflow" />
-      ) : (
-        <p className="text-sm text-muted-foreground py-10 text-center">
-          Pick a coin, trading pair, timeframe and date range to analyse taker-flow imbalance scalping.
-        </p>
+    <StrategyWorkbench
+      strategy="takerflow"
+      optimizable
+      emptyHint="Pick a coin, trading pair and timeframe on Basics, then a date range on Results, to analyse taker-flow imbalance scalping."
+    >
+      {({ scope, tab, onParams, loadParams }) => (
+        <ScalpExplorer scope={scope} strategy="takerflow" activeTab={tab} onParams={onParams} loadParams={loadParams} />
       )}
-    </div>
+    </StrategyWorkbench>
   )
 }

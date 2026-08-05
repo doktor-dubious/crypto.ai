@@ -35,6 +35,10 @@ class CoinResponse(CoinBase):
     id: str
     active: bool
     categories: list[str] = []
+    # Binance market availability (None = not yet checked). Spot-taker fees need a
+    # spot market; futures maker/taker fees need a USDⓈ-M perpetual.
+    has_spot: bool | None = None
+    has_futures: bool | None = None
     created_at: datetime
     updated_at: datetime
 

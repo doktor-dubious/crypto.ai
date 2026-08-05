@@ -10,6 +10,7 @@ from crypto_ai.api.routes import (
     cohort_audit,
     cohort_investigate,
     coins,
+    coin_groups,
     configuration,
     configuration_covariates,
     currencies,
@@ -23,8 +24,10 @@ from crypto_ai.api.routes import (
     imports,
     kline_simulations,
     live_ingest,
+    live_trade,
     kline_strategies,
     paper_trade,
+    strategy_optimizations,
     strategy_templates,
     klines,
     llms,
@@ -86,6 +89,7 @@ api_router.include_router(llms.router, prefix="/llms", tags=["llms"])
 api_router.include_router(logs.router, prefix="/logs", tags=["logs"])
 api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
 api_router.include_router(coins.router, prefix="/coins", tags=["coins"])
+api_router.include_router(coin_groups.router, prefix="/coin-groups", tags=["coin-groups"])
 api_router.include_router(klines.router, prefix="/klines", tags=["klines"])
 api_router.include_router(kline_simulations.router, prefix="/kline-simulations", tags=["kline-simulations"])
 api_router.include_router(
@@ -95,8 +99,10 @@ api_router.include_router(
     scalp_analysis.router, prefix="/scalp-analysis", tags=["scalp-analysis"]
 )
 api_router.include_router(kline_strategies.router, prefix="/kline-strategies", tags=["kline-strategies"])
+api_router.include_router(strategy_optimizations.router, prefix="/strategy-optimizations", tags=["strategy-optimizations"])
 api_router.include_router(strategy_templates.router, prefix="/strategy-templates", tags=["strategy-templates"])
 api_router.include_router(paper_trade.router, prefix="/paper-trade", tags=["paper-trade"])
+api_router.include_router(live_trade.router, prefix="/live-trade", tags=["live-trade"])
 api_router.include_router(binance_import.router, prefix="/binance-import", tags=["binance-import"])
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
 api_router.include_router(financial_dates.router, prefix="/financial-dates", tags=["financial-dates"])

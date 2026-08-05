@@ -53,6 +53,12 @@ MAX_STREAMS_PER_CONN = 1000
 # Cap the paging on a single gap-fill so a brand-new/long-idle pair can't spin
 # forever (20 * 1000 bars ≈ 2 weeks of 1m data before we defer to the next pass).
 MAX_GAPFILL_PAGES = 20
+# How often the WS mode re-checks the active-coin set and rebuilds its stream
+# connections when it changed. (Poll mode refreshes every sweep instead — a
+# sweep already takes minutes over hundreds of pairs, so one extra cheap query
+# per sweep is noise.) Without this, coins activated after startup were never
+# ingested until the container was manually restarted.
+SYMBOL_REFRESH_SECONDS = 300.0
 
 # Redis key the ingester publishes its live status/stats to; the control API and
 # Workers-page card read it. Written with a short TTL so it disappears when the
@@ -263,13 +269,19 @@ class LiveIngestService:
     # --------------------------------------------------------------------- poll
 
     async def _run_poll(self, symbol_map: dict[str, str]) -> None:
-        pairs = [(sym, iv, cid) for sym, cid in symbol_map.items() for iv in self.intervals]
-        self._streams = len(pairs)
         self._conns_total = 1
         self._conns_up = 1  # the REST client is "up" for the duration of the loop
-        log.info("live ingest poll loop", pairs=len(pairs), every_s=self.poll_seconds)
+        log.info(
+            "live ingest poll loop", coins=len(symbol_map), every_s=self.poll_seconds
+        )
         async with httpx.AsyncClient() as client:
             while True:
+                pairs = [
+                    (sym, iv, cid)
+                    for sym, cid in symbol_map.items()
+                    for iv in self.intervals
+                ]
+                self._streams = len(pairs)
                 total = 0
                 for sym, iv, cid in pairs:
                     try:
@@ -282,28 +294,71 @@ class LiveIngestService:
                 if total:
                     log.info("poll sweep upserted", bars=total)
                 await asyncio.sleep(self.poll_seconds)
+                # Pick up coins activated (or deactivated) since the last sweep —
+                # new pairs join the next sweep and gap-fill from their newest
+                # stored bar automatically.
+                try:
+                    new_map = await self._symbol_map()
+                except Exception as exc:  # DB hiccup: keep sweeping the old set
+                    self._note_error(f"symbol refresh: {exc}")
+                    continue
+                if set(new_map) != set(symbol_map):
+                    log.info(
+                        "live ingest: coin set changed",
+                        before=len(symbol_map), after=len(new_map),
+                    )
+                symbol_map = new_map
+                self._coins = len(symbol_map)
 
     # ----------------------------------------------------------------------- ws
 
     async def _run_ws(self, symbol_map: dict[str, str]) -> None:
-        streams = [
-            f"{sym.lower()}@kline_{iv}"
-            for sym in symbol_map
-            for iv in self.intervals
-        ]
-        chunks = [
-            streams[i : i + MAX_STREAMS_PER_CONN]
-            for i in range(0, len(streams), MAX_STREAMS_PER_CONN)
-        ]
-        self._streams = len(streams)
-        self._conns_total = len(chunks)
-        log.info(
-            "live ingest ws", streams=len(streams), connections=len(chunks),
-            intervals=self.intervals,
-        )
-        await asyncio.gather(
-            *(self._ws_connection(chunk, symbol_map) for chunk in chunks)
-        )
+        """Hold the stream connections open, rebuilding them whenever the
+        active-coin set changes (checked every SYMBOL_REFRESH_SECONDS) so coins
+        added after startup start streaming without a container restart. A
+        rebuild reconnects, and every (re)connect gap-fills first, so no bars
+        are lost across the swap."""
+        while True:
+            streams = [
+                f"{sym.lower()}@kline_{iv}"
+                for sym in symbol_map
+                for iv in self.intervals
+            ]
+            chunks = [
+                streams[i : i + MAX_STREAMS_PER_CONN]
+                for i in range(0, len(streams), MAX_STREAMS_PER_CONN)
+            ]
+            self._streams = len(streams)
+            self._conns_total = len(chunks)
+            log.info(
+                "live ingest ws", streams=len(streams), connections=len(chunks),
+                intervals=self.intervals,
+            )
+            conn_tasks = [
+                asyncio.create_task(self._ws_connection(chunk, symbol_map))
+                for chunk in chunks
+            ]
+            try:
+                while True:
+                    await asyncio.sleep(SYMBOL_REFRESH_SECONDS)
+                    try:
+                        new_map = await self._symbol_map()
+                    except Exception as exc:  # DB hiccup: keep current streams
+                        self._note_error(f"symbol refresh: {exc}")
+                        continue
+                    if set(new_map) != set(symbol_map):
+                        log.info(
+                            "live ingest: coin set changed; rebuilding streams",
+                            before=len(symbol_map), after=len(new_map),
+                        )
+                        symbol_map = new_map
+                        self._coins = len(symbol_map)
+                        break  # tear down and rebuild connections below
+            finally:
+                for t in conn_tasks:
+                    t.cancel()
+                await asyncio.gather(*conn_tasks, return_exceptions=True)
+                self._conns_up = 0
 
     async def _ws_connection(
         self, streams: list[str], symbol_map: dict[str, str]

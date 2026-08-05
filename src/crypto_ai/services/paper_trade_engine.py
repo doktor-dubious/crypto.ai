@@ -46,6 +46,9 @@ from crypto_ai.services.swing_analysis import (
     COMPONENT_KEYS,
     FLAG_KEYS,
     SwingAnalysisService,
+    apply_trend_gate,
+    htf_lookback_bars,
+    htf_min_bars,
 )
 from crypto_ai.services.trade_advisor import (
     TradeAdvisorError,
@@ -54,6 +57,8 @@ from crypto_ai.services.trade_advisor import (
 )
 
 log = structlog.get_logger()
+# Gate decisions (fail-closed vetoes) go to the same "Trade AI" feed as verdicts.
+trade_ai_log = structlog.get_logger("crypto_ai.trade_ai")
 
 # Kline columns the feature computation expects, in order.
 _KLINE_COLS = (
@@ -61,10 +66,17 @@ _KLINE_COLS = (
     Kline.volume, Kline.number_of_trades, Kline.taker_buy_base_asset_volume,
 )
 
-# With AI confirmation on, at most this many new trades are assessed per tick
-# per run (a verdict can take ~a minute; the tick has a 270 s soft limit).
-# Trades over budget stay pending and are assessed on later ticks.
+# With AI confirmation on, at most this many advisor calls are ATTEMPTED per
+# tick per run (a call can take up to ~2 min against the tick's 270 s soft
+# limit, so a timed-out attempt must burn a slot too). Trades over budget stay
+# pending and are assessed on later ticks.
 _MAX_AI_CONSULTS_PER_TICK = 2
+# After this many CONSECUTIVE advisor failures on a run, a pending trade stops
+# waiting and is resolved fail-closed (verdict "ERROR", vetoed) so an advisor
+# outage can never pin a gated run — nor burn calls — forever. The counter
+# resets on the first successful consultation, and one probe per tick keeps
+# going out so the gate recovers by itself when the advisor comes back.
+_MAX_AI_CONSULT_FAILURES = 5
 # Bars of trailing price action included in the advisor's trade card.
 _AI_CONTEXT_BARS = 12
 
@@ -79,18 +91,40 @@ class PaperTradeEngine:
 
     async def step_all(self) -> int:
         """Advance every running run by any newly-closed bars. Returns the count
-        of runs stepped. Each run is isolated: one failing never aborts the rest."""
-        rows = (
+        of runs stepped. Each run is isolated: one failing never aborts the rest.
+
+        Ticks can overlap (the beat schedule plus the on-demand kick from the
+        start endpoint, and an AI consultation can outlast a beat interval), so
+        each run is claimed with ``FOR UPDATE SKIP LOCKED``: a run being stepped
+        by a concurrent tick is skipped, never processed twice at once (which
+        could double-consult the AI for the same trade_seq and race the two
+        verdicts' upserts). The per-run commit releases the claim.
+        """
+        ids = (
             await self.session.execute(
-                select(PaperTradeRun, StrategyTemplate)
-                .join(StrategyTemplate, StrategyTemplate.id == PaperTradeRun.template_id)
-                .where(
+                select(PaperTradeRun.id).where(
                     PaperTradeRun.status == "running",
                     PaperTradeRun.active.is_(True),
                 )
             )
-        ).all()
-        for run, tpl in rows:
+        ).scalars().all()
+        stepped = 0
+        for run_id in ids:
+            claimed = (
+                await self.session.execute(
+                    select(PaperTradeRun, StrategyTemplate)
+                    .join(StrategyTemplate, StrategyTemplate.id == PaperTradeRun.template_id)
+                    .where(
+                        PaperTradeRun.id == run_id,
+                        PaperTradeRun.status == "running",
+                        PaperTradeRun.active.is_(True),
+                    )
+                    .with_for_update(of=PaperTradeRun, skip_locked=True)
+                )
+            ).first()
+            if claimed is None:  # claimed by a concurrent tick, or stopped meanwhile
+                continue
+            run, tpl = claimed
             try:
                 await self.step_run(run, tpl)
                 await self.session.commit()
@@ -98,12 +132,14 @@ class PaperTradeEngine:
                 log.warning("paper_trade.step_failed", run_id=run.id, error=str(exc))
                 # step_run may have left the transaction in a failed state; roll it
                 # back before recording the error so this run's failure can't poison
-                # the next run's commit.
+                # the next run's commit. (The rollback also drops the row claim; the
+                # error write below re-fetches nothing and commits a plain update.)
                 await self.session.rollback()
                 run.error = str(exc)[:500]
                 run.last_step_at = datetime.now(UTC)
                 await self.session.commit()
-        return len(rows)
+            stepped += 1
+        return stepped
 
     async def step_run(self, run: PaperTradeRun, template: StrategyTemplate) -> None:
         """Replay the strategy over [started_at, now] and persist trades + equity."""
@@ -116,11 +152,34 @@ class PaperTradeEngine:
             run.error = "Template has no coin / pair / timeframe scope."
             return
         scope = cfg["scope"]
-        knobs = _parse_knobs(cfg["params"])
+        knobs = _parse_knobs(cfg["params"], scope["interval"])
         snapshot = cfg["snapshot"]  # {template_id, template_name, strategy, scope, params}
 
+        # Cheap pre-check: most ticks close no new bar for this run's interval
+        # (15m/1h runs see a new bar on 1-in-15 / 1-in-60 minute ticks), so ask
+        # for just max(open_time) before paying for the full window fetch. When
+        # an AI verdict is pending, last_bar_time was deliberately NOT advanced,
+        # so the pre-check falls through and the trade is re-assessed.
+        if run.last_bar_time is not None:
+            newest = (
+                await self.session.execute(
+                    select(func.max(Kline.open_time)).where(and_(
+                        Kline.coin_id == scope["coin_id"],
+                        Kline.quote_asset == scope["quote_asset"],
+                        Kline.interval == scope["interval"],
+                        Kline.active.is_(True),
+                    ))
+                )
+            ).scalar_one_or_none()
+            if newest is None or newest <= run.last_bar_time:
+                run.error = None  # healthy, just no new bar since last tick
+                return
+
         interval_min = _interval_minutes(scope["interval"])
-        warmup_bars = _Z_WIN + int(knobs["hold_bars"]) + 40
+        # The higher-timeframe gate reads a much longer trailing span than the
+        # z-scored features do, so it — not _Z_WIN — sets the window when on.
+        min_history = max(_Z_WIN, htf_min_bars(knobs["htf_bars"]))
+        warmup_bars = min_history + int(knobs["hold_bars"]) + 40
         lower = run.started_at - timedelta(minutes=interval_min * warmup_bars)
         rows = (
             await self.session.execute(
@@ -136,9 +195,16 @@ class PaperTradeEngine:
             )
         ).all()
 
-        if len(rows) < _Z_WIN + 10:
-            # Not enough history warmed up yet (fresh coin or ingester catching up).
-            run.error = "Waiting for kline data…"
+        if len(rows) < min_history + 10:
+            # Not enough history warmed up yet (fresh coin or ingester catching
+            # up). Say WHICH warmup is missing: a run gated on a high timeframe
+            # can need weeks of bars, and "no trades" with no reason is the
+            # failure mode that wastes days.
+            run.error = (
+                "Waiting for higher-timeframe warmup…"
+                if len(rows) >= _Z_WIN + 10
+                else "Waiting for kline data…"
+            )
             return
 
         newest_bar = rows[-1][0]
@@ -146,8 +212,19 @@ class PaperTradeEngine:
             run.error = None  # healthy, just no new bar since last tick
             return
 
+        # The BTC-beta filter needs BTC's bars on the same interval. If they're
+        # missing the filter can't decide, and a silently unfiltered run would be
+        # trading a different strategy than the one configured — so say so and
+        # sit the tick out rather than degrade quietly.
+        btc_rows: list | None = None
+        if _wants_btc_filter(snapshot["strategy"], knobs):
+            btc_rows = await _btc_rows(self.session, scope, lower)
+            if btc_rows is not None and len(btc_rows) < len(rows) // 2:
+                run.error = "Waiting for BTC klines (BTC-beta filter)…"
+                return
+
         trades, times, closes, n = await asyncio.to_thread(
-            _evaluate, snapshot["strategy"], knobs, rows, run.started_at
+            _evaluate, snapshot["strategy"], knobs, rows, run.started_at, btc_rows
         )
 
         # No bar has yet fallen inside [started_at, now]: the run just started and
@@ -188,14 +265,16 @@ class PaperTradeEngine:
             Returns ``(state, verdict, explanation)`` with state:
               * "execute" — trade counts toward equity;
               * "veto"    — recorded with qty 0, excluded from equity;
-              * "pending" — gated, no verdict yet: not recorded, retried next tick.
+              * "pending" — gated, no verdict yet: not recorded, retried next
+                tick. The caller must stop at the first pending trade — later
+                trades' equity base depends on this one's unknown outcome.
             A row that already exists keeps its frozen verdict forever (a NULL
             verdict means it was written ungated and stays executed).
             """
             nonlocal consults_left
             if seq in verdicts:
                 v = verdicts[seq]
-                return ("veto" if v == "NO_GO" else "execute"), v, None
+                return ("execute" if v in (None, "GO") else "veto"), v, None
             if not ai_gate:
                 return "execute", None, None
             if consults_left <= 0:
@@ -220,8 +299,25 @@ class PaperTradeEngine:
             )
             try:
                 verdict, explanation = await get_trade_verdict(context)
-            except TradeAdvisorError:
+            except TradeAdvisorError as exc:
+                run.ai_consult_failures += 1
+                if run.ai_consult_failures > _MAX_AI_CONSULT_FAILURES:
+                    # Persistent outage: resolve terminally (fail-closed veto)
+                    # instead of pinning the run on "awaiting" forever. Later
+                    # ticks keep probing (one attempt each), so a recovered
+                    # advisor resumes normal verdicts for subsequent trades.
+                    trade_ai_log.warning(
+                        "trade_ai.fail_closed",
+                        run_id=run.id,
+                        trade_seq=seq,
+                        failures=run.ai_consult_failures,
+                    )
+                    return "veto", "ERROR", (
+                        f"AI advisor unreachable ({run.ai_consult_failures} consecutive "
+                        f"failures) — trade blocked fail-closed. Last error: {exc}"
+                    )[:2000]
                 return "pending", None, None  # fail-closed: retry next tick
+            run.ai_consult_failures = 0
             return ("execute" if verdict == "GO" else "veto"), verdict, explanation
 
         # Replay closed trades → trade rows, compounding realized equity over the
@@ -229,6 +325,11 @@ class PaperTradeEngine:
         # trades equity is flat, so a bucket boundary landing there reads the
         # prior exit's snapshot, which is correct). Vetoed trades are recorded
         # with qty 0 and their hypothetical return, but never step equity.
+        #
+        # The FIRST pending trade halts the replay: every later trade's equity
+        # base depends on the pending one's unknown outcome, so recording (or
+        # compounding) past the gap would persist wrong P/L. Recorded rows are
+        # therefore always a verdict-resolved prefix of the replay.
         trade_rows: list[dict] = []
         equity_points: list[tuple] = [(run.started_at, float(run.initial_capital))]
         eq = float(run.initial_capital)
@@ -239,7 +340,7 @@ class PaperTradeEngine:
             state, verdict, explanation = await decide(seq, tr)
             if state == "pending":
                 pending += 1
-                continue
+                break
             direction = 1 if tr["side"] == "long" else -1
             entry_px = float(closes[tr["i"]])
             exit_px = entry_px * (1.0 + direction * (tr["ret"] + fee_rt))
@@ -262,9 +363,10 @@ class PaperTradeEngine:
 
         # Mark the open position (if any) to the latest close. A vetoed open
         # trade is recorded for the log but the run stays flat; a pending one
-        # is neither recorded nor marked (retried next tick).
+        # is neither recorded nor marked (retried next tick). A halt upstream
+        # skips the open trade entirely — its equity base is unknown too.
         open_state = None
-        if open_trade is not None:
+        if open_trade is not None and not pending:
             seq = len(closed)
             open_state, verdict, explanation = await decide(seq, open_trade)
             if open_state == "pending":
@@ -425,15 +527,30 @@ def _parse_scope_dict(scope: dict | None) -> dict | None:
     }
 
 
-def _parse_knobs(params: dict) -> dict:
-    """Read the explorer's (camelCase) knobs, tolerating snake_case fallbacks."""
+def _parse_knobs(params: dict, interval: str | None = None) -> dict:
+    """Read the explorer's (camelCase) knobs, tolerating snake_case fallbacks.
+
+    ``interval`` is the run's own timeframe; it resolves the higher-timeframe
+    gate's lookback into a bar count here so ``_evaluate`` never needs it. Left
+    None (or when the picked timeframe isn't actually higher) the gate is inert.
+    """
     def g(*keys, default):
         for k in keys:
             if k in params:
                 return params[k]
         return default
 
+    htf_gate = g("htfGate", "htf_gate", default="off")
+    htf_tf = g("htfTf", "htf_tf", default="4h")
+    htf_bars = (
+        htf_lookback_bars(interval, htf_tf)
+        if htf_gate != "off" and interval else 0
+    )
     return {
+        "htf_gate": htf_gate if htf_bars > 0 else "off",
+        "htf_tf": htf_tf,
+        "htf_level": float(g("htfLevel", "htf_level", default=0.5)),
+        "htf_bars": htf_bars,
         "threshold": float(g("threshold", default=1.0)),
         "hold_bars": int(g("holdBars", "hold_bars", default=6)),
         "fee_bps": float(g("feeBps", "fee_bps", default=8.0)),
@@ -451,8 +568,50 @@ def _parse_knobs(params: dict) -> dict:
     }
 
 
+def _wants_btc_filter(strategy: str, knobs: dict) -> bool:
+    """Does this config need BTC's series fetched alongside the coin's?"""
+    if strategy != "streak":
+        return False
+    try:
+        return int(knobs["param_values"].get("btc_filter", 0)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+async def _btc_rows(session: AsyncSession, scope: dict, lower: datetime) -> list | None:
+    """BTC's (open_time, close) on the run's interval, for the BTC-beta filter.
+
+    Module-level (not a method) because the live engine needs the identical
+    fetch — the filter must behave the same wherever the strategy runs.
+
+    ``None`` means the filter does not apply at all — the run's coin IS BTC,
+    which can't be decomposed against itself. That is different from an
+    empty/short list, which means the filter applies but its data is missing;
+    the caller stalls the tick on the second case and ignores the first.
+    """
+    btc_id = (
+        await session.execute(select(Coin.id).where(Coin.symbol == "BTC"))
+    ).scalars().first()
+    if btc_id is None or btc_id == scope["coin_id"]:
+        return None
+    return (
+        await session.execute(
+            select(Kline.open_time, Kline.close)
+            .where(and_(
+                Kline.coin_id == btc_id,
+                Kline.quote_asset == scope["quote_asset"],
+                Kline.interval == scope["interval"],
+                Kline.open_time >= lower,
+                Kline.active.is_(True),
+            ))
+            .order_by(Kline.open_time)
+        )
+    ).all()
+
+
 def _evaluate(
-    strategy: str, knobs: dict, rows: list, start_dt: datetime
+    strategy: str, knobs: dict, rows: list, start_dt: datetime,
+    btc_rows: list | None = None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray, int]:
     """Compute the trade list for [start_dt, end] using the shared backtest.
 
@@ -460,7 +619,7 @@ def _evaluate(
     number of bars at/after ``start_dt`` (0 = run started but no bar closed yet).
     Runs synchronously — call via ``asyncio.to_thread``.
     """
-    ctx = SwingAnalysisService._compute_context(rows, start_dt)
+    ctx = SwingAnalysisService._compute_context(rows, start_dt, btc_rows)
     n, first = ctx["n"], ctx["first"]
     if first >= n - 1:
         return [], ctx["times"], ctx["c"], 0
@@ -471,6 +630,10 @@ def _evaluate(
             enabled = set(COMPONENT_KEYS) | set(FLAG_KEYS)
         weights = {k: float(v) / 100.0 for k, v in knobs["weight_pct"].items()}
         bottom, top = SwingAnalysisService._composite_scores(ctx, enabled, weights)
+        # BOTTOM buys the dip (long), TOP fades the crest (short).
+        bottom, top = apply_trend_gate(
+            ctx, bottom, top, knobs["htf_gate"], knobs["htf_bars"], knobs["htf_level"]
+        )
         trade_ctx = ctx
     elif strategy in SCALP_STRATEGIES:
         p = {**SCALP_DEFAULTS[strategy], **{k: float(v) for k, v in knobs["param_values"].items()}}
@@ -479,6 +642,9 @@ def _evaluate(
             long_s, short_s = ScalpAnalysisService._apply_vol_gate(
                 ctx, long_s, short_s, knobs["vol_gate"], knobs["vol_level"]
             )
+        long_s, short_s = apply_trend_gate(
+            ctx, long_s, short_s, knobs["htf_gate"], knobs["htf_bars"], knobs["htf_level"]
+        )
         # Scalping never applies the swing breakout veto (momentum wants breakouts).
         trade_ctx = {**ctx, "veto_top": np.zeros(n, dtype=bool)}
         bottom, top = long_s, short_s

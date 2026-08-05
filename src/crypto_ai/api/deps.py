@@ -9,13 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from crypto_ai.database.connection import get_session
 from crypto_ai.services.analysis import AnalysisService
 from crypto_ai.services.binance_import import BinanceImportService
-from crypto_ai.services.coin import CoinService
-from crypto_ai.services.kline import KlineService
-from crypto_ai.services.kline_strategy import KlineStrategyService
-from crypto_ai.services.paper_trade import PaperTradeService
-from crypto_ai.services.strategy_template import StrategyTemplateService
-from crypto_ai.services.kline_simulation_record import KlineSimulationRecordService
 from crypto_ai.services.cohort_audit import CohortAuditService
+from crypto_ai.services.coin import CoinService
+from crypto_ai.services.coin_group import CoinGroupService
 from crypto_ai.services.configuration import ConfigurationService
 from crypto_ai.services.configuration_covariate import ConfigurationCovariateService
 from crypto_ai.services.customer import CustomerService
@@ -25,9 +21,17 @@ from crypto_ai.services.elasticity_events import ElasticityEventService
 from crypto_ai.services.financial_date import FinancialDateService
 from crypto_ai.services.health_check import HealthCheckService
 from crypto_ai.services.import_template import ImportTemplateService
+from crypto_ai.services.kline import KlineService
+from crypto_ai.services.kline_simulation_record import KlineSimulationRecordService
+from crypto_ai.services.kline_strategy import KlineStrategyService
+from crypto_ai.services.live_ingest_control import LiveIngestControlService
 from crypto_ai.services.outlet import OutletService
 from crypto_ai.services.outlet_group import OutletGroupService
 from crypto_ai.services.pad import PadService
+from crypto_ai.services.live_trade import LiveTradeService
+from crypto_ai.services.paper_sweep import PaperSweepService
+from crypto_ai.services.paper_trade import PaperTradeService
+from crypto_ai.services.paper_trade_analysis import PaperTradeAnalysisService
 from crypto_ai.services.predefined_pad import PredefinedPadService
 from crypto_ai.services.prediction import PredictionService
 from crypto_ai.services.prediction_adjustment import PredictionAdjustmentService
@@ -39,9 +43,10 @@ from crypto_ai.services.sales import SalesService
 from crypto_ai.services.sales_filter import SalesFilterService
 from crypto_ai.services.simulation_filter import SimulationFilterService
 from crypto_ai.services.simulation_strategy import SimulationStrategyService
+from crypto_ai.services.strategy_optimization import StrategyOptimizationService
+from crypto_ai.services.strategy_template import StrategyTemplateService
 from crypto_ai.services.task import TaskService
 from crypto_ai.services.user_customer import UserCustomerService
-from crypto_ai.services.live_ingest_control import LiveIngestControlService
 from crypto_ai.services.worker_management import WorkerManagementService
 
 
@@ -90,6 +95,11 @@ def get_coin_service(session: DbSession) -> CoinService:
     return CoinService(session)
 
 
+def get_coin_group_service(session: DbSession) -> CoinGroupService:
+    """Get coin group service."""
+    return CoinGroupService(session)
+
+
 def get_kline_service(session: DbSession) -> KlineService:
     """Get kline service."""
     return KlineService(session)
@@ -99,8 +109,26 @@ def get_strategy_template_service(session: DbSession) -> StrategyTemplateService
     return StrategyTemplateService(session)
 
 
+def get_strategy_optimization_service(
+    session: DbSession,
+) -> StrategyOptimizationService:
+    return StrategyOptimizationService(session)
+
+
 def get_paper_trade_service(session: DbSession) -> PaperTradeService:
     return PaperTradeService(session)
+
+
+def get_paper_trade_analysis_service(session: DbSession) -> PaperTradeAnalysisService:
+    return PaperTradeAnalysisService(session)
+
+
+def get_paper_sweep_service(session: DbSession) -> PaperSweepService:
+    return PaperSweepService(session)
+
+
+def get_live_trade_service(session: DbSession) -> LiveTradeService:
+    return LiveTradeService(session)
 
 
 def get_kline_strategy_service(session: DbSession) -> KlineStrategyService:
@@ -247,12 +275,21 @@ CustomerConfigurationServiceDep = Annotated[
 ]
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 CoinServiceDep = Annotated[CoinService, Depends(get_coin_service)]
+CoinGroupServiceDep = Annotated[CoinGroupService, Depends(get_coin_group_service)]
 KlineServiceDep = Annotated[KlineService, Depends(get_kline_service)]
 KlineStrategyServiceDep = Annotated[KlineStrategyService, Depends(get_kline_strategy_service)]
+StrategyOptimizationServiceDep = Annotated[
+    StrategyOptimizationService, Depends(get_strategy_optimization_service)
+]
 StrategyTemplateServiceDep = Annotated[
     StrategyTemplateService, Depends(get_strategy_template_service)
 ]
 PaperTradeServiceDep = Annotated[PaperTradeService, Depends(get_paper_trade_service)]
+PaperTradeAnalysisServiceDep = Annotated[
+    PaperTradeAnalysisService, Depends(get_paper_trade_analysis_service)
+]
+PaperSweepServiceDep = Annotated[PaperSweepService, Depends(get_paper_sweep_service)]
+LiveTradeServiceDep = Annotated[LiveTradeService, Depends(get_live_trade_service)]
 KlineSimulationRecordServiceDep = Annotated[
     KlineSimulationRecordService, Depends(get_kline_simulation_record_service)
 ]

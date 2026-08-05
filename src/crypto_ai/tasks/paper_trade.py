@@ -33,3 +33,20 @@ async def _step_all() -> dict:
     async with task_session() as session:
         stepped = await PaperTradeEngine(session).step_all()
     return {"stepped": stepped}
+
+
+@celery_app.task(
+    name="crypto_ai.tasks.paper_trade.rotate_paper_sweeps",
+    time_limit=300,
+    soft_time_limit=270,
+)
+def rotate_paper_sweeps() -> dict:
+    """Hourly sweep rotation: stop runs past their dwell, start the next combos."""
+    return asyncio.run(_rotate_sweeps())
+
+
+async def _rotate_sweeps() -> dict:
+    from crypto_ai.services.paper_sweep import PaperSweepService
+
+    async with task_session() as session:
+        return await PaperSweepService(session).rotate()

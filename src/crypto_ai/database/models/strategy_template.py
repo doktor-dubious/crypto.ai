@@ -32,6 +32,13 @@ class StrategyTemplate(Base):
     # Trade can restore the full setup (strategy + coin + pair + timeframe) from a
     # template. Nullable: older templates / analytics-only saves may have none.
     scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # An ABSTRACT strategy is params only — no coin / pair / timeframe of its own
+    # (``scope`` is null); the scope is picked when a paper run is started, so one
+    # abstract strategy can be pointed at any market. A concrete strategy is
+    # pinned to the scope above and cannot diverge from it.
+    is_abstract: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), index=True
+    )
     # Short one-line description shown in the template modal (distinct from notes).
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

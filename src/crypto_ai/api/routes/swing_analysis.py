@@ -52,6 +52,16 @@ async def swing_analysis(
     tp_mode: Annotated[str, Query()] = "none",
     tp_value: Annotated[float, Query(ge=0.05, le=100.0)] = 3.0,
     weights: Annotated[str | None, Query()] = None,
+    htf_gate: Annotated[str, Query()] = "off",
+    htf_tf: Annotated[str, Query()] = "4h",
+    htf_level: Annotated[float, Query(ge=0.0, le=3.0)] = 0.5,
+    buckets: Annotated[
+        bool,
+        Query(description="Also bucket the resulting trades by hour/weekday/side"),
+    ] = False,
+    tz_offset_minutes: Annotated[
+        int, Query(ge=-840, le=840, description="Shift the time-of-day buckets")
+    ] = 0,
 ) -> SwingAnalysisResponse:
     """Signal-composite swing backtest over an explicit kline scope."""
     if side not in ("long", "short", "both"):
@@ -70,6 +80,8 @@ async def swing_analysis(
         signals=enabled, sl_mode=sl_mode, sl_value=sl_value,
         tp_mode=tp_mode, tp_value=tp_value,
         weights=_parse_weights(weights) or None,
+        htf_gate=htf_gate, htf_tf=htf_tf, htf_level=htf_level,
+        buckets=buckets, tz_offset_minutes=tz_offset_minutes,
     )
     if result is None or result.get("error"):
         raise HTTPException(status_code=400, detail=(result or {}).get("error", "Analysis failed"))
@@ -86,6 +98,9 @@ async def swing_optimize(
     end_date: Annotated[date, Query()],
     fee_bps: Annotated[float, Query(ge=0.0, le=100.0)] = 4.0,
     confirm_sim_id: Annotated[str | None, Query()] = None,
+    htf_gate: Annotated[str, Query()] = "off",
+    htf_tf: Annotated[str, Query()] = "4h",
+    htf_level: Annotated[float, Query(ge=0.0, le=3.0)] = 0.5,
 ) -> SwingOptimizeResponse:
     """Bounded knob sweep over an explicit scope; tuned on the first half,
     judged on the untouched second half."""
@@ -97,6 +112,7 @@ async def swing_optimize(
     }
     result = await SwingAnalysisService(session).optimize(
         scope, confirm_sim_id=confirm_sim_id, fee_bps=fee_bps,
+        htf_gate=htf_gate, htf_tf=htf_tf, htf_level=htf_level,
     )
     if result is None or result.get("error"):
         detail = (result or {}).get("error", "Optimization failed")

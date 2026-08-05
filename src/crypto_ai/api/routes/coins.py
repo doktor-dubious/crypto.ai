@@ -3,12 +3,56 @@
 import uuid
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from crypto_ai.api.deps import CoinServiceDep, DbSession, TaskServiceDep
 from crypto_ai.schemas.coin import CoinCreate, CoinResponse, CoinUpdate
+from crypto_ai.services.market_availability import MarketAvailabilityService
 
 router = APIRouter()
+
+
+@router.post("/refresh-markets")
+async def refresh_markets(
+    session: DbSession,
+    coin_service: CoinServiceDep,
+    coin_ids: Annotated[
+        list[str] | None, Query(description="Coin UUIDs; all active coins if omitted")
+    ] = None,
+) -> dict:
+    """Refresh Binance spot / futures availability flags for the given coins.
+
+    Fetches the Binance spot markets and the CoinGecko binance_futures perpetual
+    listing once, then flags each coin. Runs inline (two HTTP calls total, no
+    per-coin work) so no background task is needed.
+    """
+    coins = await coin_service.get_all(limit=100000)
+    if coin_ids:
+        wanted = set(coin_ids)
+        coins = [c for c in coins if c.id in wanted]
+    if not coins:
+        return {"count": 0, "spot": 0, "futures": 0, "message": "No coins to refresh"}
+
+    async with httpx.AsyncClient() as client:
+        sets = await MarketAvailabilityService().fetch(client)
+
+    spot_n = fut_n = 0
+    for coin in coins:
+        has_spot = sets.spot_flag(coin.symbol)
+        has_futures = sets.futures_flag(coin.symbol)
+        await coin_service.set_markets(coin.id, has_spot, has_futures)
+        spot_n += 1 if has_spot else 0
+        fut_n += 1 if has_futures else 0
+    await session.commit()
+
+    return {
+        "count": len(coins),
+        "spot": spot_n,
+        "futures": fut_n,
+        "spot_source": sets.spot is not None,
+        "futures_source": sets.futures is not None,
+    }
 
 
 @router.post("/refresh-categories")

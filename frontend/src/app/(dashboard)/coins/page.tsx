@@ -8,8 +8,13 @@ import type { DateRange } from "react-day-picker"
 import {
   Search, Star, Trash2, Focus, ArrowUpDown,
   ChevronDown, ChevronUp, CalendarIcon, RefreshCw, Tags,
+  Info, Check, X, Minus, Heart,
 } from "lucide-react"
+import { Heart as AnimatedHeart } from "@/components/animate-ui/icons/heart"
 import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
@@ -37,13 +42,13 @@ import {
 } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { coinsApi, klinesApi, binanceImportApi, type CoinResponse, type CoinUpdate, type PredictionEngine } from "@/lib/api"
+import { coinsApi, coinGroupsApi, klinesApi, binanceImportApi, type CoinResponse, type CoinUpdate, type PredictionEngine } from "@/lib/api"
 import { KlineChart } from "@/components/coins/kline-chart"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const ITEMS_PER_PAGE = 10
-type SortField = "symbol" | "name" | "tradingPairs" | "volume" | "type" | "lastUpdated" | "starred"
+type SortField = "symbol" | "name" | "tradingPairs" | "volume" | "type" | "lastUpdated" | "favorite" | "starred"
 
 // Compact USD-ish formatter for traded-volume figures (e.g. $1.2B, $345M, $12K).
 const compactUsd = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
@@ -67,6 +72,44 @@ function FieldRow({ label, children }: { label: string; children: ReactNode }) {
     <div className="flex flex-col gap-1.5">
       <label className="text-xs font-medium text-muted-foreground">{label}</label>
       {children}
+    </div>
+  )
+}
+
+function SpecInfoIcon({ text }: { text: ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help shrink-0" />
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">{text}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+// One fee-model row on the Specs tab: a status glyph (available / not listed /
+// unknown), the fee-model name, and its round-trip cost. `available` is the
+// coin's flag for the market this fee model needs (null = not yet checked).
+function MarketRow({
+  available, name, fee, unavailableLabel,
+}: { available: boolean | null; name: string; fee: string; unavailableLabel: string }) {
+  const known = available !== null
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2.5">
+      {available ? (
+        <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+      ) : known ? (
+        <X className="h-4 w-4 text-red-500 shrink-0" />
+      ) : (
+        <Minus className="h-4 w-4 text-muted-foreground shrink-0" />
+      )}
+      <div className="flex flex-col min-w-0">
+        <span className={cn("text-sm", !available && "text-muted-foreground")}>{name}</span>
+        {!available && <span className="text-[11px] text-muted-foreground">{unavailableLabel}</span>}
+      </div>
+      <Badge variant="secondary" className="ml-auto shrink-0 tabular-nums font-mono text-[11px]">{fee}</Badge>
     </div>
   )
 }
@@ -321,6 +364,43 @@ export default function CoinsPage() {
     onError: () => { toast.error(t("categoriesError")) },
   })
 
+  const refreshMarketsMutation = useMutation({
+    mutationFn: (coinIds?: string[]) => coinsApi.refreshMarkets(coinIds),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["coins"] })
+      toast.success(t("marketsRefreshed", { count: res.count, spot: res.spot, futures: res.futures }))
+    },
+    onError: () => { toast.error(t("marketsError")) },
+  })
+
+  // ── Favorites (server-side coin group) ─────────────────────────────────────
+  const { data: favGroup } = useQuery({
+    queryKey: ["coinGroups", "favorites"],
+    queryFn: () => coinGroupsApi.favorites(),
+  })
+  const favoriteIds = useMemo(() => new Set(favGroup?.member_coin_ids ?? []), [favGroup])
+
+  const addFavoritesMutation = useMutation({
+    mutationFn: (ids: string[]) => coinGroupsApi.addFavorites(ids),
+    onSuccess: (g) => queryClient.setQueryData(["coinGroups", "favorites"], g),
+    onError: () => { toast.error(t("favoriteError")) },
+  })
+  const removeFavoritesMutation = useMutation({
+    mutationFn: (ids: string[]) => coinGroupsApi.removeFavorites(ids),
+    onSuccess: (g) => queryClient.setQueryData(["coinGroups", "favorites"], g),
+    onError: () => { toast.error(t("favoriteError")) },
+  })
+  const toggleFavorite = (id: string) =>
+    (favoriteIds.has(id) ? removeFavoritesMutation : addFavoritesMutation).mutate([id])
+  // Toggle all selected: if every selected coin is already a favorite, remove
+  // them all; otherwise add the missing ones.
+  const toggleFavoriteSelected = () => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (ids.every((i) => favoriteIds.has(i))) removeFavoritesMutation.mutate(ids)
+    else addFavoritesMutation.mutate(ids)
+  }
+
   const klinesDeleteMutation = useMutation({
     mutationFn: () => klinesApi.deleteAll(selectedCoin!.id, selectedQuoteAsset!, selectedTimeframe!),
     onSuccess: async (result) => {
@@ -416,12 +496,13 @@ export default function CoinsPage() {
           va = lastUpdated[a.id] ? Date.parse(lastUpdated[a.id]) : 0
           vb = lastUpdated[b.id] ? Date.parse(lastUpdated[b.id]) : 0
           break
+        case "favorite": va = favoriteIds.has(a.id) ? 1 : 0; vb = favoriteIds.has(b.id) ? 1 : 0; break
         case "starred": va = starredIds.has(a.id) ? 1 : 0; vb = starredIds.has(b.id) ? 1 : 0; break
       }
       const cmp = va < vb ? -1 : va > vb ? 1 : 0
       return sortDir === "asc" ? cmp : -cmp
     })
-  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds, pairCounts, lastUpdated, avgVolume, categoryFilter])
+  }, [coins, search, sortField, sortDir, showOnlySelected, selectedIds, starredIds, favoriteIds, pairCounts, lastUpdated, avgVolume, categoryFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
   const safePage = Math.min(currentPage, totalPages)
@@ -431,7 +512,7 @@ export default function CoinsPage() {
 
   // Quantity/time columns read best biggest/newest-first, so they default to
   // descending on first click; text columns default to ascending (A→Z).
-  const DESC_FIRST_FIELDS = new Set<SortField>(["tradingPairs", "volume", "lastUpdated", "starred"])
+  const DESC_FIRST_FIELDS = new Set<SortField>(["tradingPairs", "volume", "lastUpdated", "favorite", "starred"])
 
   function handleSort(field: SortField) {
     if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -654,6 +735,19 @@ export default function CoinsPage() {
                   <TableHead><SortHeader field="lastUpdated" label={t("colLastUpdated")} /></TableHead>
                   <TableHead className="w-10 text-center">
                     <button
+                      onClick={() => handleSort("favorite")}
+                      className="flex items-center gap-1 font-medium hover:text-foreground transition-colors"
+                      title={t("colFavorites")}
+                      aria-label={t("colFavorites")}
+                    >
+                      <Heart className={cn("h-4 w-4", sortField === "favorite" ? "" : "opacity-40")} />
+                      {sortField === "favorite" && (
+                        sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="w-10 text-center">
+                    <button
                       onClick={() => handleSort("starred")}
                       className="flex items-center gap-1 font-medium hover:text-foreground transition-colors"
                     >
@@ -726,6 +820,22 @@ export default function CoinsPage() {
                       {lastUpdated[coin.id]
                         ? format(new Date(lastUpdated[coin.id]), "yyyy-MM-dd HH:mm")
                         : "—"}
+                    </TableCell>
+                    <TableCell className="text-center w-10" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => toggleFavorite(coin.id)}
+                        className="hover:text-red-500 transition-colors"
+                        aria-label={t("toggleFavorite")}
+                      >
+                        <Heart
+                          className={cn(
+                            "h-4 w-4",
+                            favoriteIds.has(coin.id)
+                              ? "fill-red-500 text-red-500"
+                              : "text-muted-foreground"
+                          )}
+                        />
+                      </button>
                     </TableCell>
                     <TableCell className="text-center w-10" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -815,6 +925,31 @@ export default function CoinsPage() {
                   <RefreshCw className={cn("h-4 w-4 mr-1.5", refreshSelectedMutation.isPending && "animate-spin")} />
                   {t("refreshDataButton")}
                 </Button>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 cursor-pointer"
+                        disabled={addFavoritesMutation.isPending || removeFavoritesMutation.isPending}
+                        onClick={toggleFavoriteSelected}
+                        aria-label={t("favoriteSelected")}
+                      >
+                        <AnimatedHeart
+                          size={16}
+                          animateOnHover
+                          className={cn(
+                            [...selectedIds].length > 0 && [...selectedIds].every((i) => favoriteIds.has(i))
+                              ? "fill-red-500 text-red-500"
+                              : "",
+                          )}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("favoriteSelected")}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -854,6 +989,7 @@ export default function CoinsPage() {
               <div className="relative w-full">
                 <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="details">{t("tabDetails")}</TabsTrigger>
+                  <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="specs">{t("tabSpecs")}</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="data">Data</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="chart">Chart</TabsTrigger>
                   <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="analyze">Analyze</TabsTrigger>
@@ -921,6 +1057,10 @@ export default function CoinsPage() {
                     className="space-y-6 w-full min-h-30 px-4 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:border-transparent"
                   />
                 </FieldRow>
+              </TabsContent>
+
+              {/* ─ Specs ─ */}
+              <TabsContent value="specs" className="space-y-6 max-w-2xl mt-6 pl-[2px]">
                 <FieldRow label={t("fieldType")}>
                   <Input
                     value={draft.type ?? ""}
@@ -928,6 +1068,43 @@ export default function CoinsPage() {
                     className="px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-neutral-600 focus:border-transparent"
                   />
                 </FieldRow>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">{t("marketsLabel")}</label>
+                    <SpecInfoIcon text={t("marketsInfo")} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto h-7 px-2 text-xs"
+                      disabled={refreshMarketsMutation.isPending}
+                      onClick={() => refreshMarketsMutation.mutate([selectedCoin.id])}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", refreshMarketsMutation.isPending && "animate-spin")} />
+                      {t("marketsRefresh")}
+                    </Button>
+                  </div>
+                  <div className="rounded-md border divide-y">
+                    <MarketRow
+                      available={selectedCoin.has_spot}
+                      name={t("spotTaker")}
+                      fee="20 bps RT"
+                      unavailableLabel={t("marketNotListed")}
+                    />
+                    <MarketRow
+                      available={selectedCoin.has_futures}
+                      name={t("futuresMaker")}
+                      fee="4 bps RT"
+                      unavailableLabel={t("marketNotListed")}
+                    />
+                    <MarketRow
+                      available={selectedCoin.has_futures}
+                      name={t("futuresTaker")}
+                      fee="10 bps RT"
+                      unavailableLabel={t("marketNotListed")}
+                    />
+                  </div>
+                </div>
               </TabsContent>
 
               {/* ─ Data Tab ─ */}

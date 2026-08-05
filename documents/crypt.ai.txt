@@ -1,71 +1,912 @@
 hest@hest.com / ChangeMe123!
 ----------------------------------------------------------------------------------------------------
 
-── Wednesday 8 July
-* Data
-  1) Added 10 random coins (+data, categories)
-    NOM
-    OPN
-    1000CHEEMS
-    BANK
-    HEMI
-    FOGO
-    DOLO
-    BNSOL
-    TURTLE
-    ZRO
-  2) Added 10 random coins (+data, categories)
-    MET
-    ROSE
-    REQ
-    ALPINE
-    HOME
-    CATI
-    PROVE
-    NBISB
-    CHZ
-    SPYB
-  3) Added 10 random coins (+data, categories)
-    BOME
-    KMNO
-    INTCB
-    RIF
-    ID
-    BFUSD
-    BTTC
-    U
-    KERNEL
-    JTO
-  4) Added 10 random coins (+data, categories)
-    PARTI
-    ONG
-    GNS
-    TUT
-    LA
-    ARPA
-    RLUSD
-    POLYX
-    NIGHT
-    STX
-  5) Added 10 random coins (+data, categories)
-* PAGE trading/paper:
-  1) Profit/Loss displayed as amount + percentage.
-  2) When starting a trade => popup, added: trading amount.
-  3) Added pagination to trading history.
+1) Can you add two columns to the master table: 
+"Trades" - should just show the number of trades done with this strategy. And in paranthesis the P/L results from those trades in %
 
+2) The trades tab on the detail pane. For each trade it should show where the trade was done, Paper Trade, Test Net, Live
+The table should have three checkboxes (put them to the left of the search/filter input): 1) Paper, 2) Test, 3) Live
+To include each of the trade sources in the table.
+
+
+1) On the master table: only show the kind column, if there is at least a single row that is abstract.
+2
+
+
+The drop down checkbox menu on the master tabel is being cut off at the bottom. See attached image
+
+
+The strategy (ID: 46301e2e-ee45-4a8d-bc3c-2350e3df11e8), in the master table the coin for this trade is listed as BTC, same as on the detail pane, tab data.
+But the actual trades are for the coin: BANANA
+- I think BANANA is correct.
+
+ge g. trading/strategies/scalping/streak-reversion/analytics)
+and set the basics (coin, trading pair. etc.) as well as the parameters to the values from the strategy.
+
+Whites in general do seem to favour a more rugged individuality than brown minority groups. Blacks probably know they need Whites for support, and would like more if it, systematized 
+
+
+
+Page trading/strategies:
+When I select a row in the master table, and then go to another page, and come back to the page, then the detail pane retains the selected strategy, but the master table does not.
+
+
+
+When I open Strategy ID e8d7cc4a-9cd2-4019-a3d4-9115c50ef9cb on Trading Strategy List (trading/strategies), it shows 313 trades since 2026.07.09, but when I Open it in Analytics, the Results tab show "Too many trades (1000) to draw individual markers — narrow the date range or tighten the entry to see them." for 2026.07.06 - 2026.08.05
+
+Why the difference?
+
+
+Page trading/strategies:
+1) On the master table, can you set three spots, with different color, dependig on where the strategy is running:
+Paper Trade
+Testnet
+Live
+
+2) Include the three checkboxes (Paper, Test Net, Live), which are on the trade tab on the detail pane, and put them on the master table (to the left of the filter/search input). Such that the trades column should only show data for those selected.
+
+On page trading/strategies, when a strategy is selected, there is a trade table under the trades tab.
+Can you make a simular table on the strategy analytics pages (e.g. trading/strategies/scalping/sweep/analytics)
+Put it under the two graphs.
+But only include the first around 25 trades, otherwise it'll take too long to load.
+
+Can you add pagination, sortale columns, checkbox column to the left, star column to the right, search/filter input, checkbox column drop down menu, etc. all the same as the other table
+
+
+The paper trade only lists 11 trades from July 7 to July 9. Whereas the Analytics results lists 20 trades.
+
+---
+
+I'd like to add some Sweep functionality to the Strategy Analytics pages (e.g. trading/strategies/scalping/streak-reversion/analytics)
+
+The sweep should be able to analyse a number of variations of a strategy, with variations on coins, timeframes, as well as on all the parameters.
+
+This is a big implementation, can we start by only implementing for Streak Reversion (trading/strategies/scalping/streak-reversion/analytics)
+
+1) Add tab to the right of Analytics: Sweep
+
+* It should have a tabel of all existing sweeps (same design/functional as always (sortable columns, search/filter input field, paginations, checkbox column, star column, etc. - see e.g. the table on results of the same page)
+
+A sweep should have a name, description, notes, and a number of parameter settings.
+
+* Clicking on a sweep in the table, should show each sweep variation in a table in the detail pane (same design/functionality as befre), and the sweep's results: number of trades, P/L, etc. Clicking on a row in this table should display a popup, with the sweeps variation settings (e.g., if the sweep was over a variaton of coins, show the coin; if the sweep was over e.g. coins + Volume Divergence => show coin + Volume Divergence) and a button to implement. Clicking on implement, applys the sweeps basics (coin, timeframe) + parameters to the strategy.
+
+There should be a button to create a new sweep. It should create a popup dialog (not sure if this becomes too big, and will have to handlede on a dedicated page) where the sweep name + description + variations can be specicied:
+
+* Coin
+Variations:
+- Single Coin
+- Single Coin Group
+- Coins with the highest liquidity - select number
+- Random coin(s) - select number
+- All coins
+
+* Timeframe:
+Variations:
+- 5m
+- 15m
+- 30m
+- 1h
+- 4h
+- 1d
+- 1w
+- 1m
+
+> Checkboxes, select one or more.
+
+Volume Divergence:
+Variations:
+- Not Required
+- Required
+
+> Checkboxes, select one or more
+
+BTC-beta filter
+- Off
+- Only Idiosyncratic runes
+- Only BTC-driven runs
+
+> Checkboxes, select one or more
+
+Vol Regime:
+- Off
+- Calm Only
+- Expanding Only
+
+> Checkboxes, select one or more
+
+Higher Timeframe
+- Off
+- Align with trend
+- Only when flat
+- Counter Trend (control)
+
+> Checkboxes, select one or more
+
+Streak Length
+2-8
+
+> Checkboxes, select one or more
+
+Hold Bars (max)
+1-12
+
+> Checkboxes, select none, one or more
+
+Side
+Long
+Short
+
+> Checkboxes, select one or more
+
+Stop Loss
+None
+Fixed % - Stop Distance % <1,2,3,4,5,6,7,8,9,10 - checkboxes select one or more (is this a sensible selection?)>
+ATR x - ATR multiplier <1.5,2,2.5,3,3.5 - checkboxes select one or more (is this a sensible selection?)>
+Swing Structure
+Trailing ATR x - ATR multiplier <1.5,2,2.5,3,3.5 - checkboxes select one or more (is this a sensible selection?)>
+
+> Checkboxes, select one or more
+
+Take Profit
+None (hold max only)
+Fixed % - target distance <1,2,3,4,5,6,7,8,9,10 - checkboxes select one or more (is this a sensible selection?)>
+Resistance (prior extreme)
+Mean Touch (SMA20)
+Opposite signal
+
+> Checkboxes, select one or more
+
+---
+
+"Searching 151 combos produces a best |t| of about 3.2 from chance alone — treat anything below that as noise."
+
+What is t, and how is 3.2 determined? Sorting the combos of the latest optimization, the max t is 2.99
+
+
+So t is a measure the variability of profit & loss. If one optimization variation has one trade that gives 10 and another trade gives 1; vers another optimization variations where one trade gives 2 and another 1, then the second gets the highest t?
+
+
+Coin                EPICUSDT
+Timeframe           4h
+Streak length       3
+Hold max            6 bars
+Side                long
+Volume divergence   Required
+BTC-beta filter     Off
+Vol Vol-regime      calm (1)
+Higher timeframe    align 4h (0.5σ)
+Stop loss           atr (2)
+Take profit         resistance
+Fees                4 bps
+
+-------
+
+Coin                EPICUSDT
+Timeframe           4h
+Streak length       5
+Hold max            9 bars
+Side                long
+Volume divergence   Not required
+BTC-beta filter     Off
+Vol regime          Off
+Higher timeframe    Off
+Stop loss           None
+Take profit         None
+Fees                4 bps
+
+
+Coin                EPICUSDT
+Timeframe           4h
+Streak length       5
+Hold max            9 bars
+Side                long
+Volume divergence   Not required
+BTC-beta filter     Off
+Vol regime          Off
+Higher timeframe    flat 4h (0.5σ)
+Stop loss           atr (2)
+Take profit         None
+Fees                4 bps
+
+
+Coin
+EPICUSDT
+Timeframe
+4h
+Volume spike (σ)
+0
+Hold max
+12 bars
+Side
+both
+Channel window (bars)
+144
+Vol regime
+Off
+Higher timeframe
+Off
+Stop loss
+None
+Take profit
+None
+Fees
+4 bps
+
+
+Can you implement the optimization on the strategy Range (trading/strategies/scalping/range/analytics)
+
+Can you implement the optimization on the strategy Range (trading/strategies/scalping/range/analytics)
+Can you implement the optimization on the strategy Indicator (trading/strategies/scalping/indicator/analytics)
+Can you implement the optimization on the strategy Sweep (trading/strategies/scalping/sweep/analytics)
+Can you implement the optimization on the strategy Taker Flow (trading/strategies/scalping/taker-flow/analytics)
+Can you implement the optimization on the strategy Trend Swing (trading/strategies/trend-swings/analytics)
+
+
+I created two coin groups:
+High Liquidity 50 c73b9049-b073-408f-af6f-87dfd1ae3416
+High Liquidity 100 f5ee5671-3903-4ff5-8bda-6b2d1ccf13e1
+
+Can you insert the coins with the 50 highest liquidity into the first, and 100 top liquidity coins in the other.
+
+It says: "Ranked on the FIRST half (what the search was allowed to see); the second half beside it is the honest read."
+
+If the second half is the more honese read, isn't this what should be sorted for. 
+
+
+Rune Skardhamar
+8/4/2026, 9:28 PM
+Men rigtigt, at hvis har en SL så den afslutter en trade ved den først forkerte kline. Så vil man måske fjerne en del af tab
+
+Coin EPICUSDT
+Timeframe 4h
+Volume spike (σ) 0
+Hold max 12 bars
+Side both
+Channel window (bars) 144
+Vol regime Off
+Higher timeframe Off
+Stop loss trail_atr (2.5)
+Take profit None
+Fees 4 bps
+
+
+HERE TO:
+1) Remove max on num of combinations (now max 9999)
+2) Do not close popup when click outside popup
+3) Select All
+
+
+Uden at vide det, tror jeg mere på en bedre confirmation af udmattelse af en retning. Selv om vi taber lidt af profit på de gode trades ved at komme lidt senere ind i trade
+
+
+ Searching 5 combos produces a best |t| of about 1.8 from chance alone — treat anything below that as noise.
+
+When having started an optimization, the date range should be remembered, and when running a new optimization set to the same.
+
+The coin selector in the new optimization popup should be radio boxes, instead of checkboxes.
+
+
+It takes quite a while, minutes, for when an optimization run is finished, to when the rows are displayed in the detail pane.
+
+1) On the variation table, can you display the baseline with a background colour, so it is easy to spot.
+2) On the variation popup (when clicking on a row in the variation table), can you give the parameters that are being varied on, a background color so they're easy to spot.
+
+
+* All should default to what is currently enteret into the strategy basics/parameters.
+* There should be a date range, where it can be set which dates should be sweep'ed for.
+* There should be a counter to tally the combinations in the sweep
+* A button to execute sweep
+If there are more than say 100 combinations, first show a popup warning confirmation
+If there are more than say 250 combinations, first show a popup danger confirmation
+
+--
+
+If possible for running sweeps in the master table. Show progress, and ETA.
+
+--
+
+Is is clear? Am I missing something or anything you'd like to add?
+
+
+
+
+
+
+
+
+
+
+
+
+Page trading/strategies:
+When clicking on the button "Open in Analytics", can you set the default date range on the Strategy Analytics page, Results tab, to the date range of the trades having been made with this strategy. If no trades just set as default the last 21 days.
+
+
+Can you remove all strategies, except for
+
+A) Remove all strategies, except for
+1) The top 15 Paper Trade Sweeps:
+73b014ba-de9c-4340-a5cc-1b105d3e16c5 - SW-07 Streak 1h
+d1067864-1ffe-463a-b8fe-458a928270db - SW-15 Momentum breakout
+etc.
+
+2) 46301e2e-ee45-4a8d-bc3c-2350e3df11e8 - Streak (BANANA)
+
+3) 
+74d6000c-2c88-4397-b115-1f198109b686 CFX CFX Streak Reversion long
+d87d8e3c-8f0d-4353-ab91-9d7438bb6d26 - FF FF Streak Reversion 
+e8d7cc4a-9cd2-4019-a3d4-9115c50ef9cb - OPEN OPEN Streak Reversion 
+ce61467a-6404-4ac8-8c8a-a3840db66abd - GIGGLE GIGGLE Streak Reversion 
+
+B) Stop all trading on Testnet 
+C) Stop all trading on paper, except for 46301e2e-ee45-4a8d-bc3c-2350e3df11e8 - Streak (BANANA)
+
+
+
+
+73b014ba-de9c-4340-a5cc-1b105d3e16c5 - SW-07 Streak 1h // Streak Reversion :: BANK - 6 trades, +24.59%
+d1067864-1ffe-463a-b8fe-458a928270db - SW-15 Momentum breakout BANK Momentum Scalping 2 Trades
+26405573-18cb-4f43-a5d7-878af8bfcc6e - SW-B01 Banana streak reversion // Streak Reversion :: MIRA - 13 trades, +4.99%
+30f95c23-9d3d-4b8b-95e9-8704e0d9b3e7 - SW-06 Streak 5m voldiv
+26405573-18cb-4f43-a5d7-878af8bfcc6e - SW-B01 Banana streak reversion (NO COIN)
+
+
+
+
+SW-B01 Banana streak reversion  YFI 5m  2.1 19  +2.38% 
+SW-07 Streak 1h ETH Streak Reversion 4 Trades
+SW-07 Streak 1h BTC Streak Reversion 4 Trades
+SW-B01 Banana streak reversion PEPE Streak Reversion 4 Trades
+SW-07 Streak 1h SOL Streak Reversion 3 Trades
+
+SW-B01 Banana streak reversion // Streak Reversion :: FLOKI - 34 trades, +1.05
+SW-B01 Banana streak reversion :: ASTR - 30 trades, +1.05
+SW-05 Streak deep ETH Streak Reversion 6 Trades
+SW-06 Streak 5m voldiv BANK Streak Reversion 27 Trades
+Streak BANANA Streak Reversion 569 Trades
+
+---
+
+CFX CFX Streak Reversion long 127 Trades · 1 open +6.84
+FF FF Streak Reversion 124 Trades +6.08
+OPEN OPEN Streak Reversion 104 Trades +6.81
+GIGGLE GIGGLE Streak Reversion 115 Trades +16.86
+
+
+
+
+SW-15 Momentum breakout
+7 trades: 2.24%
+
+
+OOEN 
+ID: e8d7cc4a-9cd2-4019-a3d4-9115c50ef9cb
+
+
+
+
+Here is another indigenous European high fertility group:
+
+* Anastasians (alt. the Ringing Cedars)
+
+Geography/Size: Mainly Russia, but with offshots in other post-Soviet countries, Europe and N America / size: 12K-50K (uncertain and old numbers)
+TFR : above national average
+
+Anastasians, also called Ringing Cedars, is a newer spiritual/social group that urges it followers to leave cities for small rural family homesteads (родовое поместье), living in better ecological and spiritual harmony with nature, and living more according to traditional Russian/Slavic culture (the US offshot is focusing less on the Slavic racial aspect). Their religion/community is explicidly centered around the family and as an inter-generational continuity.
+
+The German government seems to be suspicious of them. Apparently they're under investigation by the Federal Office for the Protection of the Constitution (BfV). So they must be doing something right.
+
+
+
+
+
+The concept is that each family should have its own substantial plot of land of typically around one hectare, on which it can build a home, plant trees, grow food and create a permanent environment for its descendants. Families then form settlements together, creating communities made up of dozens or hundreds of individual homesteads.
+
+The idea is explicitly generational.
+
+
+
+
+It was originally based on a book series (Ringing Cedars of Russia) from the 1990s by author Vladimir Megre, where he descibes his encounter with a Siberian woman named Anastasia.
+
+
+
+Its origins go back to Russian businessman Vladimir Megre, who published the first book in his Ringing Cedars of Russia series in 1996. The books describe Megre's encounters with a mysterious Siberian woman named Anastasia, who presents a vision of humanity living in harmony with nature and developing a more spiritually conscious society.
+
+
+worship 
+
+Mainly 
+
+
+What began in the 1990s with a series of books has developed into a movement of family homesteads, rural settlements and communities across Russia and beyond. And in 2026, the idea at the heart of the movement the ancestral or family homestead (родовое поместье) is increasingly being discussed in Russia in the context of the country's future economic, social and demographic development.
+
+
+In 2015, researcher Anna Ozhiganova reported that in Russia there were 2,264 people in 981 families who already owned an ancestral homestead, while a further 8,725 people in 4,725 families were at different stages of establishing their own.
+
+Researcher Artemy Pozanenko subsequently estimated approximately 12,000 people involved in Anastasian settlements by 2016, while noting that this figure was probably an underestimate because the movement's registers were incomplete and some participants deliberately avoided registration. One participant in the movement gave a much higher estimate of around 50,000 people, although that figure has not been independently verified.
+
+
+
+
+
+* Russian Old Believers.
+
+Geography/Size: Russia, approx. 1M (excluding approx. 1M in the dispora outside Russia, mainly N/S America)
+TFR : 3+
+
+They live both in the cities (Moscow), but many also live in tiny extremely isolated Siberian communities, and may reject government support, passport and registration entirely, so exact number are hard to come by. Their community ideal family planning is to have no planning, and accept children "as God sends" - no contraception, rejecting all abortions as a sin. Articles describing the Old Believers tend to mention large families (18, 15, 13, 12), but it appears their family sizes are still smaller than other religious groups (e.g. Laestadians), so some limitation seems to be applied regardless. But as mentioned, exact data is not available.
+
+Noteable, they're one of a very few groups than have managed to combine living in cities with maintaining high fertility rates. They're also repopulating otherwise abandoned rural towns.
+
+More here:
+https://x.com/InfoAtJames/status/2074801999909138930
+https://x.com/InfoAtJames/status/2075382363388031381
+https://religion.ranepa.ru/jour/article/view/160/159
+
+
+
+https://x.com/InfoAtJames/status/2081673741831188675
+
+
+
+
+
+On the strategy analytics pages (e.g. trading/strategies/scalping/streak-reversion/analytics) the date range input, should be moved from the Parameters tab, to the Results tab.
+
+
+--
+
+A recent Russian in depth study has these conclusions:
+
+-No birth control or planning: Almost all informants said they do not use contraception and reject abortion as a grave sin. Children are accepted "as God sends" they fundamentally did not plan the number or timing. 
+
+-Family sizes in the sample: Multiple families with 4 children are mentioned as examples. Some respondents noted a community "standard" of around 4 children when observing others at services. One woman said she could imagine a limit around 6 but felt she "could have had even more." The ideal is openness to many children rather than a fixed target.
+
+-Participants were urban and educated. They combine tradition with contemporary life women may engage in paid work (e.g., handicrafts), fathers are actively involved in childcare, and couples describe more egalitarian decision-making. Economic  factors do matter for higher-order births, but they do not dominate as in mainstream Russian society.
+
+-Overall conclusions from the results: 
+These Old Believers largely follow the church's traditional reproductive prescriptions (low control, pro-natalist) even while living modern urban lives. This sets them apart from the broader Russian mainstream culture. 
+
+https://religion.ranepa.ru/jour/article/view/160/159
+More on X: https://x.com/InfoAtJames/status/2074801999909138930
+
+
+
+Key clarification: The study does not provide an average number of children across all respondents
+or an TFR calculation, but what this does show is that even OB's in the city, living a modern life have higher fertility than the general Russian population (definitely above 2.1 kids per woman).
+
+
+
+
+inside Russia. From Moscow, to tiny extremely isolated communities in Siberia-
+TFR > 3
+
+
+Several Russian sources place OB numbers (of all jurisdictions) at approx 2 million in 7 main Jurisdictions, covering city dwellers in Moscow all the way tiny extremely isolated communities in Siberia. 
+
+
+
+https://religion.ranepa.ru/jour/article/view/160/159
+
+
+1) The master table, when clicking on the start button. The popup should display target:
+Paper Trade (default)
+Binance Test Net
+Binance Live
+2) Ammend the tooltip to reflect this
+
+
+Page trading/strategies:
+1) The "Paper Trade" button on the master table, can you make it just an icon, and a hover text that says "Execute Strategy on Paper Trade"
+2) Some strategies on the name column, has a green dot (e.g. 22ddc2ed-d9a5-4b6a-9748-8f3d12f916c6). Does that mean they're currently running?
+
+Can you add to the checkbox drop-down menu:
+Select Running
+
+
+
+
+-----
+
+I think I've made a mistake by using the paper trade to try to seek out potential strategies/coins.
+
+It was what Strategy Analysis was for. Paper trade was just meant to make sure the strategy was correctly implemented before going live.
+
+Strategy Analysis -> Paper Trade -> Live (testnet) -> Live
+
+---
+
+I'd like to propose the following additions:
+
+1) Sidemenu: Trading -> Strategies -> List
+A) This should be a separate page, with all defined strategies. A table of the usual format (sortable columns, search/filter input field, paginations, checkbox column, star column, etc.) Almost, if not entirely, the exact same as the table + detail pain on the Strategies tab of the Paper Trade page (trading/paper), including the trading tab on the detail pane, and also the group by section top/left of the master table.
+
+B) Clicking on a strategy row, should display the details for the strategy.
+There should be a button on each table row, to start paper trading with this strategy. This should generate a popup querying for the amount that should be invested + the name of the trade run = default to the strategy name + date + a sequence number, so something like "Streak Reversion, Deep (2026.07.05 #2)".
+
+2) Sidemenu: Trading -> Strategies -> New 
+should have the current submenues: 
+Price Direction
+Trend Swings
+Scalping -> ...
+
+3) On each of the strategy pages (for instance trading/strategies/scalping/streak-reversion/analytics)
+There should be buttons: 
+Create Strategy
+Create Abstract Strategy
+
+4) They should take the current parameters for the strategy and apply them to a strategy
+
+5) An Abstract Strategy is not tied to a specific coin,trading pair,timeframe.
+Whereas a (normal) strategy is given those three and cannot diverge from them when on trading.
+
+6) When clicking on the Create Strategy / Create Abstract Strategy it should generate a popup dialog, where the
+Name
+Description
+Notes
+
+7) Much of these changes are already in the existing "Trading Strategy Template" handling. A popup which is activate by clicking on an icon in the top/right icon toolbar.
+
+8) The Strategy pages (e.g. trading/strategies/scalping/streak-reversion/analytics) should have four tabs:
+A) Basics
+Coin
+Trading Pair
+Timeframe
+
+B) Parameters
+Date Range + Parameters
+
+C) Results
+Summary (Full range, First half, Second half)
+Charts
+
+D) Analytics
+This tab should have the Analyse tab from trading/paper
+The time-of-day, weekday results
+
+9) On the Paper Trade page (trading/paper)
+Currently there are three tabs:
+Active
+Strategies
+Sweep
+
+We moved Strategies to Trading -> Strategies -> List, so this should be removed.
+
+The rest, you can keep for this interation.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+* Some coins seems to do better at certain periods of the day.
+1) Add a tab to the detail pane of page trading/paper: Analyze. Put it between Trades and Actions.
+A) It should have a button to start analysing the results.
+One thing I'd like to examine is if the strategy is better at certain periods than others.
+
+>> I'm sure there are other things that could be beneficial to analyse. Can you think of any?
+
++++
+
+
+
+* External variables
+Do you think it might be beneficial to include some external parameters in some of the strategies? Like for instance, US interest rate, NASDAQ, DOW JONES, certain stocks prices, currency spans between larger currencies (USD-YEN; USD-EUR, etc.), others? That hey may function as early indicators for coin movement.
+
+* Cross coin influence
+in the same vein, do you think some coins may function as leading indicator for the movement of other coins? Like BTC might be a leading indicator for ETH (or visa versa), or they might both be leading indicators for smaller coins? Is this a signal which might be beneficial for some strategies?
+
+* Snap-shot klines:
+On page trading/paper; detail pane; tab Trades:
+If a trade row is clicked, I'd like it to generate a analysis popup. This should display the klines leading up to/and following the buy, and the klines leading up to/and following the sell. If there is a large period between buy and sell, display this as a gap.
+
+If possible, mark the klines that determine the buy and the sales. Not sure this is possible for all strategies, but for instance if the strategy is a simple Streak Reversal strategy, which has a streak length parameter of 3 bars. Then mark those 3 bars, and under the 3rd bar, give an explanation of why the buy happens here. And if it has an exit strategy of a simple max bars=6, then mark those 6 bars - and under the 6th bar have a description that explains why the sale happenes here.
+
+
+I'd like to add a new potential control signal to the trading strategies. Those for which it is relevant, not sure if it is for them all.
+It should consider development in higher time frames. If for instance we're working with a strategy in 15m timeframe, and the strategy is looking at trends. Then have the ability to set as a requirement for a trade to happen that the trend should also be reflected in 1hr timeframe or 4hr timeframe. In order to look at the general overall picture, such that we may not short in an otherwise generally rising trend, or go long in a general decling trend.
+
+What do you say to this? Is it likely to be beneficial?
+
+When I click on a strategy on the Sweep tab, the strategy is correctly opened up on the strategy tab. But only on the detail pane, the correct strategy is not selected in the master table.
+
+SW-07 Streak 1h (ID: 73b014ba-de9c-4340-a5cc-1b105d3e16c5)
+On the Strategies tab, master table it shows "-" on the coin column
+On the trades tab, it shows 3 trades. 
+Since it is not given which coints those trades were for, can you add a column (between "side" and "Qty") that shows the coin.
+
+
+When I click on the row "SW-07 Streak 1h  BANK  1h" with 2 trades on the Sweep tab, I get taken to the strategies tab, but on "SW-07 Streak 1h" with 3 BTC trades
+
+Start menu : Trading -> Strategies -> Trend Swings:
+Remove the two submenus ("Paper Trade" & "Analytics") and move the Analytics submenu to Trend Swings. Such that Trend Swings has no submenus, and clicking on it takes you directly to the current analytics page.
+
+Do the same for all the scalping strategy menus.
+
+
+
+
+
+Page trading/paper, the analyze tab on the detal pane:
+1) Can you make the tables and charts have a max width, so they don't fill out all available width. Mainly the charts, which seem too wide now.
+
+2) Can you add functionality to see what the results would have been if the trades had been constrained to certain hours or 4 hours blocks, or certain weekdays and sides.
+
+
+
+--
+I need to try out a bunch of strategies on a bunch of coins. On live paper trading. Just in order to perhaps find the needle in the haystack, that may be profitable.
+
+Can you start a number of such strategies?
+
+For instance start by identifying 20 strategies with parameters you find most likely to lead to success, and then run them on all the coins. But perhaps with some maximum number of concurrent running strategies in order not to overload the server. I don't know what a maximum would be, perhaps 100?
+
+Once a coin + strategy has run for a period of time, e.g. 7 days, swap out with a new strategy+coin.
+
+How do you say. Is this something you can do? Any missing elements? Do start it just yet, just exploring possibilities at this time.
+
+
+
+
+At the same time I don't want to overburden the server they're running on by running too many simulations simultanously.
+--
+
+Under Sweep / Runs for template: SW-01 Streak classic, it says: 4(4 live)
+
+Is that 4 coin + timeframes for this template? 
+
+
+Yes, please implement and start that. Note, that the sweep should replace those already running. They were mostly for testing functionality, not strategies. But you can take some of them and continue with if they look promising.
+
+Implement the three missing elements:
+1. Start a template on a different coin.
+2. The rotation scheduler.
+3. leaderboard 
+
+Keep "AI confirmation" off
+restrict to the top ~50-100 most liquid coins
+
+When the cursor hovers over the run cell (4(4 live)), can you show a small tooltip/popup, displaying the coins involved.
+
+1) they'll be swapped out after seven days?
+2) If I click on the button "Rotate now", will this force them to be swapped out immediately?
+
+Like the delete warning popup on for instance page simulations/completed. See attached image.
+
+The trade (ID: e35d84f2-2d16-4797-aa98-d4046b128f4d) Coin: BANANA, strategy: Streak Reversion, has done surprisingly well over the last 26 days. It is still listed as running on the Paper Trade Active tab.
+1) Is it still running?
+2) It says it has "Uptime 26d 19h" - can you see if it has been consistently running all this time?
+3) What happens to the current sweep, if the server has downtime (crash). Will it automatically start when the server is restarted?
+
+
+The sweep mechanics for "Needle Sweep #1", is it stored in the application? I mean the templates, coins, timeframes, routation, advance. Or is something you have in memory?
+
+Can you add a new sweep: "Banana Sweep Reversion" - it should be the above mentioned trade (ID: e35d84f2-2d16-4797-aa98-d4046b128f4d, coin: BANANA, strategy: Streak Reversion), duplicated on other coins. Select 50 coins totally at random, not sorted by liqudity (allthough they should be tradeable crypto coins, not stable coins).
+
+Page trading/paper:
+1) On the tab Sweep, the tables "Template standings (pooled across coins)" - can you add pagination, search, column sorting (and all the rest), similar to for instance the table Strategies on the Strategies tab.
+2) The two tables: Best runs, worst runs. Can you add column sorting.
+3) When hovering over a Runs cell in the table "Template standings (pooled across coins)", if there are more than 6 coins, display only the first 6 and the dots ... for more.
+4) Clicking on a Runs cell, should display a popup dialog, with a table of all the coins + trades, p/l per coin, this table should have pagination.
+5) The table on the trades tab of the Strategies tab should have a summary. To display the total number of trades, total long, short, wins, losses. 
+6) On the tab: Active, clicing on a template of active trades, should open the strategy on the strategy tab.
+
+Are there any other sweeps defined? 
+I could create a new (additional) sweep, and it'd be listed under "Needle Sweep #1"?
+
+
+
+
+
+
+I'd like to add to the sweep, trying on this exact same strategy+parametres on other coins.
+
+Totally random, not 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Friday 10 July
+
+
+I have now been running around 18hrs with a number of coin/strategies (page: trading/live).
+Some give positive results, some negative. Mostly on the same strategy: Streak Reversion.
+Can you see if the positive/negative results are reflected in the analysis (trading/strategies/scalping/streak-reversion/analytics) of the strategy/coin?
+To see if the analysis have any predictive power.
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Thursday 9 July
+* Data
+  1) Changed type from crypto to stablecoin on stable coins.
+    USDC, FDUSD, USD1, USDS, RLUSD, XUSD, BFUSD, FRAX, AEUR, EURI, KGST
+* Sidemenu
+  1) Renamed "+ New Coin" to "+ New"
+  2) Added Coin Groups submenu to coin menu 
+    Coins
+    ├── + New
+    ├── Coins
+    └── Coing Groups
+  3) Added submenu Live to Trades, and renamed "Paper Trade" => "Paper"
+    Trades
+    ├── Live
+    ├── Paper
+    └── Strategies
+* General
+  1) All Trading Strategy Analytics pages: changed the coin drop down to include coin groups as a 4th column. + When createing a template from a coin group, it creates an individual template for each coin in the group.
+* PAGE coins/coin-groups:
+  1) Created.
+    A) Master table.
+    B) Tabbed detail pane.
+  2) Created Stable Coin group.
+  3) Added two check boxes: "Crypto" and "Stable Coin"
+* PAGE trading/strategies/trend-swings/analytics:
+  1) Fixed template bug, where templates wasn't been applied on coin, trading pair, time frame.
+* PAGE trading/paper:
+  1) (Again) Made minimized/normalized trades permanance (local storage)
+  2) Added grouping options to Active pane:
+      None
+      Coin groups
+      Coins
+      Strategies
+  3) Repeated grouping on the Strategies pane.
+  4) Numbers formatted in a human readable format (2425.67 => 2,425.67)
+  5) Added filters. Filter by:
+      Coin groups
+      Coins
+      Strategies
+  6) Right aligned filters.
+  7) Added icon: Go Live. Take strategy live.
+* PAGE trading/live:
+  1) Created (for testnet)
+
+page trading/paper:
+Can you reorder the icons.
+Top: Minimize
+Under that, with a bit more space than now, Take Live
+Bottom: Stop
+
+chrome://net-internals/#dns → Clear host cache, then fully quit & reopen (or chrome://net-internals/#sockets → Flush socket pools).
+
+! sudo nmcli con mod netplan-enp0s31f6 ipv4.dns "1.1.1.1 8.8.8.8" ipv4.ignore-auto-dns yes && sudo nmcli con up netplan-enp0s31f6 && resolvectl query binance.com
+
+I want to keep the testnet page also after having created the real live page. So can you r 
+
+Orders are executed for real on the exchange — testnet or production as shown by the badge at the top of the page.
+
+
+
+
+Side menu:
+Submenus under Trading: can you put Live on top, and rename "Paper Trades" to "Paper"
+Live
+Paper
+Strategies 
+
+
+Page trading/live & trading/paper:
+Move Filter to the right (right align) so they're under the Group By.
+
+Page trading/live:
+section strategies:
+There is no pagination if the selection is coin, coin group or strategies
+
+What do I need to start live trading on Binance? API Key? Wallet?
+
+
+
+The Trading Strategy Template popup.
+1) Can you make the table of the usual desig n
+
+I.e., checkbox column to the left, search/filter input top/right, sortable columns, paginations, etc.
+
+2
 
 PAGE trading/paper:
-Add pagination to the trade history (tab trades), same as on the master table on the same page.
+1) Add a filter below the group by.
+Filter by Coin Groups, Coins, Strategies
+Each should have a drop down selector showing a checkbox for
+All Coin Group that is being running trades on
+All Coin that is being running trades on
+All Strategies that is being running trades on
+
+Checked on by default, if a check is unchecked, remove the coin group, coin, strategy from the display.
+Remember selection (also the group by selection) in local memory, so that they stay the same when leaving the page and comming back.
+
+github
+ftp
+login
+ftp
+
+Supabase
 
 
+
+
+Can you format the numbers in a human readable format (2425.67 => 2,425.67)
+
+
+page trading/strategies/scalping/streak-reversion/analytics:
+When I select a coin group (50 selection), the trading pair says: SPFUSDT
+
+
+
+Timeframe: 15m
+Volumne not required
+Vol regime: off
+Streak Length: 3
+Hold bars: 6
+ST & TP: None
+Side: Both
+
+On all the scalping strategy analytics pages and the trend swing analytics page:
+1) The coin drop down selector: add a fourth column, which should list coin groups.
+2) Creating a template when the coin selected is a coin group, should create a template for each individual coin in the group.
+
+Page trading/paper:
+1) I think we made this before. But can you make the minimize/normalize choice for each active strategy save in local storage, such that it is remembered when leaving and coming back to the page. I think the functionality may collide with some other functionality we made earlier where the latest traded coins should be on top. So to the right of the active/strategies selector, right-aligned, make a button: "Active Up": which will switch the top strategies to the the latest traded.
+
+2) Also make a selector the same as the active/strategies selector, put it to the right of the "Active Up" button, It should have the title "Group by" and the options:
+"None"
+"Coin groups" 
+"Coins"
+"Strategies"
+
+When coin is selected, all active trades with this coin should be displayed as a single trade.
+When coin groups is selected, all active trades with coins in the group should be displayed as a single trade.
+When strategies groups is selected, all active trades of this strategy should be displayed as a single trade.
+
+
+Can you repeat the same group by selector on the Strategies pane.
+Such that they're grouped together and can be started together.
+
+
+
+
+  6) Made minimized/normalized trades permanance (local storage)
+
+
+
+PAGE coin-groups:
 
 ------
 
 Adjust Position size after confirmation level
 
+Gatekeep using forecast AI
 
+What I'm worried about is the analysis showing better results with the strategy than a live implementation would, because the model confirmation removes trades that would otherwise have gone through when live. What if the gating confirmation is the thing which separates a good strategy from a bad? But your saying it is defensible, because it is there to entirely weed out bad strategies?
 
+In any case, would it not be a potential benefit to also wire up to use in live trades the 
+----
 
+Which coins are in Binance futures
+Is there a minimum fee
+----
 
 Page trading/strategies/trend-swings/analytics (and other strategy pages)
 Regarding:
@@ -128,6 +969,139 @@ What do you think of this plan? Any suggestions? Improvements?
 
 
 
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+── Wednesday 8 July
+* Data
+  1) Added 10 random coins (+data, categories)
+    NOM
+    OPN
+    1000CHEEMS
+    BANK
+    HEMI
+    FOGO
+    DOLO
+    BNSOL
+    TURTLE
+    ZRO
+  2) Added 10 random coins (+data, categories)
+    MET
+    ROSE
+    REQ
+    ALPINE
+    HOME
+    CATI
+    PROVE
+    NBISB
+    CHZ
+    SPYB
+  3) Added 10 random coins (+data, categories)
+    BOME
+    KMNO
+    INTCB
+    RIF
+    ID
+    BFUSD
+    BTTC
+    U
+    KERNEL
+    JTO
+  4) Added 10 random coins (+data, categories)
+    PARTI
+    ONG
+    GNS
+    TUT
+    LA
+    ARPA
+    RLUSD
+    POLYX
+    NIGHT
+    STX
+  5) Added 10 random coins (+data, categories)
+    ONDO
+    ME
+    MAGIC
+    AMDB
+    0G
+    AVA
+    XLM
+    IOTA
+    MTL
+    ENJ
+  6) Added 10 random coins (+data, categories)
+    GLM
+    GLMR
+    BAND
+    AUCTION
+    LPT
+    RARE
+    EWYB
+    AXS
+    IO
+    FIDA
+  7) Added 10 random coins (+data, categories)
+    NEWT
+    MAV
+    ZEN
+    TRX
+    IQ
+    EDEN
+    METIS
+    AI
+    LUMIA
+    ASTER
+  8) Added 20 random coins (+data, categories)
+    TREE
+    BERA
+    VIRTUAL
+    AAVE
+    IOTX
+    CAKE
+    PEOPLE
+    BIO
+    PYTH
+    BMT
+    ZK
+    OG
+    XVG
+    LAYER
+    1000SATS
+    XAI
+    CHIP
+    QTUM
+    RED
+    EURI
+  9) Added the 133 REMAINING coins (+data, categories)
+    XUSD, PENDLE, BCH, TWT, TOWNS, LDO, PUNDIX, MIRA, JASMY, TRB, RAD, HUMA, YGG, RVN, RAY, CFX, SENT, NOT, OSMO, CRCLB, SEI, ACM, MANTA, MINA, USUAL, USD1, SOXLB, MANA, CBRSB, CTSI, DGB, ACT, RESOLV, ASTR, COTI, DOGS, METAB, MANTRA, CELR, BB, WBETH, GENIUS, TST, LAZIO, STEEM, OGN, PIVX, UNI, SUN, NEXO, BLUR, FLOKI, AIGENSYN, USDP, A, EGLD, ALCX, RE, FDUSD, GAS, HAEDAL, ARK, MSTRB, AT, SC, BNT, SAPIEN, AXL, CELO, CITY, POND, AUDIO, DYM, QQQB, HIVE, ENS, ICX, GMT, TUSD, SPELL, INIT, MMT, SYN, DRAMB, CTK, TLM, ASR, PLUME, WLD, VIC, MITO, C98, BREV, HMSTR, WAL, NFP, NVDAB, FRAX, QCOMB, DEXE, DUSK, IOST, HEI, OPG, KGST, W, VANRY, GRT, ANKR, GPS, EDU, KITE, ZAMA
+* Database
+  1) Added tables:
+    coin_group
+    coin_group_member
+* General:
+  1) Double checked BANANA trade.
+* General / strategy analysis pages:
+  1) Added Binance Perpetual fee model constraints to all strategy analysis pages.
+  2) Changed popup modal button from "Revert" to "Apply"
+  3) Also apply template information to Coin, Trading Pair, and Time Frame.
+  4) Rewrote the coin selector (+search, favourites, multiple columns, shorter height)
+* PAGE trading/paper:
+  1) Profit/Loss displayed as amount + percentage.
+  2) When starting a trade => popup, added: trading amount.
+  3) Added pagination to trading history.
+  4) Added text Uptime to the uptime counter.
+  5) Added the trade ID.
+  6) Made minimized/normalized trades permanance (local storage)
+  7) Reworked the strategy-tab/start,stop trades. Can now launch multiple instances of same template. Stop can only be done on the trade itself.
+* PAGE coins:
+  1) Added new tab: Specs
+    A) Moved Type (from details) to Specs
+    B) Added Binance Perpetual information.
+  2) Added Favourite column
+  3) Added add/remove from favourites from selected area.
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ── Tuesday 7 July
@@ -526,30 +1500,6 @@ What do you think of this plan? Any suggestions? Improvements?
   1) Add column: Sig. Should be >= 4 for it to have meaningful price information.
 
 
-
-
-Are there other trend reversal signals that may be interesting? I.e., perhaps the size of the bars tend to decrease around swing points?
-
-
-Kan du spørge den om flere trend reversal signaler? Plejer vist også at være noget med en faldende bar størrelse
-
-
-
-1) Yes, please build those two a,b. Where would they fit in, on the frontend?
-
-2) Could including volatility (or some other metric, volume perhaps) in the crest/swing forecast be helpful? For instance, perhaps volatility or volume tend to increase/decrease around the cresting?
-
-3) Regarding: "- The mean next return after a 4–5 candle streak is 2–8 bps. Binance round-trip taker fees are ~10–20 bps on spot. The edge exists but sits at or below the cost of harvesting it — which is exactly why it's allowed to persist; arbitrageurs have ground it down to the fee boundary."
-
-If I run simulations on a thousand coins / trading pairs / timeframes - and in this number there is a single combination that has forecastable, profitable and actionable price direction. How would I identify this without going through all simulations? Is there a score which can be added to the table - same as the volatility score - which I can sort the table for this?
-
-
-
-
-Yes, implement your suggestion: a score (the target-aware skill) to the stored result, expose it as a sortable column on simulations/completed, and fix the returns-vs-levels correlation while I'm in there.
-
-
-Vala
 
 
 

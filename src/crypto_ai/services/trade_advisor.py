@@ -34,8 +34,9 @@ import structlog
 
 from crypto_ai.config import get_settings
 
-# Explicit name: the trade-AI file handler (logging.py) attaches to this logger.
-log = structlog.get_logger("crypto_ai.services.trade_advisor")
+# Explicit name: the trade-AI file handler (logging.py) attaches to this logger
+# (shared with the engine's gate decisions — everything trade-AI in one feed).
+log = structlog.get_logger("crypto_ai.trade_ai")
 
 # Reasoning model with web search; verdict quality matters more than the
 # per-call cost here (a few calls per day at paper-trade cadence).

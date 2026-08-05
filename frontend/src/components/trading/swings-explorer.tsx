@@ -9,8 +9,11 @@
 // stored P(up) forecasts. Moved here from the simulations/completed "Swings"
 // tab, which analyzed the same data but misleadingly lived under a run.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { useRegisterTemplateBridge } from "@/components/trading/template-context"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { HtfGateControl } from "@/components/trading/htf-gate-control"
+import { BacktestAnalysis } from "@/components/trading/backtest-analysis"
+import { BacktestTrades } from "@/components/trading/backtest-trades"
+import type { WorkbenchTab } from "@/components/trading/strategy-workbench"
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { Flag, Info } from "lucide-react"
@@ -27,7 +30,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { swingAnalysisApi, type SwingScope } from "@/lib/api"
+import { swingAnalysisApi, coinsApi, type SwingScope } from "@/lib/api"
 
 export interface SwingsExplorerProps {
   scope: SwingScope
@@ -35,10 +38,23 @@ export interface SwingsExplorerProps {
   // filter; null = the filter is unavailable for this scope.
   confirmSimId: string | null
   confirmSimName?: string | null
+  // Which workbench tab is showing. Inactive regions are HIDDEN, never
+  // unmounted — switching tabs must not reset a knob or refire the analysis.
+  activeTab: WorkbenchTab
+  // Publishes the current signal parameters so the workbench's Create Strategy
+  // dialog can save them.
+  onParams: (params: Record<string, unknown>) => void
+  // A saved strategy's knobs to restore ("Open in Analytics"), applied once
+  // per token. Null when nothing was handed over.
+  loadParams: { token: string; params: Record<string, unknown> } | null
 }
 
 // Theme-aware recharts tooltip styling — the library default is a white box
 // that ignores dark mode. CSS variables track the active theme.
+// Server-side cap on trade_markers (services/swing_analysis.py _MAX_TRADE_MARKERS).
+// Hitting it means the chart is showing a prefix, not the whole set.
+const MAX_TRADE_MARKERS = 1000
+
 const CHART_TOOLTIP_STYLE = {
   fontSize: 12,
   borderRadius: 6,
@@ -68,10 +84,19 @@ function InfoIcon({ text }: { text: ReactNode }) {
 // (volume/range spike, wick pressure, taker tilt, participation, streak,
 // stretch + sweep/divergence flags), z-scored on trailing windows only.
 const SWING_FEE_PRESETS = [
-  { value: 4, label: "Futures maker (4 bps RT)" },
-  { value: 10, label: "Futures taker (10 bps RT)" },
-  { value: 20, label: "Spot taker (20 bps RT)" },
+  { value: 4, label: "Futures maker (4 bps RT)", market: "futures" },
+  { value: 10, label: "Futures taker (10 bps RT)", market: "futures" },
+  { value: 20, label: "Spot taker (20 bps RT)", market: "spot" },
 ] as const
+
+// A fee model is offered unless the coin is known NOT to have the market it
+// needs (null = unchecked → keep it). Empty result falls back to all presets.
+function allowedSwingFees(coin?: { has_spot: boolean | null; has_futures: boolean | null }) {
+  const filtered = SWING_FEE_PRESETS.filter((p) =>
+    p.market === "spot" ? coin?.has_spot !== false : coin?.has_futures !== false,
+  )
+  return filtered.length ? filtered : SWING_FEE_PRESETS
+}
 
 // Composite members, toggleable individually. z components are equal-weight
 // averaged; flags add a +0.25 bonus each when firing.
@@ -128,16 +153,33 @@ const SWING_COMPONENT_COLORS: Record<string, string> = {
   avg_trade: "#f472b6", wick: "#22d3ee", taker: "#fb923c", stretch: "#eab308",
 }
 
-export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsExplorerProps) {
+export function SwingsExplorer({
+  scope, confirmSimId, confirmSimName, activeTab, onParams, loadParams,
+}: SwingsExplorerProps) {
   const [threshold, setThreshold] = useState(1.0)
   const [holdBars, setHoldBars] = useState(6)
   const [feeBps, setFeeBps] = useState<number>(4)
+  // Restrict the fee models to the Binance markets this coin actually trades on.
+  const { data: coins } = useQuery({
+    queryKey: ["coins"],
+    queryFn: () => coinsApi.list({ limit: 1000 }),
+    staleTime: 60_000,
+  })
+  const coin = coins?.find((c) => c.id === scope.coin_id)
+  const feePresets = useMemo(() => allowedSwingFees(coin), [coin])
+  useEffect(() => {
+    if (!feePresets.some((p) => p.value === feeBps)) setFeeBps(feePresets[0].value)
+  }, [feePresets, feeBps])
   const [side, setSide] = useState("long")
   const [useModel, setUseModel] = useState(false)
   const [slMode, setSlMode] = useState("none")
   const [slValue, setSlValue] = useState(2)
   const [tpMode, setTpMode] = useState("none")
   const [tpValue, setTpValue] = useState(3)
+  // Higher-timeframe trend gate — off by default; see htf-gate-control.tsx.
+  const [htfGate, setHtfGate] = useState("off")
+  const [htfTf, setHtfTf] = useState("4h")
+  const [htfLevel, setHtfLevel] = useState(0.5)
   const [showTradeMarkers, setShowTradeMarkers] = useState(true)
   // Which chart (if any) is maximized to a full-viewport overlay.
   const [maximizedChart, setMaximizedChart] = useState<"equity" | "signal" | null>(null)
@@ -174,8 +216,9 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
   // an array so it JSON-serializes.
   const templateParams = useMemo(() => ({
     threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue,
+    htfGate, htfTf, htfLevel,
     disabledSignals: [...disabledSignals], weightPct,
-  }), [threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, disabledSignals, weightPct])
+  }), [threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, htfGate, htfTf, htfLevel, disabledSignals, weightPct])
 
   function applyTemplate(p: Record<string, unknown>) {
     if (typeof p.threshold === "number") setThreshold(p.threshold)
@@ -186,6 +229,9 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
     if (typeof p.slValue === "number") setSlValue(p.slValue)
     if (typeof p.tpMode === "string") setTpMode(p.tpMode)
     if (typeof p.tpValue === "number") setTpValue(p.tpValue)
+    if (typeof p.htfGate === "string") setHtfGate(p.htfGate)
+    if (typeof p.htfTf === "string") setHtfTf(p.htfTf)
+    if (typeof p.htfLevel === "number") setHtfLevel(p.htfLevel)
     if (Array.isArray(p.disabledSignals)) setDisabledSignals(new Set(p.disabledSignals as string[]))
     if (p.weightPct && typeof p.weightPct === "object") setWeightPct(p.weightPct as Record<string, number>)
   }
@@ -222,23 +268,54 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
     } catch { /* ignore quota/serialization errors */ }
   }, [restored, templateParams, useModel, showTradeMarkers, overlay, showLongLine, showShortLine])
 
-  // Expose params + scope + apply fn to the topbar template modal.
-  useRegisterTemplateBridge(
-    "swings",
-    () => templateParams,
-    applyTemplate,
-    () => ({ coin_id: scope.coin_id, quote_asset: scope.quote_asset, interval: scope.interval }),
-  )
+  // Publish the current params to the workbench (Create Strategy saves these).
+  useEffect(() => { onParams(templateParams) }, [onParams, templateParams])
+
+  // "Open in Analytics" handed us a saved strategy's knobs. Applied once per
+  // token, AFTER the localStorage restore above (effects run in order), so the
+  // strategy wins over whatever was last left on this page — and never re-applies
+  // over edits made afterwards.
+  const loadedTokenRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!loadParams || loadedTokenRef.current === loadParams.token) return
+    loadedTokenRef.current = loadParams.token
+    applyTemplate(loadParams.params)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadParams])
+
+  // The Analytics tab's hour/weekday cuts are computed from the SAME backtest,
+  // so they ride along on this request rather than firing a second one. Latched
+  // on first visit: once asked for, keep asking, or every tab switch back would
+  // change the query key and re-run the backtest.
+  const [wantBuckets, setWantBuckets] = useState(false)
+  useEffect(() => { if (activeTab === "analytics") setWantBuckets(true) }, [activeTab])
+
+  // Charts must not first render inside a display:none container — a
+  // ResponsiveContainer measures 0×0 there and can come back collapsed. Each
+  // chart region is therefore latched on its first visit: hidden-but-mounted
+  // afterwards (so nothing re-fetches), but never mounted while never-shown.
+  const [seenResults, setSeenResults] = useState(false)
+  const [seenAnalytics, setSeenAnalytics] = useState(false)
+  useEffect(() => {
+    if (activeTab === "results") setSeenResults(true)
+    if (activeTab === "analytics") setSeenAnalytics(true)
+  }, [activeTab])
+  const [tzLocal, setTzLocal] = useState(false)
+  // Positive-east offset in minutes (getTimezoneOffset is positive-west).
+  const localOffset = useMemo(() => -new Date().getTimezoneOffset(), [])
+  const tzOffset = tzLocal ? localOffset : 0
 
   // The model-confirmation filter needs a simulation's stored forecasts.
   const confirmId = useModel && confirmSimId ? confirmSimId : undefined
   const scopeKey = `${scope.coin_id}:${scope.quote_asset}:${scope.interval}:${scope.start_date}:${scope.end_date}`
 
-  const { data, isFetching, error } = useQuery({
-    queryKey: ["swingAnalysis", scopeKey, threshold, holdBars, feeBps, side, confirmId ?? "none", enabledParam ?? "all", slMode, slValue, tpMode, tpValue, weightsParam ?? "eq"],
+  const { data, isFetching, error, refetch } = useQuery({
+    queryKey: ["swingAnalysis", scopeKey, threshold, holdBars, feeBps, side, confirmId ?? "none", enabledParam ?? "all", slMode, slValue, tpMode, tpValue, weightsParam ?? "eq", htfGate, htfTf, htfLevel, wantBuckets, wantBuckets ? tzOffset : 0],
     queryFn: () => swingAnalysisApi.analyze(scope, {
       threshold, hold_bars: holdBars, fee_bps: feeBps, side, confirm_sim_id: confirmId, signals: enabledParam,
       sl_mode: slMode, sl_value: slValue, tp_mode: tpMode, tp_value: tpValue, weights: weightsParam,
+      htf_gate: htfGate, htf_tf: htfTf, htf_level: htfLevel,
+      buckets: wantBuckets, tz_offset_minutes: tzOffset,
     }),
     // Wait until saved selections are restored so we don't fire a throwaway
     // analysis with default params on every page visit.
@@ -259,14 +336,19 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
   // Auto-optimizer: bounded server-side sweep (fee/model-confirmation taken
   // from the current knobs), tuned on the first half, judged on the second.
   const optimize = useMutation({
-    mutationFn: () => swingAnalysisApi.optimize(scope, { fee_bps: feeBps, confirm_sim_id: confirmId }),
+    mutationFn: () => swingAnalysisApi.optimize(scope, {
+      fee_bps: feeBps, confirm_sim_id: confirmId,
+      // The gate conditions every combo the sweep tries; it is deliberately not
+      // one of the swept dimensions.
+      htf_gate: htfGate, htf_tf: htfTf, htf_level: htfLevel,
+    }),
   })
-  // Sweep results belong to the scope they ran on — clear them when the
-  // coin/pair/timeframe/date-range changes so a stale table can't mislead.
+  // Sweep results belong to the scope AND the gate they ran under — clear them
+  // when either changes so a stale table can't mislead.
   const resetOptimize = optimize.reset
   useEffect(() => {
     resetOptimize()
-  }, [scopeKey, resetOptimize])
+  }, [scopeKey, htfGate, htfTf, htfLevel, resetOptimize])
   const applyCombo = (combo: NonNullable<typeof optimize.data>["results"][number]) => {
     setThreshold(combo.threshold)
     setHoldBars(combo.hold_bars)
@@ -302,6 +384,11 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
   // browser's render thread locks up. Skip individual markers on busy ranges.
   const MARKER_DRAW_LIMIT = 300
   const drawMarkers = showTradeMarkers && tradeMarkers.length <= MARKER_DRAW_LIMIT
+  // The server caps trade_markers at MAX_TRADE_MARKERS; the Full-range segment is
+  // the only honest trade COUNT. Reporting the capped array made a 2,770-trade
+  // backtest announce "1000", which reads as a real number and isn't one.
+  const fullTrades = data?.segments?.find((s) => s.label === "Full range")?.n_trades ?? null
+  const markersTruncated = tradeMarkers.length >= MAX_TRADE_MARKERS
   const signalCurve = useMemo(
     () => (data?.signal_curve ?? []).map((p) => ({ ...p, t: new Date(p.timestamp).getTime() })),
     [data],
@@ -321,7 +408,9 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
   const consistent = halves.length === 2 && halves.every((s) => s.avg_net_bps > 0)
 
   return (
-    <div className="space-y-4">
+    <>
+    {/* ── Parameters ── */}
+    <div className={cn("space-y-4", activeTab !== "parameters" && "hidden")}>
       {/* Controls */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 rounded-md border p-4">
         <div>
@@ -410,7 +499,7 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
             <InfoIcon text="Round-trip trading cost. Swing entries fade into a turn, so resting limit orders (maker) are realistic — futures maker is the preset where the measured edges (3–7 bps/bar) survive. Spot taker is the pessimistic bound." />
           </div>
           <select value={feeBps} onChange={(e) => setFeeBps(Number(e.target.value))} className="w-full h-9 mt-1 px-3 border border-input rounded-md bg-background text-sm">
-            {SWING_FEE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            {feePresets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         </div>
         <div>
@@ -424,6 +513,12 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
             <option value="both">Both</option>
           </select>
         </div>
+        <HtfGateControl
+          baseInterval={scope.interval}
+          gate={htfGate} setGate={setHtfGate}
+          tf={htfTf} setTf={setHtfTf}
+          level={htfLevel} setLevel={setHtfLevel}
+        />
         {/* Composite membership: toggle individual signals on/off */}
         <div className="col-span-2 md:col-span-4 border-t pt-3 mt-1">
           <div className="flex items-center gap-1.5 mb-2">
@@ -562,8 +657,11 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
           )}
         </div>
       )}
+    </div>
 
-      {error ? (
+    {/* ── Results ── */}
+    <div className={cn("space-y-4", activeTab !== "results" && "hidden")}>
+      {!seenResults ? null : error ? (
         <p className="text-sm text-muted-foreground py-8">Swing analysis failed: {(error as Error).message || "request error"}</p>
       ) : !data ? (
         <p className="text-sm text-muted-foreground py-8">{isFetching ? "Analyzing swings… (large ranges can take a little while on the first run)" : "—"}</p>
@@ -665,7 +763,10 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
             </div>
             <p className="px-2 pb-1 text-[10px] text-muted-foreground">
               {showTradeMarkers && !drawMarkers ? (
-                <span className="text-amber-400">Too many trades ({tradeMarkers.length}) to draw individual entry lines and hold bands without freezing the browser — narrow the date range (or raise the threshold) to see them. </span>
+                <span className="text-amber-400">
+                  Too many trades ({fullTrades ?? tradeMarkers.length}) to draw individual entry lines and hold bands without freezing the browser — narrow the date range (or raise the threshold) to see them.
+                  {markersTruncated && " Only the first 1,000 are charted; the segment figures above cover every trade."}{" "}
+                </span>
               ) : (
                 <>Shaded bands = each trade&apos;s in-market window (entry line → exit). Colour is the <span className="font-medium">outcome</span> — green won, red lost — not the direction; solid entry lines are longs, dashed are shorts. While a band is open, new signals are ignored. </>
               )}
@@ -781,8 +882,32 @@ export function SwingsExplorer({ scope, confirmSimId, confirmSimName }: SwingsEx
           <p className="text-xs text-muted-foreground">
             Signal-only strategy computed from raw OHLCV — no model forecast involved{useModel && data.model_available ? " (except the P(up) confirmation filter)" : ""}. All signals use trailing windows only (no lookahead). Entries are non-overlapping, held up to {data.hold_bars} bars{data.sl_mode !== "none" ? ", stopped out earlier when the stop level is touched" : ""}{data.tp_mode !== "none" ? ", taking profit earlier per the selected target" : ""}; intra-bar level exits fill at the level (stop wins if both could fill in one bar); {data.fee_bps} bps charged per round trip. Knobs tuned here are in-sample — with SL/TP in play the parameter space is large, so trust a setting only if it also holds in the second half and on other coins/periods.
           </p>
+
+          {/* The trades themselves, under the charts. */}
+          <BacktestTrades
+            rows={data.trade_rows ?? []}
+            totalTrades={fullTrades}
+            scope={scope}
+            strategy={"swings"}
+            params={templateParams}
+          />
+
         </div>
       )}
     </div>
+
+    {/* ── Analytics ── */}
+    <div className={cn(activeTab !== "analytics" && "hidden")}>
+      {seenAnalytics && <BacktestAnalysis
+        data={data?.bucket_analysis}
+        isFetching={isFetching}
+        isError={!!error}
+        useLocal={tzLocal}
+        onUseLocalChange={setTzLocal}
+        tzOffset={tzOffset}
+        onRefresh={() => refetch()}
+      />}
+    </div>
+    </>
   )
 }

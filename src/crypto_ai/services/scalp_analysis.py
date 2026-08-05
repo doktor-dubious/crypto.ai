@@ -37,10 +37,17 @@ from crypto_ai.services.kline_simulation_record import _interval_minutes
 from crypto_ai.services.swing_analysis import (
     _MAX_CURVE_POINTS,
     _MAX_TRADE_MARKERS,
+    BTC_FILTERS,
+    TREND_GATES,
     SwingAnalysisService,
     _roll_z,
     _t_stat,
+    apply_btc_beta_filter,
+    apply_trend_gate,
+    htf_lookback_bars,
+    htf_min_bars,
 )
+from crypto_ai.services.trade_buckets import bucket_analysis_of, build_trade_rows
 
 STRATEGIES = ("range", "momentum", "indicator", "streak", "sweep", "takerflow")
 INDICATOR_KINDS = ("ema", "rsi", "bollinger", "vwap")
@@ -53,7 +60,9 @@ DEFAULTS: dict[str, dict[str, float]] = {
     "indicator": {"fast": 9, "slow": 21, "period": 14, "vwap_window": 96},
     # require_voldiv: 1 = only fade streaks advancing on falling volume (the
     # conditioner that roughly doubled the fade edge in the research).
-    "streak": {"require_voldiv": 0},
+    # btc_filter: 0 = off, 1 = fade only runs BTC does NOT explain, 2 = fade only
+    # runs it does (the null control — see apply_btc_beta_filter).
+    "streak": {"require_voldiv": 0, "btc_filter": 0},
     "sweep": {"window": 12},
     # fade: 0 = trade WITH sustained taker imbalance, 1 = fade it (exhaustion).
     "takerflow": {"window": 12, "fade": 0},
@@ -98,6 +107,11 @@ class ScalpAnalysisService:
         indicator: str = "ema",
         vol_gate: str = "off",
         vol_level: float = 1.0,
+        htf_gate: str = "off",
+        htf_tf: str = "4h",
+        htf_level: float = 0.5,
+        buckets: bool = False,
+        tz_offset_minutes: int = 0,
     ) -> dict | None:
         if strategy not in STRATEGIES:
             return {"error": f"Unknown strategy: {strategy}"}
@@ -105,13 +119,22 @@ class ScalpAnalysisService:
             return {"error": f"Unknown indicator: {indicator}"}
         if vol_gate not in VOL_GATES:
             return {"error": f"Unknown vol_gate: {vol_gate}"}
+        if htf_gate not in TREND_GATES:
+            return {"error": f"Unknown htf_gate: {htf_gate}"}
         if sl_mode not in ("none", "pct", "atr", "structure", "trail_atr"):
             return {"error": f"Unknown sl_mode: {sl_mode}"}
         if tp_mode not in ("none", "pct", "resistance", "reversal", "mean"):
             return {"error": f"Unknown tp_mode: {tp_mode}"}
         p = {**DEFAULTS[strategy], **{k: float(v) for k, v in (params or {}).items()}}
 
-        ctx = await self._swings._build_context(scope, min_bars=300 + hold_bars)
+        # The trend gate reads a long trailing span off the base series, so it
+        # raises the history the scope needs before anything can be evaluated.
+        htf_bars = 0 if htf_gate == "off" else htf_lookback_bars(scope["interval"], htf_tf)
+        ctx = await self._swings._build_context(
+            scope,
+            min_bars=max(300, htf_min_bars(htf_bars)) + hold_bars,
+            need_btc=strategy == "streak" and int(p.get("btc_filter", 0)) > 0,
+        )
         if "error" in ctx:
             return ctx
 
@@ -121,6 +144,11 @@ class ScalpAnalysisService:
         if vol_gate != "off":
             long_score, short_score = await asyncio.to_thread(
                 self._apply_vol_gate, ctx, long_score, short_score, vol_gate, vol_level
+            )
+        if htf_gate != "off":
+            long_score, short_score = await asyncio.to_thread(
+                apply_trend_gate, ctx, long_score, short_score,
+                htf_gate, htf_bars, htf_level,
             )
         # No swing-veto for scalping: momentum WANTS the high-volume breakout,
         # and range entries are already regime-gated by channel width.
@@ -133,7 +161,7 @@ class ScalpAnalysisService:
             sl_mode=sl_mode, sl_value=sl_value, tp_mode=tp_mode, tp_value=tp_value,
             prob_by_time={},
         )
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._assemble, ctx, sim, long_score, short_score, scope["interval"],
             {
                 "strategy": strategy, "indicator": indicator, "params": p,
@@ -141,8 +169,18 @@ class ScalpAnalysisService:
                 "side": side, "sl_mode": sl_mode, "sl_value": sl_value,
                 "tp_mode": tp_mode, "tp_value": tp_value,
                 "vol_gate": vol_gate, "vol_level": vol_level,
+                "htf_gate": htf_gate, "htf_tf": htf_tf, "htf_level": htf_level,
+                # 0 when the picked timeframe isn't actually higher than the
+                # scope's — the gate is then inert, and the UI must say so.
+                "htf_bars": htf_bars,
             },
         )
+        result["trade_rows"] = build_trade_rows(sim["trades"])
+        if buckets:
+            result["bucket_analysis"] = bucket_analysis_of(
+                sim["trades"], tz_offset_minutes=tz_offset_minutes
+            )
+        return result
 
     @staticmethod
     def _apply_vol_gate(
@@ -228,6 +266,12 @@ class ScalpAnalysisService:
                 # roughly doubled the fade edge in the research.
                 long_score = np.where(ctx["bottom_flags"]["voldiv"], long_score, nan)
                 short_score = np.where(ctx["top_flags"]["voldiv"], short_score, nan)
+            # Drop runs that are just this coin tracking BTC — they don't revert.
+            mode = int(p.get("btc_filter", 0))
+            if 0 < mode < len(BTC_FILTERS):
+                long_score, short_score = apply_btc_beta_filter(
+                    ctx, long_score, short_score, BTC_FILTERS[mode]
+                )
             return long_score, short_score
 
         if strategy == "sweep":

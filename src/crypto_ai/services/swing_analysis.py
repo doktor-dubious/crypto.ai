@@ -28,10 +28,12 @@ import pandas as pd
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from crypto_ai.database.models.coin import Coin
 from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.kline_simulation import KlineSimulation
 from crypto_ai.database.models.kline_simulation_prediction import KlineSimulationPrediction
 from crypto_ai.services.kline_simulation_record import _interval_minutes
+from crypto_ai.services.trade_buckets import bucket_analysis_of, build_trade_rows
 
 _TRAIL = 50    # trailing median window for relative (x-normal) features
 _Z_WIN = 200   # trailing window for z-scoring each feature
@@ -109,6 +111,221 @@ def _max_drawdown(equity: np.ndarray) -> float:
     return float(-dd.min()) if len(dd) else 0.0
 
 
+# ── Higher-timeframe trend gate ──────────────────────────────────────────────
+# An optional requirement that the HIGHER timeframe agrees before a trade fires
+# — don't short an otherwise rising market, don't buy a falling one. Shared by
+# every strategy family (the swing composite and all six scalp entries), and
+# applied the same way the volatility gate is: as a mask over the entry scores.
+
+TREND_GATES = ("off", "align", "flat", "counter")
+_TREND_HTF_BARS = 16   # lookback length, in higher-timeframe bars
+_TREND_SD_WIN = 200    # trailing window for the per-bar return σ
+
+
+def htf_lookback_bars(base_interval: str, htf_interval: str) -> int:
+    """Base-timeframe bars spanning the higher-timeframe trend lookback.
+
+    The trend is read off the BASE series over an equivalent span rather than
+    from joined higher-timeframe klines. Aligning e.g. 4h bars onto 15m stamps
+    leaks up to 4h of future information unless every join is shifted by a full
+    HTF bar, and it would make each run depend on a second ingest stream; a
+    momentum read over ``16 × m`` base bars carries the same information for a
+    trend filter. Returns 0 when the "higher" timeframe isn't actually higher
+    (m < 2) — the caller then treats the gate as off.
+    """
+    base = _interval_minutes(base_interval)
+    htf = _interval_minutes(htf_interval)
+    if base <= 0 or htf < base * 2:
+        return 0
+    return int(_TREND_HTF_BARS * htf / base)
+
+
+def trend_strength(c: np.ndarray, bars: int) -> np.ndarray:
+    """Time-series momentum over ``bars``, in units of its own typical move.
+
+    ``sum(log returns over `bars`) / (σ_bar · √bars)`` — the sign is the higher
+    timeframe's direction, the magnitude is how much evidence there is for it.
+    Normalising by the move you'd expect from noise alone is what lets ONE
+    threshold mean the same thing across coins and across timeframe choices.
+    Trailing-only: bar t's value uses bars ≤ t, all of which have closed by the
+    time an entry at t's close is acted on. NaN through the warmup.
+    """
+    r = pd.Series(np.log(np.maximum(c, 1e-12))).diff()
+    mom = r.rolling(bars).sum()
+    sd = r.rolling(_TREND_SD_WIN).std() * math.sqrt(bars)
+    return (mom / sd.where(sd > 0)).to_numpy()
+
+
+def apply_trend_gate(
+    ctx: dict, long_score: np.ndarray, short_score: np.ndarray,
+    gate: str, bars: int, level: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mask out entries the higher timeframe doesn't support.
+
+      * align   — trade only WITH the higher-timeframe trend;
+      * flat    — trade only while it's going nowhere, which is what fading the
+                  edges of a range actually wants (a wide trend is where edge-
+                  fading gets run over);
+      * counter — trade only AGAINST it. Kept deliberately as the null control:
+                  if this scores like ``align``, the gate is noise.
+
+    ``level`` is the required trend strength in σ. A NaN trend (still inside
+    the warmup) blocks both sides, matching ``_apply_vol_gate``.
+    """
+    if gate == "off" or bars <= 0:
+        return long_score, short_score
+    trend = trend_strength(ctx["c"], bars)
+    lvl = abs(level)
+    if gate == "align":
+        ok_long, ok_short = trend >= lvl, trend <= -lvl
+    elif gate == "counter":
+        ok_long, ok_short = trend <= -lvl, trend >= lvl
+    else:  # flat — no meaningful trend either way
+        ok_long = ok_short = np.abs(trend) <= lvl
+    valid = ~np.isnan(trend)
+    return (
+        np.where(ok_long & valid, long_score, np.nan),
+        np.where(ok_short & valid, short_score, np.nan),
+    )
+
+
+def htf_min_bars(bars: int) -> int:
+    """Bars of history the gate needs before it can produce a verdict."""
+    return bars + _TREND_SD_WIN if bars > 0 else 0
+
+
+def _align_by_time(times: np.ndarray, rows: list) -> np.ndarray:
+    """Map ``(open_time, value)`` rows onto ``times``, NaN where there's no match.
+
+    Timestamp-keyed on purpose: the two series can have different gaps, and
+    zipping them positionally would pair mismatched bars — an error that reads
+    as a plausible number rather than as missing data.
+    """
+    lookup = {r[0]: float(r[1]) for r in rows}
+    return np.array([lookup.get(t, np.nan) for t in times], dtype=float)
+
+
+# ── BTC-beta filter (mean-reversion entries) ─────────────────────────────────
+# Split the coin's move into the part BTC explains (beta × BTC) and an
+# idiosyncratic residual, then judge the CURRENT run by which one drove it.
+#
+# The distinction is the whole point: a run of same-direction closes that BTC's
+# move explains is the market repricing this coin along with everything else —
+# a trend, and fading it loses. A run that lives in the residual is this coin's
+# own book overreacting, which is what actually reverts.
+#
+# Measured over 339 coins × 1 year of 5m bars (scripts/study_cross_coin_lead_lag.py):
+# BTC-explained streaks reverted −0.22 bps (monthly-block t −0.72, i.e. no edge
+# at all), idiosyncratic ones +1.96 bps (t 10.5) against an unfiltered baseline
+# of +1.32 bps. ~29% of streak entries are BTC-driven, so the filter drops a
+# third of the trades and raises the edge on what's left by about half — it
+# improves gross edge and fee drag at the same time.
+#
+# NOTE the effect is small in absolute terms: +1.96 bps gross is still under the
+# 8 bps round-trip default. This filter improves a strategy; it does not by
+# itself make one profitable.
+
+BTC_FILTERS = ("off", "idio", "btc")
+# Share of the run's total move attributable to beta×BTC at or above which the
+# run counts as BTC-driven.
+_BTC_DRIVEN_SHARE = 0.5
+# Beta is estimated causally over one day of bars, and clipped: a beta outside
+# this range is an estimator blow-up on a thin book, not a real exposure.
+_BETA_CLIP = 5.0
+
+
+def bars_per_day(times: np.ndarray) -> int:
+    """Bar count spanning 24h, inferred from the series' own spacing.
+
+    Lets the beta half-life mean "one day" at any interval without threading the
+    interval string through every caller.
+    """
+    if len(times) < 3:
+        return 288
+    deltas = np.diff(times[: min(len(times), 200)])
+    secs = np.median([d.total_seconds() for d in deltas])
+    return int(max(8, min(2016, round(86400 / secs)))) if secs > 0 else 288
+
+
+def btc_driven_share(
+    c: np.ndarray, btc_c: np.ndarray, streak: np.ndarray, halflife: int
+) -> np.ndarray:
+    """Per bar: what share of the current run's move does beta×BTC explain?
+
+    NaN where it can't be decided — inside the beta warmup, where BTC has no bar,
+    or off a run. Callers treat NaN as "no verdict" and block, the same way the
+    trend and volatility gates treat their own warmups.
+
+    Everything is trailing-only: beta at bar t is estimated from data through
+    t−1, and the run is the one that has already closed at t.
+    """
+    n = len(c)
+    r = np.full(n, np.nan)
+    r[1:] = np.diff(np.log(np.maximum(c, 1e-12)))
+    rb = np.full(n, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rb[1:] = np.diff(np.log(np.maximum(btc_c, 1e-12)))
+    # A bar BTC didn't trade (or that we haven't ingested) can't be attributed.
+    rb = np.where(np.isfinite(btc_c) & np.isfinite(rb), rb, np.nan)
+
+    both = np.isfinite(r) & np.isfinite(rb)
+    a = np.where(both, r, np.nan)
+    b = np.where(both, rb, np.nan)
+    cov = pd.Series(a * b).ewm(halflife=halflife, min_periods=halflife).mean()
+    var = pd.Series(b * b).ewm(halflife=halflife, min_periods=halflife).mean()
+    with np.errstate(invalid="ignore", divide="ignore"):
+        beta = np.clip((cov / var.where(var > 0)).shift(1).to_numpy(), -_BETA_CLIP, _BETA_CLIP)
+    beta_comp = beta * b
+
+    # Trailing sums over the run length actually in force at each bar — the
+    # strategy fades the run it sees, not a fixed-width window.
+    length = np.abs(streak).astype(np.int64)
+    cs_r = np.concatenate([[0.0], np.nancumsum(np.where(np.isfinite(r), r, 0.0))])
+    cs_bc = np.concatenate([[0.0], np.nancumsum(np.where(np.isfinite(beta_comp), beta_comp, 0.0))])
+    cs_ok = np.concatenate([[0], np.cumsum(np.isfinite(beta_comp).astype(np.int64))])
+
+    idx = np.arange(n)
+    lo = idx - length + 1  # first bar of the run
+    usable = (length >= 1) & (lo >= 0)
+    lo_safe = np.where(usable, lo, 0)
+    sum_r = np.where(usable, cs_r[idx + 1] - cs_r[lo_safe], np.nan)
+    sum_bc = np.where(usable, cs_bc[idx + 1] - cs_bc[lo_safe], np.nan)
+    # Every bar of the run needs an attributable BTC move, else no verdict.
+    complete = usable & ((cs_ok[idx + 1] - cs_ok[lo_safe]) == length)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        share = np.where(complete & (np.abs(sum_r) > 0), sum_bc / sum_r, np.nan)
+    return share
+
+
+def apply_btc_beta_filter(
+    ctx: dict, long_score: np.ndarray, short_score: np.ndarray, mode: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep only the runs the chosen side of the decomposition produced.
+
+      * idio — trade only runs the residual drove (the researched setting);
+      * btc  — trade only runs BTC drove. Kept as the null control, exactly like
+               the trend gate's ``counter``: if this scores like ``idio``, the
+               decomposition is noise and the filter should be turned off.
+
+    A no-op when BTC's series is absent from the context, so a caller that
+    couldn't fetch it degrades to the unfiltered strategy rather than silently
+    trading a gate it isn't applying — callers surface that case themselves.
+    """
+    btc_c = ctx.get("btc_c")
+    if mode not in ("idio", "btc") or btc_c is None:
+        return long_score, short_score
+    share = btc_driven_share(
+        ctx["c"], btc_c, ctx["streak"], bars_per_day(ctx["times"])
+    )
+    driven = share >= _BTC_DRIVEN_SHARE
+    ok = np.isfinite(share) & (driven if mode == "btc" else ~driven)
+    return (
+        np.where(ok, long_score, np.nan),
+        np.where(ok, short_score, np.nan),
+    )
+
+
 def signal_covariate_series(
     o: np.ndarray, h: np.ndarray, low: np.ndarray, c: np.ndarray,
     vol: np.ndarray, ntr: np.ndarray, taker_buy: np.ndarray,
@@ -152,7 +369,9 @@ class SwingAnalysisService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def _build_context(self, scope: dict, *, min_bars: int) -> dict:
+    async def _build_context(
+        self, scope: dict, *, min_bars: int, need_btc: bool = False
+    ) -> dict:
         """Fetch klines and compute every combo-INDEPENDENT series once.
 
         ``scope`` = {coin_id, quote_asset, interval, start_date, end_date} —
@@ -167,9 +386,12 @@ class SwingAnalysisService:
         in a small TTL cache: interactive knob-tweaking fires a request per
         change, and only the first one per scope should pay the heavy part.
         """
+        # ``need_btc`` is part of the key: BTC's series roughly doubles the DB
+        # fetch, so it's only paid for when a knob actually reads it — and a
+        # context built without it must not be served to a request that needs it.
         cache_key = (
             scope["coin_id"], scope["quote_asset"], scope["interval"],
-            str(scope["start_date"]), str(scope["end_date"]),
+            str(scope["start_date"]), str(scope["end_date"]), need_btc,
         )
         cached = _CTX_CACHE.get(cache_key)
         if cached and cached[0] > time.monotonic():
@@ -196,16 +418,53 @@ class SwingAnalysisService:
         if len(rows) < min_bars:
             return {"error": "Not enough kline history for swing analysis"}
 
-        ctx = await asyncio.to_thread(self._compute_context, rows, start_dt)
+        btc_rows = await self._btc_closes(scope, end_dt) if need_btc else None
+        ctx = await asyncio.to_thread(self._compute_context, rows, start_dt, btc_rows)
         # Single-slot cache: contexts for long 5m ranges are ~100+ MB, so keep
         # exactly one (the scope the user is actively exploring).
         _CTX_CACHE.clear()
         _CTX_CACHE[cache_key] = (time.monotonic() + _CTX_TTL_S, ctx)
         return ctx
 
+    async def _btc_closes(self, scope: dict, end_dt: datetime) -> list:
+        """BTC's closes on the scope's interval, for the BTC-beta filter.
+
+        Returns [] when the scope IS BTC (a coin can't be filtered against
+        itself) or when BTC has no bars on this interval; the filter then
+        no-ops rather than blocking every entry.
+        """
+        btc_id = (
+            await self.session.execute(select(Coin.id).where(Coin.symbol == "BTC"))
+        ).scalars().first()
+        if btc_id is None or btc_id == scope["coin_id"]:
+            return []
+        return (
+            await self.session.execute(
+                select(Kline.open_time, Kline.close)
+                .where(and_(
+                    Kline.coin_id == btc_id,
+                    Kline.quote_asset == scope["quote_asset"],
+                    Kline.interval == scope["interval"],
+                    Kline.open_time <= end_dt,
+                    Kline.active.is_(True),
+                ))
+                .order_by(Kline.open_time)
+            )
+        ).all()
+
     @staticmethod
-    def _compute_context(rows: list, start_dt: datetime) -> dict:
-        """Sync feature computation — always call via ``asyncio.to_thread``."""
+    def _compute_context(
+        rows: list, start_dt: datetime, btc_rows: list | None = None
+    ) -> dict:
+        """Sync feature computation — always call via ``asyncio.to_thread``.
+
+        ``btc_rows`` are ``(open_time, close)`` pairs for BTC on the SAME
+        interval, used by the BTC-beta filter. They're aligned by timestamp
+        rather than by position, so a gap in either series leaves a NaN instead
+        of silently pairing a bar with the wrong bar. Bar t of BTC and bar t of
+        the coin close at the same instant, so reading BTC's bar t when acting
+        on the coin's bar t close is trailing-only, not lookahead.
+        """
         n = len(rows)
         times = np.array([r[0] for r in rows])
         o = np.array([float(r[1]) for r in rows])
@@ -271,6 +530,9 @@ class SwingAnalysisService:
             "n": n,
             "first": first,  # first bar inside the sim's date range
             "times": times,
+            # BTC's close on each of THIS series' bars (NaN where BTC has no
+            # matching bar); None when the caller didn't supply it.
+            "btc_c": _align_by_time(times, btc_rows) if btc_rows else None,
             "h": h,
             "low": low,
             "c": c,
@@ -457,7 +719,12 @@ class SwingAnalysisService:
             ret = direction * (exit_price / entry - 1.0) - fee_rt
             trades.append({"i": t, "exit_i": exit_i, "timestamp": times[t],
                            "ret": ret, "side": "long" if direction == 1 else "short",
-                           "exit_reason": reason})
+                           "exit_reason": reason,
+                           # Kept so the explorers can show a trade LIST, not just
+                           # markers on a chart: the fill prices are otherwise
+                           # locals here and unrecoverable downstream.
+                           "entry_price": float(entry), "exit_price": float(exit_price),
+                           "exit_timestamp": times[exit_i]})
             exit_counts[reason] += 1
             # Per-bar returns: close-to-close inside the hold, level-to-prior-
             # close on the exit bar; fee halves at the entry and exit fills.
@@ -566,6 +833,9 @@ class SwingAnalysisService:
         confirm_sim_id: str | None = None,
         fee_bps: float = 4.0,
         time_budget_s: float = 90.0,
+        htf_gate: str = "off",
+        htf_tf: str = "4h",
+        htf_level: float = 0.5,
     ) -> dict | None:
         """Sweep the curated combo grid; tune on the FIRST half, judge on the second.
 
@@ -575,8 +845,19 @@ class SwingAnalysisService:
         combos (train < 10 trades or validation < 3) are dropped. The grid is
         shuffled deterministically so a time-budget cutoff still samples the
         whole space rather than one corner.
+
+        The higher-timeframe gate is applied as a fixed CONDITIONER on every
+        combo — as fees and model confirmation already are — never swept. Its
+        direction is close to free to fit in-sample, so letting the optimizer
+        choose it would manufacture exactly the overfit it's meant to avoid.
         """
-        ctx = await self._build_context(scope, min_bars=_Z_WIN + max(self._OPT_HOLDS) + 10)
+        if htf_gate not in TREND_GATES:
+            return {"error": f"Unknown htf_gate: {htf_gate}"}
+        htf_bars = 0 if htf_gate == "off" else htf_lookback_bars(scope["interval"], htf_tf)
+        ctx = await self._build_context(
+            scope,
+            min_bars=max(_Z_WIN, htf_min_bars(htf_bars)) + max(self._OPT_HOLDS) + 10,
+        )
         if "error" in ctx:
             return ctx
 
@@ -585,14 +866,20 @@ class SwingAnalysisService:
         # The sweep (hundreds of trade-loop passes) runs in a worker thread so
         # the event loop — and every other request — stays responsive.
         result = await asyncio.to_thread(
-            self._optimize_sync, ctx, prob_by_time, fee_bps, time_budget_s
+            self._optimize_sync, ctx, prob_by_time, fee_bps, time_budget_s,
+            htf_gate, htf_bars, htf_level,
         )
         result["use_model"] = confirm_sim_id is not None
         result["model_available"] = bool(prob_by_time)
+        result["htf_gate"] = htf_gate
+        result["htf_tf"] = htf_tf
+        result["htf_level"] = htf_level
+        result["htf_bars"] = htf_bars
         return result
 
     def _optimize_sync(
-        self, ctx: dict, prob_by_time: dict, fee_bps: float, time_budget_s: float
+        self, ctx: dict, prob_by_time: dict, fee_bps: float, time_budget_s: float,
+        htf_gate: str = "off", htf_bars: int = 0, htf_level: float = 0.5,
     ) -> dict:
         """Sync sweep body — always call via ``asyncio.to_thread``."""
         n = ctx["n"]
@@ -600,8 +887,13 @@ class SwingAnalysisService:
         mid = first + (n - first) // 2  # train = [first, mid), validation = [mid, n)
 
         # Composite scores depend only on the subset — compute each pair once.
+        # The gate masks them identically for every combo, so it too is applied
+        # here rather than inside the loop.
         scores_by_subset = {
-            name: self._composite_scores(ctx, set(keys), {})
+            name: apply_trend_gate(
+                ctx, *self._composite_scores(ctx, set(keys), {}),
+                htf_gate, htf_bars, htf_level,
+            )
             for name, keys in self._OPT_SUBSETS.items()
         }
 
@@ -693,11 +985,18 @@ class SwingAnalysisService:
         tp_mode: str = "none",
         tp_value: float = 3.0,
         weights: dict[str, float] | None = None,
+        htf_gate: str = "off",
+        htf_tf: str = "4h",
+        htf_level: float = 0.5,
+        buckets: bool = False,
+        tz_offset_minutes: int = 0,
     ) -> dict | None:
         if sl_mode not in ("none", "pct", "atr", "structure", "trail_atr"):
             return {"error": f"Unknown sl_mode: {sl_mode}"}
         if tp_mode not in ("none", "pct", "resistance", "reversal", "mean"):
             return {"error": f"Unknown tp_mode: {tp_mode}"}
+        if htf_gate not in TREND_GATES:
+            return {"error": f"Unknown htf_gate: {htf_gate}"}
         # Which composite members participate. None/empty = all.
         enabled = set(signals) if signals else set(COMPONENT_KEYS) | set(FLAG_KEYS)
         unknown = enabled - set(COMPONENT_KEYS) - set(FLAG_KEYS)
@@ -718,7 +1017,12 @@ class SwingAnalysisService:
         if any(not (0.0 <= w <= 5.0) for w in weights.values()):
             return {"error": "Signal weights must be between 0% and 500%"}
 
-        ctx = await self._build_context(scope, min_bars=_Z_WIN + hold_bars + 10)
+        # The gate reads a long trailing span off the base series, so it raises
+        # the history the scope needs before anything can be evaluated.
+        htf_bars = 0 if htf_gate == "off" else htf_lookback_bars(scope["interval"], htf_tf)
+        ctx = await self._build_context(
+            scope, min_bars=max(_Z_WIN, htf_min_bars(htf_bars)) + hold_bars + 10
+        )
         if "error" in ctx:
             return ctx
         n = ctx["n"]
@@ -736,6 +1040,13 @@ class SwingAnalysisService:
         bottom_score, top_score = await asyncio.to_thread(
             self._composite_scores, ctx, enabled, weights
         )
+        # BOTTOM scores buy the dip (long), TOP fades the crest (short), so the
+        # gate sees them in that order.
+        if htf_gate != "off":
+            bottom_score, top_score = await asyncio.to_thread(
+                apply_trend_gate, ctx, bottom_score, top_score,
+                htf_gate, htf_bars, htf_level,
+            )
 
         # Optional model confirmation from a simulation's stored forecasts:
         # require the next bar's prob_up to agree with the trade direction.
@@ -882,6 +1193,12 @@ class SwingAnalysisService:
             "tp_mode": tp_mode,
             "tp_value": tp_value,
             "weights": weights,
+            "htf_gate": htf_gate,
+            "htf_tf": htf_tf,
+            "htf_level": htf_level,
+            # 0 when the picked timeframe isn't actually higher than the scope's
+            # — the gate is then inert, and the UI needs to be able to say so.
+            "htf_bars": htf_bars,
             "exit_counts": exit_counts,
             "use_model": confirm_sim_id is not None,
             "model_available": model_available,
@@ -895,4 +1212,10 @@ class SwingAnalysisService:
             "trade_markers": markers,
             "signal_curve": signal_curve,
             "components_side": "short" if side == "short" else "long",
+            "trade_rows": build_trade_rows(trades),
+            "bucket_analysis": (
+                bucket_analysis_of(trades, tz_offset_minutes=tz_offset_minutes)
+                if buckets
+                else None
+            ),
         }

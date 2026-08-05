@@ -60,6 +60,27 @@ class Settings(BaseSettings):
     live_ingest_intervals: str = "5m,15m,30m,1h,4h,1d,1w,1M"
     live_ingest_poll_seconds: int = 5  # poll-mode cadence between full sweeps
 
+    # Live trading (order execution). A run picks its venue at start and keeps
+    # it for life, so the two venues are configured SEPARATELY — testnet and
+    # production are different accounts with different keys, and a testnet key
+    # is rejected by api.binance.com (and vice versa). Leaving the live pair
+    # empty is what keeps "Binance Live" unavailable in the UI.
+    #
+    # Testnet keys: https://testnet.binance.vision
+    # Production keys: Account -> API Management. Never enable withdrawals.
+    binance_trade_testnet_api_key: str | None = None
+    binance_trade_testnet_api_secret: str | None = None
+    binance_trade_live_api_key: str | None = None
+    binance_trade_live_api_secret: str | None = None
+
+    # Legacy single-venue settings, kept so existing deployments keep working:
+    # they supply whichever venue ``binance_trade_rest_base`` points at, and are
+    # only consulted when that venue has no explicit pair above.
+    binance_trade_rest_base: str = "https://testnet.binance.vision"
+    binance_trade_api_key: str | None = None
+    binance_trade_api_secret: str | None = None
+    binance_trade_recv_window_ms: int = 5000
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 

@@ -56,6 +56,22 @@ class CoinService:
         await self.session.flush()
         return coin
 
+    async def set_markets(
+        self, id: str, has_spot: bool | None, has_futures: bool | None
+    ) -> Coin | None:
+        """Update a coin's Binance market-availability flags. A ``None`` value is
+        left untouched (source unavailable) so a transient outage can't wipe a
+        previously-known flag."""
+        coin = await self.get(id)
+        if not coin:
+            return None
+        if has_spot is not None:
+            coin.has_spot = has_spot
+        if has_futures is not None:
+            coin.has_futures = has_futures
+        await self.session.flush()
+        return coin
+
     async def delete(self, id: str, hard_delete: bool = False) -> bool:
         """Delete a coin."""
         coin = await self.get(id)

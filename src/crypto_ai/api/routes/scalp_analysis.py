@@ -38,6 +38,16 @@ async def scalp_analysis(
     params: Annotated[str | None, Query()] = None,
     vol_gate: Annotated[str, Query()] = "off",
     vol_level: Annotated[float, Query(ge=0.1, le=5.0)] = 1.0,
+    htf_gate: Annotated[str, Query()] = "off",
+    htf_tf: Annotated[str, Query()] = "4h",
+    htf_level: Annotated[float, Query(ge=0.0, le=3.0)] = 0.5,
+    buckets: Annotated[
+        bool,
+        Query(description="Also bucket the resulting trades by hour/weekday/side"),
+    ] = False,
+    tz_offset_minutes: Annotated[
+        int, Query(ge=-840, le=840, description="Shift the time-of-day buckets")
+    ] = 0,
 ) -> ScalpAnalysisResponse:
     """Backtest one scalping strategy over an explicit kline scope."""
     if side not in ("long", "short", "both"):
@@ -65,6 +75,8 @@ async def scalp_analysis(
         threshold=threshold, hold_bars=hold_bars, fee_bps=fee_bps, side=side,
         sl_mode=sl_mode, sl_value=sl_value, tp_mode=tp_mode, tp_value=tp_value,
         params=param_map or None, vol_gate=vol_gate, vol_level=vol_level,
+        htf_gate=htf_gate, htf_tf=htf_tf, htf_level=htf_level,
+        buckets=buckets, tz_offset_minutes=tz_offset_minutes,
     )
     if result is None or result.get("error"):
         detail = (result or {}).get("error", "Analysis failed")

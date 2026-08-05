@@ -6,8 +6,11 @@
 // and Full / First-half / Second-half segments as the built-in overfitting
 // check. Each strategy contributes only its entry signal + its own knobs.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { useRegisterTemplateBridge } from "@/components/trading/template-context"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { HtfGateControl } from "@/components/trading/htf-gate-control"
+import { BacktestAnalysis } from "@/components/trading/backtest-analysis"
+import { BacktestTrades } from "@/components/trading/backtest-trades"
+import type { WorkbenchTab } from "@/components/trading/strategy-workbench"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Flag, Info } from "lucide-react"
 import {
@@ -20,7 +23,11 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { scalpAnalysisApi, type SwingScope } from "@/lib/api"
+import { scalpAnalysisApi, coinsApi, type SwingScope } from "@/lib/api"
+
+// Server-side cap on trade_markers (services/swing_analysis.py _MAX_TRADE_MARKERS).
+// Hitting it means the chart is showing a prefix, not the whole set.
+const MAX_TRADE_MARKERS = 1000
 
 const CHART_TOOLTIP_STYLE = {
   fontSize: 12,
@@ -48,10 +55,19 @@ function InfoIcon({ text }: { text: ReactNode }) {
 }
 
 const FEE_PRESETS = [
-  { value: 4, label: "Futures maker (4 bps RT)" },
-  { value: 10, label: "Futures taker (10 bps RT)" },
-  { value: 20, label: "Spot taker (20 bps RT)" },
+  { value: 4, label: "Futures maker (4 bps RT)", market: "futures" },
+  { value: 10, label: "Futures taker (10 bps RT)", market: "futures" },
+  { value: 20, label: "Spot taker (20 bps RT)", market: "spot" },
 ] as const
+
+// A fee model is offered unless the coin is known NOT to have the market it
+// needs (null = unchecked → keep it). Empty result falls back to all presets.
+function allowedFees(coin?: { has_spot: boolean | null; has_futures: boolean | null }) {
+  const filtered = FEE_PRESETS.filter((p) =>
+    p.market === "spot" ? coin?.has_spot !== false : coin?.has_futures !== false,
+  )
+  return filtered.length ? filtered : FEE_PRESETS
+}
 
 interface ParamDef {
   key: string
@@ -121,6 +137,15 @@ const CONFIGS: Record<string, StrategyConfig> = {
         info: "Require the run to be advancing on FALLING volume (3rd bar lighter than the 1st) — dwindling participation. In the research this conditioner roughly DOUBLED the fade edge on every dataset, at the cost of fewer entries.",
         options: [{ value: 0, label: "Not required" }, { value: 1, label: "Required" }],
       },
+      {
+        key: "btc_filter", label: "BTC-beta filter", min: 0, max: 2, step: 1, default: 0,
+        info: "Split each bar's move into the part BTC explains (beta × BTC) and this coin's own residual, then judge the run by which one drove it. A run BTC explains is the whole market repricing — a trend, and fading it loses. A run in the residual is this coin's book overreacting, which is what reverts. Measured over 339 coins × 1 year of 5m bars: BTC-driven runs reverted −0.22 bps (monthly-block t −0.72, no edge at all) versus +1.96 bps (t 10.5) for idiosyncratic ones, against +1.32 bps unfiltered. About 29% of entries are BTC-driven, so this drops roughly a third of trades and raises the edge on the rest by about half — better gross edge AND less fee drag. 'Only BTC-driven' is the null control: if it scores like 'Only idiosyncratic', the split is noise and this should be off. Caveat: +1.96 bps gross is still under the 8 bps round-trip fee — this improves a strategy, it doesn't make one profitable. Needs BTC klines on the same timeframe; a run whose coin IS BTC ignores the setting.",
+        options: [
+          { value: 0, label: "Off" },
+          { value: 1, label: "Only idiosyncratic runs" },
+          { value: 2, label: "Only BTC-driven runs (control)" },
+        ],
+      },
     ],
   },
   sweep: {
@@ -168,11 +193,36 @@ const INDICATOR_PARAMS: Record<string, ParamDef[]> = {
 
 export type ScalpStrategy = "range" | "momentum" | "indicator" | "streak" | "sweep" | "takerflow"
 
-export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy: ScalpStrategy }) {
+export function ScalpExplorer({
+  scope, strategy, activeTab, onParams, loadParams,
+}: {
+  scope: SwingScope
+  strategy: ScalpStrategy
+  // Which workbench tab is showing. Inactive regions are HIDDEN, never
+  // unmounted — switching tabs must not reset a knob or refire the analysis.
+  activeTab: WorkbenchTab
+  // Publishes the current signal parameters so the workbench's Create Strategy
+  // dialog can save them.
+  onParams: (params: Record<string, unknown>) => void
+  // A saved strategy's knobs to restore ("Open in Analytics"), applied once
+  // per token. Null when nothing was handed over.
+  loadParams: { token: string; params: Record<string, unknown> } | null
+}) {
   const cfg = CONFIGS[strategy]
   const [threshold, setThreshold] = useState(cfg.thresholdDefault)
   const [holdBars, setHoldBars] = useState(6)
   const [feeBps, setFeeBps] = useState<number>(4)
+  // Restrict the fee models to the Binance markets this coin actually trades on.
+  const { data: coins } = useQuery({
+    queryKey: ["coins"],
+    queryFn: () => coinsApi.list({ limit: 1000 }),
+    staleTime: 60_000,
+  })
+  const coin = coins?.find((c) => c.id === scope.coin_id)
+  const feePresets = useMemo(() => allowedFees(coin), [coin])
+  useEffect(() => {
+    if (!feePresets.some((p) => p.value === feeBps)) setFeeBps(feePresets[0].value)
+  }, [feePresets, feeBps])
   const [side, setSide] = useState(cfg.sideDefault)
   const [slMode, setSlMode] = useState("none")
   const [slValue, setSlValue] = useState(2)
@@ -184,6 +234,10 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
   // breakouts continue in expansions). Applies to every scalp strategy.
   const [volGate, setVolGate] = useState("off")
   const [volLevel, setVolLevel] = useState(1.0)
+  // Higher-timeframe trend gate — off by default; see htf-gate-control.tsx.
+  const [htfGate, setHtfGate] = useState("off")
+  const [htfTf, setHtfTf] = useState("4h")
+  const [htfLevel, setHtfLevel] = useState(0.5)
   const [showTradeMarkers, setShowTradeMarkers] = useState(true)
 
   const paramDefs = strategy === "indicator" ? INDICATOR_PARAMS[indicator] : cfg.params
@@ -197,8 +251,8 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
   // view-only, so it's left out.
   const templateParams = useMemo(() => ({
     threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue,
-    volGate, volLevel, indicator, paramValues,
-  }), [threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, volGate, volLevel, indicator, paramValues])
+    volGate, volLevel, htfGate, htfTf, htfLevel, indicator, paramValues,
+  }), [threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, volGate, volLevel, htfGate, htfTf, htfLevel, indicator, paramValues])
 
   function applyTemplate(p: Record<string, unknown>) {
     if (typeof p.threshold === "number") setThreshold(p.threshold)
@@ -211,6 +265,9 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
     if (typeof p.tpValue === "number") setTpValue(p.tpValue)
     if (typeof p.volGate === "string") setVolGate(p.volGate)
     if (typeof p.volLevel === "number") setVolLevel(p.volLevel)
+    if (typeof p.htfGate === "string") setHtfGate(p.htfGate)
+    if (typeof p.htfTf === "string") setHtfTf(p.htfTf)
+    if (typeof p.htfLevel === "number") setHtfLevel(p.htfLevel)
     if (typeof p.indicator === "string") setIndicator(p.indicator)
     if (p.paramValues && typeof p.paramValues === "object") setParamValues(p.paramValues as Record<string, number>)
   }
@@ -239,22 +296,53 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
     } catch { /* ignore quota/serialization errors */ }
   }, [restored, storageKey, templateParams, showTradeMarkers])
 
-  // Expose params + scope + apply fn to the topbar template modal.
-  useRegisterTemplateBridge(
-    strategy,
-    () => templateParams,
-    applyTemplate,
-    () => ({ coin_id: scope.coin_id, quote_asset: scope.quote_asset, interval: scope.interval }),
-  )
+  // Publish the current params to the workbench (Create Strategy saves these).
+  useEffect(() => { onParams(templateParams) }, [onParams, templateParams])
+
+  // "Open in Analytics" handed us a saved strategy's knobs. Applied once per
+  // token, AFTER the localStorage restore above (effects run in order), so the
+  // strategy wins over whatever was last left on this page — and never re-applies
+  // over edits made afterwards.
+  const loadedTokenRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!loadParams || loadedTokenRef.current === loadParams.token) return
+    loadedTokenRef.current = loadParams.token
+    applyTemplate(loadParams.params)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadParams])
+
+  // The Analytics tab's hour/weekday cuts are computed from the SAME backtest,
+  // so they ride along on this request rather than firing a second one. Latched
+  // on first visit: once asked for, keep asking, or every tab switch back would
+  // change the query key and re-run the backtest.
+  const [wantBuckets, setWantBuckets] = useState(false)
+  useEffect(() => { if (activeTab === "analytics") setWantBuckets(true) }, [activeTab])
+
+  // Charts must not first render inside a display:none container — a
+  // ResponsiveContainer measures 0×0 there and can come back collapsed. Each
+  // chart region is therefore latched on its first visit: hidden-but-mounted
+  // afterwards (so nothing re-fetches), but never mounted while never-shown.
+  const [seenResults, setSeenResults] = useState(false)
+  const [seenAnalytics, setSeenAnalytics] = useState(false)
+  useEffect(() => {
+    if (activeTab === "results") setSeenResults(true)
+    if (activeTab === "analytics") setSeenAnalytics(true)
+  }, [activeTab])
+  const [tzLocal, setTzLocal] = useState(false)
+  // Positive-east offset in minutes (getTimezoneOffset is positive-west).
+  const localOffset = useMemo(() => -new Date().getTimezoneOffset(), [])
+  const tzOffset = tzLocal ? localOffset : 0
 
   const scopeKey = `${scope.coin_id}:${scope.quote_asset}:${scope.interval}:${scope.start_date}:${scope.end_date}`
-  const { data, isFetching, error } = useQuery({
-    queryKey: ["scalpAnalysis", strategy, scopeKey, threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, indicator, paramsStr, volGate, volLevel],
+  const { data, isFetching, error, refetch } = useQuery({
+    queryKey: ["scalpAnalysis", strategy, scopeKey, threshold, holdBars, feeBps, side, slMode, slValue, tpMode, tpValue, indicator, paramsStr, volGate, volLevel, htfGate, htfTf, htfLevel, wantBuckets, wantBuckets ? tzOffset : 0],
     queryFn: () => scalpAnalysisApi.analyze(scope, {
       strategy, indicator: strategy === "indicator" ? indicator : undefined,
       threshold, hold_bars: holdBars, fee_bps: feeBps, side,
       sl_mode: slMode, sl_value: slValue, tp_mode: tpMode, tp_value: tpValue,
       params: paramsStr || undefined, vol_gate: volGate, vol_level: volLevel,
+      htf_gate: htfGate, htf_tf: htfTf, htf_level: htfLevel,
+      buckets: wantBuckets, tz_offset_minutes: tzOffset,
     }),
     // Wait until saved selections are restored so we don't fire a throwaway
     // analysis with default params on every page visit.
@@ -285,6 +373,11 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
     [data],
   )
   const drawMarkers = showTradeMarkers && tradeMarkers.length <= 300
+  // The server caps trade_markers at MAX_TRADE_MARKERS; the Full-range segment is
+  // the only honest trade COUNT. Reporting the capped array made a 2,770-trade
+  // backtest announce "1000", which reads as a real number and isn't one.
+  const fullTrades = data?.segments?.find((s) => s.label === "Full range")?.n_trades ?? null
+  const markersTruncated = tradeMarkers.length >= MAX_TRADE_MARKERS
 
   const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`
   const tCol = (t: number) => (t >= 3 ? "text-green-500" : t >= 2 ? "text-amber-400" : t <= -2 ? "text-red-400" : "text-muted-foreground")
@@ -292,7 +385,9 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
   const consistent = halves.length === 2 && halves.every((s) => s.avg_net_bps > 0)
 
   return (
-    <div className="space-y-4">
+    <>
+    {/* ── Parameters ── */}
+    <div className={cn("space-y-4", activeTab !== "parameters" && "hidden")}>
       <p className="text-xs text-muted-foreground max-w-3xl">{cfg.intro}</p>
 
       {/* Controls */}
@@ -359,6 +454,12 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
             )}
           </div>
         </div>
+        <HtfGateControl
+          baseInterval={scope.interval}
+          gate={htfGate} setGate={setHtfGate}
+          tf={htfTf} setTf={setHtfTf}
+          level={htfLevel} setLevel={setHtfLevel}
+        />
         <div>
           <div className="flex items-center gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">{cfg.thresholdLabel}</label>
@@ -382,7 +483,7 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
             <InfoIcon text="Round-trip trading cost. Scalping's tiny per-trade edges live or die on fees — futures maker is the only realistic venue for most of these strategies; spot taker is shown as the pessimistic bound." />
           </div>
           <select value={feeBps} onChange={(e) => setFeeBps(Number(e.target.value))} className="w-full h-9 mt-1 px-3 border border-input rounded-md bg-background text-sm">
-            {FEE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            {feePresets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         </div>
         <div>
@@ -459,8 +560,11 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
           </div>
         </div>
       </div>
+    </div>
 
-      {error ? (
+    {/* ── Results ── */}
+    <div className={cn("space-y-4", activeTab !== "results" && "hidden")}>
+      {!seenResults ? null : error ? (
         <p className="text-sm text-muted-foreground py-8">Analysis failed: {(error as Error).message || "request error"}</p>
       ) : !data ? (
         <p className="text-sm text-muted-foreground py-8">{isFetching ? "Analyzing… (large ranges can take a little while on the first run)" : "—"}</p>
@@ -543,7 +647,10 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
             </ResponsiveContainer>
             <p className="px-2 pb-1 text-[10px] text-muted-foreground">
               {showTradeMarkers && !drawMarkers ? (
-                <span className="text-amber-400">Too many trades ({tradeMarkers.length}) to draw individual markers — narrow the date range or tighten the entry to see them. </span>
+                <span className="text-amber-400">
+                  Too many trades ({fullTrades ?? tradeMarkers.length}) to draw individual markers — narrow the date range or tighten the entry to see them.
+                  {markersTruncated && " Only the first 1,000 are charted; the segment figures above cover every trade."}{" "}
+                </span>
               ) : (
                 <>Shaded bands = each trade&apos;s in-market window; colour = outcome (green won, red lost); solid entry lines are longs, dashed are shorts. </>
               )}
@@ -585,8 +692,32 @@ export function ScalpExplorer({ scope, strategy }: { scope: SwingScope; strategy
           <p className="text-xs text-muted-foreground">
             Signal computed from raw OHLCV, trailing windows only (no lookahead). Entries are non-overlapping, held up to {data.hold_bars} bars{data.sl_mode !== "none" ? ", stopped out when the stop level is touched" : ""}{data.tp_mode !== "none" ? ", taking profit per the selected target" : ""}; intra-bar level exits fill at the level (stop wins if both could fill in one bar); {data.fee_bps} bps per round trip. Knobs tuned here are in-sample — trust a setting only if it holds in the second half and on other coins/periods.
           </p>
+
+          {/* The trades themselves, under the charts. */}
+          <BacktestTrades
+            rows={data.trade_rows ?? []}
+            totalTrades={fullTrades}
+            scope={scope}
+            strategy={strategy}
+            params={templateParams}
+          />
+
         </div>
       )}
     </div>
+
+    {/* ── Analytics ── */}
+    <div className={cn(activeTab !== "analytics" && "hidden")}>
+      {seenAnalytics && <BacktestAnalysis
+        data={data?.bucket_analysis}
+        isFetching={isFetching}
+        isError={!!error}
+        useLocal={tzLocal}
+        onUseLocalChange={setTzLocal}
+        tzOffset={tzOffset}
+        onRefresh={() => refetch()}
+      />}
+    </div>
+    </>
   )
 }

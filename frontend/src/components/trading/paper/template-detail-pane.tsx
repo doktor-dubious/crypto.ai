@@ -3,12 +3,14 @@
 // Detail pane for a strategy template on the Paper Trade page. Same shell as the
 // worker/ingester panes (tabs, maximize, animated underline). Tabs: Details
 // (editable name/description/notes + read-only id), Data (read-only strategy /
-// coin / pair / timeframe / params), Actions (start-stop + delete).
+// coin / pair / timeframe / params), AI, Trades, Analyze (bucketed performance),
+// Actions (start-stop + delete).
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { Play, Square, Trash2, Save } from "lucide-react"
+import { LineChart, Play, Trash2, Save } from "lucide-react"
 import { toast } from "sonner"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { AnimateIcon } from "@/components/animate-ui/icons/icon"
@@ -18,14 +20,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import {
-  Pagination, PaginationContent, PaginationEllipsis, PaginationItem,
-  PaginationLink, PaginationNext, PaginationPrevious,
-} from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
-import { strategyLabel, strategyDescription } from "@/components/trading/strategy-meta"
-import { strategyTemplatesApi, paperTradeApi, type StrategyTemplate, type CoinResponse } from "@/lib/api"
+import { strategyLabel, strategyDescription, strategyAnalyticsHref } from "@/components/trading/strategy-meta"
+import { AnalysisTab } from "@/components/trading/paper/analysis-tab"
+import { TradesTable } from "@/components/trading/paper/trades-table"
+import { strategyTemplatesApi, type StrategyTemplate, type CoinResponse } from "@/lib/api"
 
 const TAB_STORAGE_KEY = "gorm:paperTrade:activeTab"
 
@@ -46,18 +47,24 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 export function TemplateDetailPane({
   template,
   coinById,
+  initialRunId,
   isRunning,
   onStartStop,
   onDelete,
 }: {
   template: StrategyTemplate
   coinById: Map<string, CoinResponse>
+  // Run the Trades tab should open on, when the pane was opened from a row that
+  // stood for one specific run (a Sweep template×coin row, an Active card).
+  initialRunId?: string | null
   isRunning: boolean
   onStartStop: (template: StrategyTemplate, action: "start" | "stop") => void
   onDelete: (template: StrategyTemplate) => void
 }) {
   const t = useTranslations("paperTrade")
   const queryClient = useQueryClient()
+  const router = useRouter()
+  const analyticsHref = strategyAnalyticsHref(template.strategy, template.id)
 
   const [activeTab, setActiveTab] = useState<string>(loadActiveTab)
   const [maximized, setMaximized] = useState(false)
@@ -107,10 +114,28 @@ export function TemplateDetailPane({
     onError: () => toast.error(t("saveError")),
   })
 
+  // The AI-confirmation switch saves immediately (no save bar) — it's an
+  // operational gate the engine reads live, not part of the edited text fields.
+  const aiMutation = useMutation({
+    mutationFn: (on: boolean) =>
+      strategyTemplatesApi.update(template.id, { ai_confirmation: on }),
+    onSuccess: (_r, on) => {
+      queryClient.invalidateQueries({ queryKey: ["strategyTemplates"] })
+      toast.success(on ? t("aiConfirmEnabled") : t("aiConfirmDisabled"))
+    },
+    onError: () => toast.error(t("saveError")),
+  })
+
   const scope = template.scope ?? {}
   const symbol = scope.coin_id ? coinById.get(scope.coin_id)?.symbol ?? "—" : "—"
   const pair = scope.coin_id ? `${symbol}/${scope.quote_asset ?? "USDT"}` : "—"
   const params = flattenParams(template.params ?? {})
+  // An ABSTRACT strategy has no market of its own — each run picks one. Say that
+  // rather than showing em-dashes, which read as missing data.
+  const marketCell = (value: string) =>
+    template.is_abstract
+      ? <span className="text-[var(--muted-foreground)] italic">{t("marketAny")}</span>
+      : value
 
   return (
     <div className={cn(
@@ -122,7 +147,9 @@ export function TemplateDetailPane({
           <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
             <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
             <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabData")}</TabsTrigger>
+            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabAi")}</TabsTrigger>
             <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabTrades")}</TabsTrigger>
+            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabAnalyze")}</TabsTrigger>
             <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
             <div
               className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
@@ -164,9 +191,9 @@ export function TemplateDetailPane({
             <InfoRow label={t("strategyDescription")}>
               <span className="text-[var(--muted-foreground)]">{strategyDescription(template.strategy)}</span>
             </InfoRow>
-            <InfoRow label={t("coin")}>{symbol}</InfoRow>
-            <InfoRow label={t("tradingPair")}>{pair}</InfoRow>
-            <InfoRow label={t("timeframe")}>{scope.interval ?? "—"}</InfoRow>
+            <InfoRow label={t("coin")}>{marketCell(symbol)}</InfoRow>
+            <InfoRow label={t("tradingPair")}>{marketCell(pair)}</InfoRow>
+            <InfoRow label={t("timeframe")}>{marketCell(scope.interval ?? "—")}</InfoRow>
             <div className="pt-3">
               <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("parameters")}</p>
               {params.length === 0 ? (
@@ -184,9 +211,30 @@ export function TemplateDetailPane({
             </div>
           </TabsContent>
 
+          {/* ── AI (external trade confirmation) ── */}
+          <TabsContent value="tab5" className="space-y-4 max-w-2xl mt-6 px-4">
+            <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold">{t("aiConfirmTitle")}</p>
+                <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmDescription")}</p>
+              </div>
+              <Switch
+                checked={template.ai_confirmation}
+                onCheckedChange={(v) => aiMutation.mutate(v)}
+                className={cn("shrink-0", aiMutation.isPending && "opacity-50 pointer-events-none")}
+              />
+            </div>
+            <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmHint")}</p>
+          </TabsContent>
+
           {/* ── Trades (round-trip paper trades) ── */}
           <TabsContent value="tab4" className="mt-4 px-4">
-            <TradesTable templateId={template.id} isRunning={isRunning} />
+            <TradesTable templateId={template.id} coinById={coinById} initialRunId={initialRunId} isRunning={isRunning} />
+          </TabsContent>
+
+          {/* ── Analyze (when does this strategy actually work?) ── */}
+          <TabsContent value="tab6" className="mt-2 px-4">
+            <AnalysisTab key={template.id} templateId={template.id} />
           </TabsContent>
 
           {/* ── Actions ── */}
@@ -196,16 +244,31 @@ export function TemplateDetailPane({
                 <p className="text-sm font-semibold">{t("runTitle")}</p>
                 <p className="text-xs text-[var(--muted-foreground)]">{t("runDescription")}</p>
               </div>
-              {isRunning ? (
-                <Button variant="secondary" size="sm" className="shrink-0 cursor-pointer" onClick={() => onStartStop(template, "stop")}>
-                  <Square className="h-3.5 w-3.5 mr-1.5" />{t("stopStrategy")}
-                </Button>
-              ) : (
-                <Button variant="default" size="sm" className="shrink-0 cursor-pointer" onClick={() => onStartStop(template, "start")}>
-                  <Play className="h-3.5 w-3.5 mr-1.5" />{t("startStrategy")}
-                </Button>
-              )}
+              <Button variant="default" size="sm" className="shrink-0 cursor-pointer" onClick={() => onStartStop(template, "start")}>
+                <Play className="h-3.5 w-3.5 mr-1.5" />{t("startNew")}
+              </Button>
             </div>
+
+            {/* Back to the workbench this strategy came from, pre-loaded with
+                its own market and knobs — the way to re-examine or re-tune it.
+                Hidden for a strategy whose slug has no workbench to open. */}
+            {analyticsHref && (
+              <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">{t("openAnalyticsTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    {template.is_abstract ? t("openAnalyticsAbstract") : t("openAnalyticsDescription")}
+                  </p>
+                </div>
+                <Button
+                  variant="outline" size="sm" className="shrink-0 cursor-pointer"
+                  onClick={() => router.push(analyticsHref)}
+                >
+                  <LineChart className="h-3.5 w-3.5 mr-1.5" />{t("openAnalytics")}
+                </Button>
+              </div>
+            )}
+
             <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
               <div className="space-y-0.5">
                 <p className="text-sm font-semibold text-destructive">{t("deleteTitle")}</p>
@@ -243,135 +306,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-// The run's paper trades — one row per round-trip (buy + sell), newest first.
-// Polls while the strategy is running so new trades stream in.
-const TRADES_PER_PAGE = 10
-
-// Windowed page links (max 7), matching the master table on the same page.
-function buildPaginationPages(current: number, total: number): (number | "ellipsis")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const pages: (number | "ellipsis")[] = [1]
-  if (current > 3) pages.push("ellipsis")
-  for (let p = Math.max(2, current - 1); p <= Math.min(total - 1, current + 1); p++) pages.push(p)
-  if (current < total - 2) pages.push("ellipsis")
-  pages.push(total)
-  return pages
-}
-
-function TradesTable({ templateId, isRunning }: { templateId: string; isRunning: boolean }) {
-  const t = useTranslations("paperTrade")
-  const { data: trades = [] } = useQuery({
-    queryKey: ["paperTrades", templateId],
-    queryFn: () => paperTradeApi.listTrades(templateId),
-    refetchInterval: isRunning ? 8000 : false,
-  })
-
-  const [page, setPage] = useState(1)
-  useEffect(() => { setPage(1) }, [templateId])
-  const totalPages = Math.max(1, Math.ceil(trades.length / TRADES_PER_PAGE))
-  const safePage = Math.min(page, totalPages)
-  const pageTrades = trades.slice((safePage - 1) * TRADES_PER_PAGE, safePage * TRADES_PER_PAGE)
-
-  if (trades.length === 0) {
-    return <p className="py-8 text-center text-sm text-[var(--muted-foreground)]">{t("noTrades")}</p>
-  }
-  const px = (v: number | null) => (v == null ? "—" : v.toLocaleString(undefined, { maximumSignificantDigits: 8 }))
-  const dt = (v: string | null) => (v == null ? "—" : new Date(v).toLocaleString())
-  return (
-    <div className="rounded-md border">
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead className="bg-[var(--muted)]/40 text-[var(--muted-foreground)]">
-          <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:text-left [&>th]:font-medium whitespace-nowrap">
-            <th>{t("colSide")}</th>
-            <th className="text-right!">{t("colQty")}</th>
-            <th>{t("colEntry")}</th>
-            <th className="text-right!">{t("colEntryPrice")}</th>
-            <th>{t("colExit")}</th>
-            <th className="text-right!">{t("colExitPrice")}</th>
-            <th className="text-right!">{t("colPnl")}</th>
-            <th>{t("colReason")}</th>
-            <th>{t("colAiVerdict")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pageTrades.map((tr) => {
-            const open = tr.status === "open"
-            return (
-              <tr key={tr.trade_seq} className={cn("border-t [&>td]:px-3 [&>td]:py-1.5 whitespace-nowrap", open && "bg-amber-500/5")}>
-                <td className={cn(tr.side === "long" ? "text-emerald-500" : "text-red-500")}>{tr.side}</td>
-                <td className="text-right font-mono tabular-nums">{px(tr.qty)}</td>
-                <td className="tabular-nums">{dt(tr.entry_time)}</td>
-                <td className="text-right font-mono tabular-nums">{px(tr.entry_price)}</td>
-                <td className="tabular-nums">{open ? <span className="text-amber-600 dark:text-amber-400">{t("open")}</span> : dt(tr.exit_time)}</td>
-                <td className="text-right font-mono tabular-nums">{px(tr.exit_price)}</td>
-                <td className={cn(
-                  "text-right font-mono tabular-nums",
-                  tr.realized_pnl == null ? "text-[var(--muted-foreground)]"
-                    : tr.realized_pnl >= 0 ? "text-emerald-500" : "text-red-500",
-                )}>
-                  {tr.realized_pnl == null ? "—" : `${tr.realized_pnl >= 0 ? "+" : ""}${tr.realized_pnl.toFixed(2)}`}
-                </td>
-                <td className="text-[var(--muted-foreground)]">{open ? "—" : tr.exit_reason ?? "—"}</td>
-                <td>
-                  {tr.ai_verdict == null ? (
-                    <span className="text-[var(--muted-foreground)]">—</span>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      title={tr.ai_explanation ?? undefined}
-                      className={cn(
-                        "text-xs",
-                        tr.ai_verdict === "GO"
-                          ? "border-emerald-500/40 text-emerald-500"
-                          : "border-red-500/40 text-red-500",
-                      )}
-                    >
-                      {tr.ai_verdict === "GO" ? t("aiGo") : t("aiNoGo")}
-                    </Badge>
-                  )}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-
-    <div className="flex items-center justify-between px-3 py-1.5 border-t">
-      <span className="text-xs text-[var(--muted-foreground)]">
-        {t("showingTrades", {
-          from: (safePage - 1) * TRADES_PER_PAGE + 1,
-          to: Math.min(safePage * TRADES_PER_PAGE, trades.length),
-          total: trades.length,
-        })}
-      </span>
-      {totalPages > 1 && (
-        <Pagination className="w-auto mx-0">
-          <PaginationContent>
-            <PaginationItem>
-              <PaginationPrevious onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1} />
-            </PaginationItem>
-            {buildPaginationPages(safePage, totalPages).map((p, i) =>
-              p === "ellipsis" ? (
-                <PaginationItem key={`e${i}`}><PaginationEllipsis /></PaginationItem>
-              ) : (
-                <PaginationItem key={p}>
-                  <PaginationLink isActive={safePage === p} onClick={() => setPage(p)}>{p}</PaginationLink>
-                </PaginationItem>
-              )
-            )}
-            <PaginationItem>
-              <PaginationNext onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages} />
-            </PaginationItem>
-          </PaginationContent>
-        </Pagination>
-      )}
-    </div>
-    </div>
-  )
-}
-
 function formatParam(v: unknown): string {
   if (Array.isArray(v)) return v.length ? v.join(", ") : "—"
   if (typeof v === "boolean") return v ? "on" : "off"
@@ -383,7 +317,14 @@ function formatParam(v: unknown): string {
 const SUB_LABELS: Record<string, string> = {
   window: "Window", band_pct: "Band %", max_width_pct: "Max width %",
   fast: "Fast", slow: "Slow", period: "Period", vwap_window: "VWAP window",
-  require_voldiv: "Vol divergence", fade: "Fade",
+  require_voldiv: "Vol divergence", fade: "Fade", btc_filter: "BTC-beta filter",
+}
+
+// Sub-knobs whose numeric value encodes a mode — showing "1" tells the reader
+// nothing, and this pane is the record of what a run actually traded.
+const SUB_VALUE_LABELS: Record<string, Record<string, string>> = {
+  btc_filter: { "0": "off", "1": "idiosyncratic only", "2": "BTC-driven only" },
+  require_voldiv: { "0": "not required", "1": "required" },
 }
 
 // Turn the explorer's raw template.params blob into a flat, readable list of
@@ -403,11 +344,12 @@ function flattenParams(params: Record<string, unknown>): { label: string; value:
   if (p.slMode && p.slMode !== "none") push("Stop-loss", `${p.slMode} (${num(p.slValue)})`)
   if (p.tpMode && p.tpMode !== "none") push("Take-profit", `${p.tpMode} (${num(p.tpValue)})`)
   if (p.volGate && p.volGate !== "off") push("Vol gate", `${p.volGate} (${num(p.volLevel)})`)
+  if (p.htfGate && p.htfGate !== "off") push("HTF gate", `${p.htfGate} ${p.htfTf ?? "4h"} (${num(p.htfLevel ?? 0.5)}σ)`)
   if (p.indicator) push("Indicator", num(p.indicator))
 
   if (p.paramValues && typeof p.paramValues === "object") {
     for (const [k, v] of Object.entries(p.paramValues as Record<string, unknown>)) {
-      push(SUB_LABELS[k] ?? k, formatParam(v))
+      push(SUB_LABELS[k] ?? k, SUB_VALUE_LABELS[k]?.[String(v)] ?? formatParam(v))
     }
   }
   if (Array.isArray(p.disabledSignals) && p.disabledSignals.length) {

@@ -17,7 +17,12 @@ class StrategyTemplateService:
         self.session = session
 
     async def create(self, data: StrategyTemplateCreate) -> StrategyTemplate:
-        template = StrategyTemplate(**data.model_dump())
+        fields = data.model_dump()
+        # An abstract strategy is params-only by definition — never let a scope
+        # ride along, or it would quietly behave like a concrete one at start().
+        if fields.get("is_abstract"):
+            fields["scope"] = None
+        template = StrategyTemplate(**fields)
         self.session.add(template)
         await self.session.flush()
         return template
@@ -42,8 +47,12 @@ class StrategyTemplateService:
         template = await self.get(template_id)
         if not template:
             return None
-        for key, value in data.model_dump(exclude_unset=True).items():
+        fields = data.model_dump(exclude_unset=True)
+        for key, value in fields.items():
             setattr(template, key, value)
+        # Same invariant as create(): turning a strategy abstract drops its scope.
+        if template.is_abstract:
+            template.scope = None
         await self.session.flush()
         return template
 

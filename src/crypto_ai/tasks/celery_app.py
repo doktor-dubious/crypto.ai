@@ -24,16 +24,27 @@ celery_app = Celery(
     "crypto_ai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["crypto_ai.tasks.predictions", "crypto_ai.tasks.simulations", "crypto_ai.tasks.finetuning", "crypto_ai.tasks.optimization", "crypto_ai.tasks.finetune_examination", "crypto_ai.tasks.kline_simulations", "crypto_ai.tasks.imports", "crypto_ai.tasks.orchestration", "crypto_ai.tasks.metadata", "crypto_ai.tasks.paper_trade"],
+    include=["crypto_ai.tasks.predictions", "crypto_ai.tasks.simulations", "crypto_ai.tasks.finetuning", "crypto_ai.tasks.optimization", "crypto_ai.tasks.finetune_examination", "crypto_ai.tasks.kline_simulations", "crypto_ai.tasks.imports", "crypto_ai.tasks.orchestration", "crypto_ai.tasks.metadata", "crypto_ai.tasks.paper_trade",
+        "crypto_ai.tasks.strategy_optimization", "crypto_ai.tasks.live_trade"],
 )
 
 # Periodic schedule (run the worker with embedded beat, ``celery worker -B``).
-# The paper-trade engine ticks ~once a minute, stepping every running run
-# forward by any newly-closed bars.
+# The paper- and live-trade engines tick ~once a minute, stepping every running
+# run forward by any newly-closed bars.
 celery_app.conf.beat_schedule = {
     "step-paper-trades": {
         "task": "crypto_ai.tasks.paper_trade.step_paper_trades",
         "schedule": 60.0,
+    },
+    "step-live-trades": {
+        "task": "crypto_ai.tasks.live_trade.step_live_trades",
+        "schedule": 60.0,
+    },
+    # Sweep rotation: swap out paper-trade runs past their dwell time and top
+    # the fleet back up with the next untried strategy×coin combos.
+    "rotate-paper-sweeps": {
+        "task": "crypto_ai.tasks.paper_trade.rotate_paper_sweeps",
+        "schedule": 3600.0,
     },
 }
 celery_app.conf.timezone = "UTC"

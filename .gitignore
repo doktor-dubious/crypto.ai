@@ -63,6 +63,8 @@ Thumbs.db
 *.sqlite
 log/*.json
 log/*.log
+log/*.json.*
+log/*.log.*
 
 # Models (HF cache + fine-tuned checkpoints) — top-level only
 /models/

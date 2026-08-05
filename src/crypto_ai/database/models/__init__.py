@@ -5,13 +5,23 @@
 from crypto_ai.database.models.sales import Sales
 from crypto_ai.database.models.configuration import Configuration
 from crypto_ai.database.models.coin import Coin
+from crypto_ai.database.models.coin_group import CoinGroup
+from crypto_ai.database.models.coin_group_member import CoinGroupMember
 from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.kline_simulation import KlineSimulation
 from crypto_ai.database.models.kline_simulation_prediction import KlineSimulationPrediction
 from crypto_ai.database.models.kline_strategy import KlineStrategy, KlineStrategyParameter
+from crypto_ai.database.models.live_trade import LiveTrade
+from crypto_ai.database.models.live_trade_equity import LiveTradeEquity
+from crypto_ai.database.models.live_trade_run import LiveTradeRun
+from crypto_ai.database.models.paper_sweep import PaperSweep
 from crypto_ai.database.models.paper_trade import PaperTrade
 from crypto_ai.database.models.paper_trade_equity import PaperTradeEquity
 from crypto_ai.database.models.paper_trade_run import PaperTradeRun
+from crypto_ai.database.models.strategy_optimization import (
+    StrategyOptimization,
+    StrategyOptimizationResult,
+)
 from crypto_ai.database.models.strategy_template import StrategyTemplate
 from crypto_ai.database.models.covariate import Covariate, CovariateOutlet
 from crypto_ai.database.models.last_prediction import LastPrediction
@@ -61,15 +71,21 @@ __all__ = [
     "ChatMessage",
     "ChatSession",
     "Coin",
+    "CoinGroup",
+    "CoinGroupMember",
     "Kline",
     "KlineSimulation",
     "KlineSimulationPrediction",
     "KlineStrategy",
     "KlineStrategyParameter",
     "StrategyTemplate",
+    "PaperSweep",
     "PaperTradeRun",
     "PaperTrade",
     "PaperTradeEquity",
+    "LiveTradeRun",
+    "LiveTrade",
+    "LiveTradeEquity",
     "Configuration",
     "ConfigurationCovariate",
     "Covariate",
@@ -116,6 +132,8 @@ __all__ = [
     "SimulationDate",
     "SimulationFilter",
     "SimulationStrategy",
+    "StrategyOptimization",
+    "StrategyOptimizationResult",
     "TaskRecord",
     "Llm",
     "LlmSubmodel",

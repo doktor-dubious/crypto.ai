@@ -1650,6 +1650,10 @@ export interface CoinResponse {
   description: string | null
   type: string | null
   categories: string[]
+  // Binance market availability (null = not yet checked). Spot-taker fees need a
+  // spot market; futures maker/taker fees need a USDⓈ-M perpetual.
+  has_spot: boolean | null
+  has_futures: boolean | null
   active: boolean
   created_at: string
   updated_at: string
@@ -1682,6 +1686,71 @@ export const coinsApi = {
       { method: "POST" },
     )
   },
+  // Refresh Binance spot / futures availability flags for the given coins (or all
+  // if omitted). Runs inline server-side (two HTTP calls total); returns counts.
+  refreshMarkets: (coinIds?: string[]) => {
+    const qs = new URLSearchParams()
+    coinIds?.forEach((id) => qs.append("coin_ids", id))
+    const suffix = qs.toString() ? `?${qs}` : ""
+    return apiFetch<{
+      count: number
+      spot: number
+      futures: number
+      spot_source: boolean
+      futures_source: boolean
+    }>(`/coins/refresh-markets${suffix}`, { method: "POST" })
+  },
+}
+
+// ─── Coin Groups ──────────────────────────────────────────────────────────────
+// Named collections of coins (global). The reserved group with slug "favorites"
+// backs the heart UI on the coins page.
+
+export interface CoinGroup {
+  id: string
+  name: string
+  description: string | null
+  notes: string | null
+  slug: string | null
+  active: boolean
+  member_coin_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface CoinGroupCreate {
+  name: string
+  description?: string | null
+  notes?: string | null
+}
+
+export interface CoinGroupUpdate {
+  name?: string | null
+  description?: string | null
+  notes?: string | null
+}
+
+export const coinGroupsApi = {
+  list: () => apiFetch<CoinGroup[]>(`/coin-groups`),
+  favorites: () => apiFetch<CoinGroup>(`/coin-groups/favorites`),
+  create: (data: CoinGroupCreate) =>
+    apiFetch<CoinGroup>(`/coin-groups`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: CoinGroupUpdate) =>
+    apiFetch<CoinGroup>(`/coin-groups/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    apiFetch<{ success: boolean }>(`/coin-groups/${id}`, { method: "DELETE" }),
+  // coin_ids go in the body, not the query string: a group can hold hundreds of
+  // coins and the resulting URL would exceed Node's max-HTTP-header limit at the
+  // Next.js proxy hop (the request line counts toward it) even though FastAPI
+  // itself accepts it.
+  addMembers: (groupId: string, coinIds: string[]) =>
+    apiFetch<CoinGroup>(`/coin-groups/${groupId}/members`, { method: "POST", body: JSON.stringify({ coin_ids: coinIds }) }),
+  removeMembers: (groupId: string, coinIds: string[]) =>
+    apiFetch<CoinGroup>(`/coin-groups/${groupId}/members`, { method: "DELETE", body: JSON.stringify({ coin_ids: coinIds }) }),
+  addFavorites: (coinIds: string[]) =>
+    apiFetch<CoinGroup>(`/coin-groups/favorites/members`, { method: "POST", body: JSON.stringify({ coin_ids: coinIds }) }),
+  removeFavorites: (coinIds: string[]) =>
+    apiFetch<CoinGroup>(`/coin-groups/favorites/members`, { method: "DELETE", body: JSON.stringify({ coin_ids: coinIds }) }),
 }
 
 // ─── Model Orchestrations ─────────────────────────────────────────────────────
@@ -3948,6 +4017,20 @@ function swingScopeQs(scope: SwingScope): URLSearchParams {
 }
 
 // ── Scalping-strategy analysis (Trading → Strategies → Scalping) ────────────
+// One backtested round-trip in full — the rows behind the chart markers. Only
+// the first ~25 are returned; the charts and every statistic cover them all.
+export interface BacktestTradeRow {
+  seq: number
+  side: "long" | "short"
+  entry_time: string
+  entry_price: number
+  exit_time: string
+  exit_price: number
+  bars_held: number
+  ret_bps: number
+  exit_reason: string
+}
+
 export interface ScalpSignalPoint {
   timestamp: string
   long_score: number | null
@@ -3960,6 +4043,12 @@ export interface ScalpAnalysisResponse {
   params: Record<string, number>
   vol_gate: string
   vol_level: number
+  htf_gate: string
+  htf_tf: string
+  htf_level: number
+  // Base-timeframe bars in the trend lookback; 0 = htf_tf wasn't actually
+  // higher than the scope's interval, so the gate is inert.
+  htf_bars: number
   threshold: number
   hold_bars: number
   fee_bps: number
@@ -3976,10 +4065,15 @@ export interface ScalpAnalysisResponse {
   equity_curve: { timestamp: string; strategy: number; buy_hold: number }[]
   trade_markers: { timestamp: string; exit_timestamp: string | null; ret: number; side: string }[]
   signal_curve: ScalpSignalPoint[]
+  // First N round-trips in full, for the trade list under the charts.
+  trade_rows: BacktestTradeRow[]
+  // Hour/weekday/session cuts of this backtest's trades — only present when the
+  // request asked for them (`buckets: true`), i.e. the workbench Analytics tab.
+  bucket_analysis: PaperTradeAnalysis | null
 }
 
 export const scalpAnalysisApi = {
-  analyze: (scope: SwingScope, params: { strategy: string; indicator?: string; threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; params?: string; vol_gate?: string; vol_level?: number }) => {
+  analyze: (scope: SwingScope, params: { strategy: string; indicator?: string; threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; params?: string; vol_gate?: string; vol_level?: number; htf_gate?: string; htf_tf?: string; htf_level?: number; buckets?: boolean; tz_offset_minutes?: number }) => {
     const qs = swingScopeQs(scope)
     qs.set("strategy", params.strategy)
     if (params.indicator) qs.set("indicator", params.indicator)
@@ -4000,12 +4094,21 @@ export const scalpAnalysisApi = {
       qs.set("vol_gate", params.vol_gate)
       qs.set("vol_level", String(params.vol_level ?? 1.0))
     }
+    if (params.htf_gate && params.htf_gate !== "off") {
+      qs.set("htf_gate", params.htf_gate)
+      qs.set("htf_tf", params.htf_tf ?? "4h")
+      qs.set("htf_level", String(params.htf_level ?? 0.5))
+    }
+    if (params.buckets) {
+      qs.set("buckets", "true")
+      qs.set("tz_offset_minutes", String(params.tz_offset_minutes ?? 0))
+    }
     return apiFetch<ScalpAnalysisResponse>(`/scalp-analysis?${qs}`)
   },
 }
 
 export const swingAnalysisApi = {
-  analyze: (scope: SwingScope, params: { threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; confirm_sim_id?: string | null; signals?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; weights?: string }) => {
+  analyze: (scope: SwingScope, params: { threshold?: number; hold_bars?: number; fee_bps?: number; side?: string; confirm_sim_id?: string | null; signals?: string; sl_mode?: string; sl_value?: number; tp_mode?: string; tp_value?: number; weights?: string; htf_gate?: string; htf_tf?: string; htf_level?: number; buckets?: boolean; tz_offset_minutes?: number }) => {
     const qs = swingScopeQs(scope)
     qs.set("threshold", String(params.threshold ?? 1.0))
     qs.set("hold_bars", String(params.hold_bars ?? 6))
@@ -4022,12 +4125,27 @@ export const swingAnalysisApi = {
       qs.set("tp_value", String(params.tp_value ?? 3))
     }
     if (params.weights) qs.set("weights", params.weights)
+    if (params.htf_gate && params.htf_gate !== "off") {
+      qs.set("htf_gate", params.htf_gate)
+      qs.set("htf_tf", params.htf_tf ?? "4h")
+      qs.set("htf_level", String(params.htf_level ?? 0.5))
+    }
+    if (params.buckets) {
+      qs.set("buckets", "true")
+      qs.set("tz_offset_minutes", String(params.tz_offset_minutes ?? 0))
+    }
     return apiFetch<SwingAnalysisResponse>(`/swing-analysis?${qs}`)
   },
-  optimize: (scope: SwingScope, params: { fee_bps?: number; confirm_sim_id?: string | null }) => {
+  optimize: (scope: SwingScope, params: { fee_bps?: number; confirm_sim_id?: string | null; htf_gate?: string; htf_tf?: string; htf_level?: number }) => {
     const qs = swingScopeQs(scope)
     qs.set("fee_bps", String(params.fee_bps ?? 4))
     if (params.confirm_sim_id) qs.set("confirm_sim_id", params.confirm_sim_id)
+    // The gate conditions every swept combo (it is never itself swept).
+    if (params.htf_gate && params.htf_gate !== "off") {
+      qs.set("htf_gate", params.htf_gate)
+      qs.set("htf_tf", params.htf_tf ?? "4h")
+      qs.set("htf_level", String(params.htf_level ?? 0.5))
+    }
     return apiFetch<SwingOptimizeResponse>(`/swing-analysis/optimize?${qs}`)
   },
 }
@@ -4115,6 +4233,10 @@ export interface SwingAnalysisResponse {
   tp_value: number
   // Per-member contribution multipliers actually applied (1.0 = baseline).
   weights: Record<string, number>
+  htf_gate: string
+  htf_tf: string
+  htf_level: number
+  htf_bars: number
   // How trades exited: stop / take_profit / reversal / hold_max.
   exit_counts: Record<string, number>
   use_model: boolean
@@ -4132,6 +4254,11 @@ export interface SwingAnalysisResponse {
   // values describe ("long" unless side=short).
   signal_curve: SwingSignalPoint[]
   components_side: string
+  // First N round-trips in full, for the trade list under the charts.
+  trade_rows: BacktestTradeRow[]
+  // Hour/weekday/session cuts of this backtest's trades — only present when the
+  // request asked for them (`buckets: true`), i.e. the workbench Analytics tab.
+  bucket_analysis: PaperTradeAnalysis | null
 }
 
 // ─── Kline Strategies (crypto-simulation presets) ────────────────────────────
@@ -4286,9 +4413,14 @@ export interface StrategyTemplate {
   name: string
   strategy: string
   params: Record<string, unknown>
+  // Null on an ABSTRACT strategy — its coin / pair / timeframe are picked when a
+  // paper run is started, not stored here.
   scope: StrategyTemplateScope | null
+  is_abstract: boolean
   description: string | null
   notes: string | null
+  // Paper Trade: gate each new entry behind an AI GO/NO_GO verdict.
+  ai_confirmation: boolean
   active: boolean
   created_at: string
   updated_at: string
@@ -4297,9 +4429,10 @@ export interface StrategyTemplate {
 export const strategyTemplatesApi = {
   list: (strategy?: string) =>
     apiFetch<StrategyTemplate[]>(`/strategy-templates${strategy ? `?strategy=${encodeURIComponent(strategy)}` : ""}`),
-  create: (data: { name: string; strategy: string; params: Record<string, unknown>; scope?: StrategyTemplateScope | null; description?: string | null; notes?: string | null }) =>
+  get: (id: string) => apiFetch<StrategyTemplate>(`/strategy-templates/${id}`),
+  create: (data: { name: string; strategy: string; params: Record<string, unknown>; scope?: StrategyTemplateScope | null; is_abstract?: boolean; description?: string | null; notes?: string | null }) =>
     apiFetch<StrategyTemplate>(`/strategy-templates`, { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: { name?: string; params?: Record<string, unknown>; scope?: StrategyTemplateScope | null; description?: string | null; notes?: string | null }) =>
+  update: (id: string, data: { name?: string; params?: Record<string, unknown>; scope?: StrategyTemplateScope | null; is_abstract?: boolean; description?: string | null; notes?: string | null; ai_confirmation?: boolean }) =>
     apiFetch<StrategyTemplate>(`/strategy-templates/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (id: string) =>
     apiFetch<void>(`/strategy-templates/${id}`, { method: "DELETE" }),
@@ -4316,6 +4449,8 @@ export interface PaperTradePnl {
 export interface PaperTradeRun {
   id: string
   template_id: string
+  // What the user called this run; null on sweep runs → fall back to template_name.
+  name: string | null
   status: string
   started_at: string
   stopped_at: string | null
@@ -4331,7 +4466,15 @@ export interface PaperTradeRun {
   pnl: PaperTradePnl
 }
 
+// Where a trade was executed. One field across all three tables, so the detail
+// pane can merge them into one list.
+export type TradeSource = "paper" | "testnet" | "live"
+
 export interface PaperTrade {
+  // trade_seq restarts at 0 in every run, so only (run_id, trade_seq) is unique
+  // once several runs are pooled into one table.
+  run_id: string
+  source: TradeSource
   trade_seq: number
   status: "open" | "closed"
   side: "long" | "short"
@@ -4350,18 +4493,456 @@ export interface PaperTrade {
   strategy: string | null
   scope: StrategyTemplateScope | null
   params: Record<string, unknown> | null
-  // AI verdict (populated by a later review pass).
-  ai_verdict: "GO" | "NO_GO" | null
+  // AI trade-confirmation verdict, frozen at first write. "ERROR" = the
+  // advisor stayed unreachable and the trade was blocked fail-closed.
+  ai_verdict: "GO" | "NO_GO" | "ERROR" | null
   ai_explanation: string | null
+}
+
+// ─── Paper-trade analysis (Paper Trade → Analyze) ────────────────────────────
+
+/** One slice of closed trades (an hour, a weekday, a side …) with its stats.
+ *  Returns are fee-inclusive, in basis points. `t_stat` tests the slice against
+ *  zero; `t_vs_rest` tests it against every trade outside the slice — that's the
+ *  one that says "better HERE than elsewhere". Neither is corrected for the
+ *  number of slices tested. */
+export interface AnalysisBucket {
+  key: string
+  label: string
+  n_trades: number
+  n_wins: number
+  n_losses: number
+  win_rate: number | null
+  mean_bps: number | null
+  median_bps: number | null
+  sum_bps: number | null
+  sum_pnl: number
+  t_stat: number | null
+  t_vs_rest: number | null
+}
+
+// One closed trade, flattened so the Analyze tab can recompute stats for an
+// arbitrary hour × weekday × side selection without a round trip.
+export interface AnalysisTrade {
+  entry_time: string // ISO, UTC
+  ret_bps: number
+  pnl: number
+  side: string
+  exit_reason: string | null
+}
+
+export interface PaperTradeAnalysis {
+  // Null for a BACKTEST's buckets (workbench Analytics tab) — those trades
+  // belong to no template and no run, so n_runs is 0 and every sum_pnl is 0.
+  template_id: string | null
+  template_name: string | null
+  scope: "template" | "run" | "backtest"
+  tz_offset_minutes: number
+  n_runs: number
+  n_trades: number
+  n_open: number
+  first_entry: string | null
+  last_entry: string | null
+  coins: string[]
+  overall: AnalysisBucket
+  by_hour: AnalysisBucket[]
+  by_hour_block: AnalysisBucket[]
+  by_session: AnalysisBucket[]
+  by_weekday: AnalysisBucket[]
+  by_side: AnalysisBucket[]
+  by_exit_reason: AnalysisBucket[]
+  trades: AnalysisTrade[]
+  trades_truncated: boolean
+}
+
+// One OHLCV bar in a trade-analysis window (times are ISO strings).
+export interface TradeAnalysisKline {
+  open_time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+// Which bars determined a trade decision; `kind` selects the i18n explanation
+// template and `data` holds its interpolation values.
+export interface TradeSignalInfo {
+  kind: string
+  mark_times: string[]
+  anchor_time: string | null
+  data: Record<string, unknown>
+}
+
+// Kline snapshot around one trade. `exit_klines` is empty when the exit sits
+// inside the entry window (then gap_bars is 0); a positive gap_bars counts the
+// bars hidden between the two windows.
+export interface TradeAnalysis {
+  trade: PaperTrade
+  symbol: string
+  quote_asset: string
+  interval: string
+  entry_klines: TradeAnalysisKline[]
+  exit_klines: TradeAnalysisKline[]
+  gap_bars: number
+  entry_signal: TradeSignalInfo | null
+  exit_signal: TradeSignalInfo | null
 }
 
 export const paperTradeApi = {
   listRuns: (active = false) =>
     apiFetch<PaperTradeRun[]>(`/paper-trade/runs${active ? "?active=true" : ""}`),
-  listTrades: (templateId: string, limit = 500) =>
-    apiFetch<PaperTrade[]>(`/paper-trade/trades?template_id=${encodeURIComponent(templateId)}&limit=${limit}`),
-  start: (templateId: string, investment = 100) =>
-    apiFetch<PaperTradeRun>(`/paper-trade/start?template_id=${encodeURIComponent(templateId)}&initial_capital=${investment}`, { method: "POST" }),
-  stop: (templateId: string) =>
-    apiFetch<PaperTradeRun | null>(`/paper-trade/stop?template_id=${encodeURIComponent(templateId)}`, { method: "POST" }),
+  analyze: (templateId: string, scope: "template" | "run" = "template", tzOffsetMinutes = 0) =>
+    apiFetch<PaperTradeAnalysis>(
+      `/paper-trade/analysis?template_id=${encodeURIComponent(templateId)}&scope=${scope}&tz_offset_minutes=${tzOffsetMinutes}`,
+    ),
+  // A template can have many concurrent runs (sweeps fan one param-set across
+  // coins); `runId` picks which one's trades to read. Omitted = current run.
+  // `allRuns` pools every run instead — the detail pane's merged view.
+  listTrades: (templateId: string, limit = 500, runId?: string, allRuns = false) =>
+    apiFetch<PaperTrade[]>(
+      `/paper-trade/trades?template_id=${encodeURIComponent(templateId)}&limit=${limit}` +
+      (allRuns ? "&all_runs=true" : runId ? `&run_id=${encodeURIComponent(runId)}` : ""),
+    ),
+  // trade_seq is unique per run, so pass the run the clicked row came from.
+  tradeAnalysis: (templateId: string, tradeSeq: number, runId?: string) =>
+    apiFetch<TradeAnalysis>(
+      `/paper-trade/trades/analysis?template_id=${encodeURIComponent(templateId)}&trade_seq=${tradeSeq}` +
+      (runId ? `&run_id=${encodeURIComponent(runId)}` : ""),
+    ),
+  // `scope` overrides the strategy's saved coin / pair / timeframe — required
+  // for an ABSTRACT strategy, which stores none of its own.
+  // When this strategy has actually traded, pooled across every venue — the
+  // window in which its backtest and its live record are comparable.
+  tradeRange: (templateId: string) =>
+    apiFetch<{ first_entry: string | null; last_exit: string | null; n_trades: number }>(
+      `/paper-trade/trade-range?template_id=${encodeURIComponent(templateId)}`,
+    ),
+  // The same popup for a trade that exists only inside a BACKTEST: it has no
+  // stored row to look up, so the row itself is posted with the setup behind it.
+  backtestTradeAnalysis: (req: {
+    coin_id: string; quote_asset: string; interval: string
+    strategy: string; params: Record<string, unknown>
+    seq: number; side: string
+    entry_time: string; entry_price: number
+    exit_time: string | null; exit_price: number | null
+    ret_bps: number; exit_reason: string | null
+  }) =>
+    apiFetch<TradeAnalysis>(`/paper-trade/trades/backtest-analysis`, {
+      method: "POST", body: JSON.stringify(req),
+    }),
+  start: (
+    templateId: string,
+    investment = 100,
+    opts: { name?: string | null; scope?: StrategyTemplateScope | null } = {},
+  ) => {
+    const qs = new URLSearchParams({
+      template_id: templateId,
+      initial_capital: String(investment),
+    })
+    if (opts.name?.trim()) qs.set("name", opts.name.trim())
+    if (opts.scope?.coin_id) qs.set("coin_id", opts.scope.coin_id)
+    if (opts.scope?.quote_asset) qs.set("quote_asset", opts.scope.quote_asset)
+    if (opts.scope?.interval) qs.set("interval", opts.scope.interval)
+    return apiFetch<PaperTradeRun>(`/paper-trade/start?${qs}`, { method: "POST" })
+  },
+  // Stop one specific run (a template may have several running at once).
+  stop: (runId: string) =>
+    apiFetch<PaperTradeRun | null>(`/paper-trade/stop?run_id=${encodeURIComponent(runId)}`, { method: "POST" }),
+}
+
+// ─── Paper sweeps (rotating strategy×coin searches) ──────────────────────────
+
+export interface SweepStatus {
+  id: string
+  name: string
+  enabled: boolean
+  max_concurrent: number
+  dwell_days: number
+  initial_capital: number
+  n_templates: number
+  n_coins: number
+  n_combos_total: number
+  n_combos_tried: number
+  n_running: number
+}
+
+export interface SweepTemplateCoin {
+  symbol: string
+  status: string
+  pnl_pct: number
+  n_trades: number
+}
+
+export interface SweepTemplateStat {
+  template_id: string
+  template_name: string
+  strategy: string
+  n_runs: number
+  n_running: number
+  avg_pnl_pct: number
+  median_pnl_pct: number
+  win_rate_pct: number
+  total_trades: number
+  total_pnl_quote: number
+  coins: SweepTemplateCoin[]
+}
+
+export interface SweepRunStat {
+  run_id: string
+  template_id: string
+  template_name: string
+  strategy: string
+  coin_symbol: string
+  interval: string
+  status: string
+  started_at: string
+  days: number
+  pnl_pct: number
+  n_trades: number
+}
+
+// Two templates identical except for the higher-timeframe gate, with their
+// runs matched on (coin, rotation wave) so the difference is a paired read.
+export interface SweepPairStat {
+  base_template_id: string
+  base_template_name: string
+  variant_template_id: string
+  variant_template_name: string
+  strategy: string
+  variant_gate: string
+  n_paired: number
+  base_avg_pnl_pct: number
+  variant_avg_pnl_pct: number
+  delta_avg_pnl_pct: number
+  delta_t: number
+  base_trades: number
+  variant_trades: number
+}
+
+export interface SweepLeaderboard {
+  n_runs: number
+  templates: SweepTemplateStat[]
+  pairs: SweepPairStat[]
+  top_runs: SweepRunStat[]
+  bottom_runs: SweepRunStat[]
+}
+
+export const paperSweepApi = {
+  list: () => apiFetch<SweepStatus[]>(`/paper-trade/sweeps`),
+  leaderboard: (sweepId?: string, top = 20) =>
+    apiFetch<SweepLeaderboard>(
+      `/paper-trade/sweeps/leaderboard?top=${top}${sweepId ? `&sweep_id=${encodeURIComponent(sweepId)}` : ""}`,
+    ),
+  rotate: () => apiFetch<{ sweeps: number; stopped: number; started: number }>(`/paper-trade/sweeps/rotate`, { method: "POST" }),
+  // Force-swap the whole wave: stops ALL running combos regardless of age.
+  advance: (sweepId: string) =>
+    apiFetch<{ stopped: number; started: number }>(
+      `/paper-trade/sweeps/advance?sweep_id=${encodeURIComponent(sweepId)}`,
+      { method: "POST" },
+    ),
+  setEnabled: (sweepId: string, enabled: boolean) =>
+    apiFetch<SweepStatus | null>(
+      `/paper-trade/sweeps/enabled?sweep_id=${encodeURIComponent(sweepId)}&enabled=${enabled}`,
+      { method: "POST" },
+    ),
+}
+
+// ─── Live trade runs (Live Trading page) ─────────────────────────────────────
+// Same run/trade shapes as paper trading, plus real-exchange execution detail
+// (order ids, commissions, testnet flag). Spot is long-only.
+
+export interface LiveTradeAccount {
+  configured: boolean
+  testnet: boolean
+  base_url: string
+  can_trade: boolean | null
+  balances: Record<string, number>
+  error: string | null
+}
+
+export interface LiveTradeRun extends PaperTradeRun {
+  is_testnet: boolean
+  cash_quote: number
+  open_qty: number | null
+}
+
+export interface LiveTrade extends PaperTrade {
+  signal_time: string | null
+  entry_order_id: number | null
+  exit_order_id: number | null
+  entry_commission: number | null
+  exit_commission: number | null
+}
+
+export const liveTradeApi = {
+  account: () =>
+    apiFetch<LiveTradeAccount>(`/live-trade/account`),
+  listRuns: (active = false) =>
+    apiFetch<LiveTradeRun[]>(`/live-trade/runs${active ? "?active=true" : ""}`),
+  // A template can hold several runs; `runId` picks which one's trades to read.
+  // Omitted = current run. `allRuns` pools every run — each row's `source` says
+  // whether it executed on the testnet or in production.
+  listTrades: (templateId: string, limit = 500, runId?: string, allRuns = false) =>
+    apiFetch<LiveTrade[]>(
+      `/live-trade/trades?template_id=${encodeURIComponent(templateId)}&limit=${limit}` +
+      (allRuns ? "&all_runs=true" : runId ? `&run_id=${encodeURIComponent(runId)}` : ""),
+    ),
+  runningTemplates: () =>
+    apiFetch<string[]>(`/live-trade/running-templates`),
+  // `testnet` picks the venue and is frozen onto the run for life; `scope`
+  // overrides the strategy's saved market (required for an ABSTRACT strategy).
+  start: (
+    templateId: string,
+    investment = 100,
+    opts: { testnet?: boolean; name?: string | null; scope?: StrategyTemplateScope | null } = {},
+  ) => {
+    const qs = new URLSearchParams({
+      template_id: templateId,
+      initial_capital: String(investment),
+    })
+    if (opts.testnet !== undefined) qs.set("testnet", String(opts.testnet))
+    if (opts.name?.trim()) qs.set("name", opts.name.trim())
+    if (opts.scope?.coin_id) qs.set("coin_id", opts.scope.coin_id)
+    if (opts.scope?.quote_asset) qs.set("quote_asset", opts.scope.quote_asset)
+    if (opts.scope?.interval) qs.set("interval", opts.scope.interval)
+    return apiFetch<LiveTradeRun>(`/live-trade/start?${qs}`, { method: "POST" })
+  },
+  // Which venues have usable credentials — testnet and production are separate
+  // accounts with separate keys, so either can be unavailable on its own.
+  venues: () => apiFetch<{ testnet: boolean; live: boolean }>(`/live-trade/venues`),
+  // Stop one specific run — liquidates any open position with a real market sell.
+  stop: (runId: string) =>
+    apiFetch<LiveTradeRun | null>(`/live-trade/stop?run_id=${encodeURIComponent(runId)}`, { method: "POST" }),
+}
+
+
+// ─── Strategy optimizations (Optimize tab on a strategy's analytics page) ────
+// Named "optimization", not "sweep": a paper SWEEP rotates live paper runs, and
+// "sweep" is also a scalping strategy. Three meanings would be unreadable.
+
+export interface OptimizationCoinSelection {
+  mode: "single" | "group" | "random" | "all" | "liquidity"
+  coin_id?: string | null
+  group_id?: string | null
+  count?: number
+  quote_asset?: string
+}
+
+/** The variation grid. camelCase keys mirror the explorer's own param blob so a
+ *  result applies straight back onto the page with no translation. */
+export interface OptimizationSpec {
+  coins: OptimizationCoinSelection
+  intervals: string[]
+  threshold: number[]
+  holdBars: number[]
+  sides: string[]
+  voldiv: number[]
+  btcFilter: number[]
+  volGate: string[]
+  htfGate: string[]
+  slModes: string[]
+  slValues: Record<string, number[]>
+  tpModes: string[]
+  tpValues: Record<string, number[]>
+  // Signal knobs that differ per strategy, e.g. {"window": [24, 48]}.
+  paramAxes?: Record<string, number[]>
+  // "indicator" only: kinds tried, and each kind's own knobs.
+  indicators?: string[]
+  indicatorValues?: Record<string, Record<string, number[]>>
+  // "swings" only: which named composite subsets voted.
+  signalSubsets?: string[]
+  // Held constant across the grid (fees, gate levels).
+  fixed: Record<string, unknown>
+  baseline?: { coin_id?: string; quote_asset?: string; interval?: string }
+  baseline_params?: Record<string, unknown>
+}
+
+export interface StrategyOptimization {
+  id: string
+  name: string
+  description: string | null
+  notes: string | null
+  strategy: string
+  spec: OptimizationSpec
+  start_date: string
+  end_date: string
+  seed: number
+  max_combos: number
+  sampled: boolean
+  n_cartesian: number
+  status: "pending" | "running" | "success" | "error" | "stopped"
+  n_total: number
+  n_done: number
+  n_skipped: number
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  created_at: string
+  eta_seconds: number | null
+  elapsed_seconds: number | null
+}
+
+export interface OptimizationResult {
+  id: string
+  coin_id: string
+  coin_symbol: string | null
+  quote_asset: string
+  interval: string
+  params: Record<string, unknown>
+  is_baseline: boolean
+  n_trades: number
+  avg_net_bps: number
+  edge_t: number
+  win_rate_pct: number
+  total_return_pct: number
+  train_n_trades: number
+  train_avg_net_bps: number
+  train_edge_t: number
+  val_n_trades: number
+  val_avg_net_bps: number
+  val_edge_t: number
+  // Payoff SHAPE over the full range — null on results predating these.
+  // Negative skew = many small wins paid for by rare large losses (the mean
+  // reversion signature); positive = the reverse. t and Sharpe are blind to both.
+  skew: number | null
+  max_drawdown_pct: number | null
+  worst_trade_bps: number | null
+  // Enough trades in BOTH halves to be worth ranking on.
+  qualified: boolean
+}
+
+export interface OptimizationEstimate {
+  n_markets: number
+  n_param_combos: number
+  n_cartesian: number
+  n_to_run: number
+  sampled: boolean
+  est_seconds: number
+}
+
+export const strategyOptimizationsApi = {
+  list: (strategy?: string) =>
+    apiFetch<StrategyOptimization[]>(
+      `/strategy-optimizations${strategy ? `?strategy=${encodeURIComponent(strategy)}` : ""}`,
+    ),
+  get: (id: string) => apiFetch<StrategyOptimization>(`/strategy-optimizations/${id}`),
+  results: (id: string, limit = 2000) =>
+    apiFetch<OptimizationResult[]>(`/strategy-optimizations/${id}/results?limit=${limit}`),
+  // Costed before anything is committed, so the dialog's counter and the runner
+  // agree on one definition of "how big is this".
+  estimate: (body: Record<string, unknown>) =>
+    apiFetch<OptimizationEstimate>(`/strategy-optimizations/estimate`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  create: (body: Record<string, unknown>) =>
+    apiFetch<StrategyOptimization>(`/strategy-optimizations`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  update: (id: string, data: { name?: string; description?: string | null; notes?: string | null }) =>
+    apiFetch<StrategyOptimization>(`/strategy-optimizations/${id}`, {
+      method: "PATCH", body: JSON.stringify(data),
+    }),
+  delete: (id: string) =>
+    apiFetch<void>(`/strategy-optimizations/${id}`, { method: "DELETE" }),
 }

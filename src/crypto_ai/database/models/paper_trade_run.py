@@ -30,6 +30,18 @@ class PaperTradeRun(Base):
         nullable=False,
         index=True,
     )
+    # Sweep that started this run (null = started by hand). Doubles as the
+    # sweep's "this template×coin combo was already tried" marker.
+    sweep_id: Mapped[str | None] = mapped_column(
+        ForeignKey("paper_sweep.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # What the user called THIS run ("Streak Reversion, Deep (2026.08.05 #2)").
+    # Distinct from template_name below, which is the strategy's own name frozen
+    # at start. Null on sweep-started runs and on runs predating the column — the
+    # UI falls back to template_name.
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # ── Template snapshot, frozen at start() ──────────────────────────────────
     # The engine replays against THIS snapshot, not the live template, so editing
     # (or deleting) the template mid-run never rewrites a running trade's history.
@@ -81,3 +93,9 @@ class PaperTradeRun(Base):
     )
     # Last engine error for this run (surfaced in the UI); cleared on success.
     error: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Consecutive AI-advisor failures (trade-confirmation gate). Reset on the
+    # first successful consultation; past a threshold the engine stops waiting
+    # and resolves pending trades fail-closed (verdict "ERROR").
+    ai_consult_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )

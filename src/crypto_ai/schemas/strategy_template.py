@@ -13,6 +13,8 @@ class StrategyTemplateBase(BaseModel):
     strategy: str
     params: dict[str, Any] = {}
     scope: dict[str, Any] | None = None
+    # Params-only strategy: ``scope`` is null and picked at paper-run start.
+    is_abstract: bool = False
     description: str | None = None
     notes: str | None = None
     # Gate paper-trade entries behind an AI GO/NO_GO verdict.
@@ -31,6 +33,7 @@ class StrategyTemplateUpdate(BaseModel):
     name: str | None = None
     params: dict[str, Any] | None = None
     scope: dict[str, Any] | None = None
+    is_abstract: bool | None = None
     description: str | None = None
     notes: str | None = None
     ai_confirmation: bool | None = None

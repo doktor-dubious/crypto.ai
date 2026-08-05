@@ -513,9 +513,9 @@ PAGE_INFO["/simulations/completed"] = {
 
 export function getPageInfo(pathname: string): PageInfo | undefined {
   if (PAGE_INFO[pathname]) return PAGE_INFO[pathname]
-  // Trading strategy sub-pages (<base>/paper | <base>/analytics) inherit the
-  // base strategy's page info.
-  const m = pathname.match(/^(.*)\/(?:paper|analytics)$/)
+  // A strategy's analytics workbench (<base>/analytics) inherits the base
+  // strategy's page info.
+  const m = pathname.match(/^(.*)\/analytics$/)
   if (m && PAGE_INFO[m[1]]) return PAGE_INFO[m[1]]
   return undefined
 }

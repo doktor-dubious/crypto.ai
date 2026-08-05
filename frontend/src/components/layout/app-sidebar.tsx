@@ -11,6 +11,7 @@ import {
   CreditCard,
   Home,
   LineChart,
+  Layers,
   List,
   LogOut,
   Plus,
@@ -41,6 +42,7 @@ import {
   Crosshair,
   ArrowLeftRight,
   Wallet,
+  Radio,
   PieChart,
   Store,
   Coins,
@@ -99,6 +101,7 @@ const NAV_ITEMS = [
 const COINS_SUBNAV_ITEMS = [
   { href: "/coins/new", icon: Plus, labelKey: "coinsNew" },
   { href: "/coins", icon: List, labelKey: "coinsList" },
+  { href: "/coin-groups", icon: Layers, labelKey: "coinGroups" },
 ] as const
 
 const SIMULATIONS_SUBNAV_ITEMS = [
@@ -107,8 +110,10 @@ const SIMULATIONS_SUBNAV_ITEMS = [
   { href: "/simulations/completed", icon: LineChart, labelKey: "simulationsCompleted" },
 ] as const
 
-// Trading → Strategies. Price Direction is a single page; every other strategy
-// expands to Paper Trade + Analytics sub-pages (Scalping nests one level deeper).
+// Trading → Strategies → New. Every strategy family is a single menu entry
+// landing on its analytics workbench (Scalping nests one level deeper), where a
+// parameter set is turned into a saved strategy. The saved ones live under
+// Trading → Strategies → List, which is also where paper trading is started.
 const TRADING_PRICE_DIRECTION = {
   href: "/trading/strategies/price-direction", icon: TrendingUp, labelKey: "tradingPriceDirection",
 } as const
@@ -127,27 +132,17 @@ const TRADING_SCALPING_STRATEGIES = [
   { base: "/trading/strategies/scalping/taker-flow", icon: ArrowLeftRight, labelKey: "tradingScalpTakerFlow" },
 ] as const
 
-// A strategy submenu: the strategy name expands to Paper Trade + Analytics.
-function StrategySubmenu({ base, icon: Icon, labelKey }: { base: string; icon: ElementType; labelKey: string }) {
+// A strategy menu entry — goes straight to that strategy's analytics page. The
+// route keeps its /analytics suffix (topbar already resolves it back to the
+// strategy's own title), so only the menu shape changed, not the URLs.
+function StrategyMenuItem({ base, icon: Icon, labelKey }: { base: string; icon: ElementType; labelKey: string }) {
   const t = useTranslations()
   const router = useRouter()
   return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <Icon className="h-4 w-4" />
-        {t(`nav.${labelKey}` as Parameters<typeof t>[0])}
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        <DropdownMenuItem onClick={() => router.push(`${base}/paper`)}>
-          <Wallet className="h-4 w-4" />
-          {t("nav.tradingPaperTrade")}
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => router.push(`${base}/analytics`)}>
-          <LineChart className="h-4 w-4" />
-          {t("nav.tradingAnalytics")}
-        </DropdownMenuItem>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    <DropdownMenuItem onClick={() => router.push(`${base}/analytics`)}>
+      <Icon className="h-4 w-4" />
+      {t(`nav.${labelKey}` as Parameters<typeof t>[0])}
+    </DropdownMenuItem>
   )
 }
 
@@ -466,10 +461,15 @@ export function AppSidebar() {
                 {t("nav.trading")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {/* Paper Trade — directly under Trading, above Strategies */}
+                {/* Live Trading — real Binance Spot execution (testnet or production) */}
+                <DropdownMenuItem onClick={() => router.push("/trading/live")}>
+                  <Radio className="h-4 w-4" />
+                  {t("nav.tradingLiveTrade")}
+                </DropdownMenuItem>
+                {/* Paper Trade — above Strategies */}
                 <DropdownMenuItem onClick={() => router.push("/trading/paper")}>
                   <Wallet className="h-4 w-4" />
-                  {t("nav.tradingPaperTrade")}
+                  {t("nav.tradingPaper")}
                 </DropdownMenuItem>
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
@@ -477,23 +477,37 @@ export function AppSidebar() {
                     {t("nav.tradingStrategies")}
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
-                    {/* Price Direction — single page, no sub-pages */}
-                    <DropdownMenuItem onClick={() => router.push(TRADING_PRICE_DIRECTION.href)}>
-                      <TrendingUp className="h-4 w-4" />
-                      {t("nav.tradingPriceDirection")}
+                    {/* List — every saved strategy; where paper trading starts */}
+                    <DropdownMenuItem onClick={() => router.push("/trading/strategies")}>
+                      <List className="h-4 w-4" />
+                      {t("nav.tradingStrategiesList")}
                     </DropdownMenuItem>
-                    {/* Trend Swings — Paper Trade + Analytics */}
-                    <StrategySubmenu {...TRADING_TREND_SWINGS} />
-                    {/* Scalping — each sub-strategy has Paper Trade + Analytics */}
+                    {/* New — the analysis workbenches a strategy is created from */}
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger>
-                        <Zap className="h-4 w-4" />
-                        {t("nav.tradingScalping")}
+                        <Plus className="h-4 w-4" />
+                        {t("nav.tradingStrategiesNew")}
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent>
-                        {TRADING_SCALPING_STRATEGIES.map((s) => (
-                          <StrategySubmenu key={s.base} {...s} />
-                        ))}
+                        {/* Price Direction — single page, no sub-pages */}
+                        <DropdownMenuItem onClick={() => router.push(TRADING_PRICE_DIRECTION.href)}>
+                          <TrendingUp className="h-4 w-4" />
+                          {t("nav.tradingPriceDirection")}
+                        </DropdownMenuItem>
+                        {/* Trend Swings — straight to its analytics page */}
+                        <StrategyMenuItem {...TRADING_TREND_SWINGS} />
+                        {/* Scalping — each sub-strategy goes to its analytics page */}
+                        <DropdownMenuSub>
+                          <DropdownMenuSubTrigger>
+                            <Zap className="h-4 w-4" />
+                            {t("nav.tradingScalping")}
+                          </DropdownMenuSubTrigger>
+                          <DropdownMenuSubContent>
+                            {TRADING_SCALPING_STRATEGIES.map((s) => (
+                              <StrategyMenuItem key={s.base} {...s} />
+                            ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuSub>
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   </DropdownMenuSubContent>

@@ -5,7 +5,6 @@ import { Topbar } from "@/components/layout/topbar"
 import { CustomerProvider } from "@/components/providers/customer-provider"
 import { customersApi } from "@/lib/api"
 import { LockProvider } from "@/components/providers/lock-provider"
-import { TradingTemplateProvider } from "@/components/trading/template-context"
 
 export default async function DashboardLayout({
   children,
@@ -24,18 +23,16 @@ export default async function DashboardLayout({
       <CustomerProvider>
         <LockProvider>
           <SidebarProvider defaultOpen={true}>
-            <TradingTemplateProvider>
-              <div className="flex h-screen w-full overflow-hidden bg-[var(--background)]">
-                <AppSidebar />
-                <div className="flex flex-1 flex-col overflow-hidden">
-                  <Topbar />
-                  <main className="flex-1 overflow-y-auto p-6 flex flex-col min-h-0">{children}</main>
-                  <footer className="flex items-center justify-center border-t border-[var(--border)] px-4 py-2">
-                    <p className="text-xs text-[var(--muted-foreground)]">&copy; 2026 Crypt AI. All rights reserved.</p>
-                  </footer>
-                </div>
+            <div className="flex h-screen w-full overflow-hidden bg-[var(--background)]">
+              <AppSidebar />
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <Topbar />
+                <main className="flex-1 overflow-y-auto p-6 flex flex-col min-h-0">{children}</main>
+                <footer className="flex items-center justify-center border-t border-[var(--border)] px-4 py-2">
+                  <p className="text-xs text-[var(--muted-foreground)]">&copy; 2026 Crypt AI. All rights reserved.</p>
+                </footer>
               </div>
-            </TradingTemplateProvider>
+            </div>
           </SidebarProvider>
         </LockProvider>
       </CustomerProvider>
