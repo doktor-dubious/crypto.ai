@@ -6,7 +6,7 @@
 // strategies and the master table of strategy templates (shared with paper) with
 // start/stop plus a detail pane. Stop liquidates any open position at market.
 
-import { Fragment, useMemo, useState, useEffect, type Dispatch, type SetStateAction } from "react"
+import { Fragment, useMemo, useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
 import {
@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/table"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-  DropdownMenuCheckboxItem, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -35,9 +34,10 @@ import { ViewSwitcher } from "@/components/ui/view-switcher"
 import { cn } from "@/lib/utils"
 import { strategyLabel } from "@/components/trading/strategy-meta"
 import { ActiveStrategies, type GroupByMode } from "@/components/trading/paper/active-strategies"
+import { RunFilterBar, useRunFilters } from "@/components/trading/run-filters"
 import { TemplateDetailPane } from "@/components/trading/live/template-detail-pane"
 import {
-  strategyTemplatesApi, liveTradeApi, coinsApi, coinGroupsApi,
+  strategyTemplatesApi, liveTradeApi, coinsApi, coinGroupsApi, paperTradeApi,
   type StrategyTemplate, type PaperTradeRun,
 } from "@/lib/api"
 
@@ -69,51 +69,6 @@ function saveJson(key: string, value: unknown) {
 }
 
 type SortField = "name" | "strategy" | "coin" | "timeframe"
-
-// A multi-select dropdown over one filter dimension. All options start checked;
-// unchecking removes that key from the display. Shows a "checked/total" count.
-function FilterDropdown({
-  label, options, excluded, onToggle, onAll, allLabel, noneLabel,
-}: {
-  label: string
-  options: { key: string; label: string }[]
-  excluded: Set<string>
-  onToggle: (key: string) => void
-  onAll: (check: boolean) => void
-  allLabel: string
-  noneLabel: string
-}) {
-  const selected = options.filter((o) => !excluded.has(o.key)).length
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 cursor-pointer" disabled={options.length === 0}>
-          <span>{label}</span>
-          <span className="text-[var(--muted-foreground)] tabular-nums">{selected}/{options.length}</span>
-          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-80 w-56 overflow-y-auto">
-        <div className="flex items-center justify-between px-2 py-1 text-xs">
-          <button className="text-primary hover:underline cursor-pointer" onClick={() => onAll(true)}>{allLabel}</button>
-          <button className="text-[var(--muted-foreground)] hover:underline cursor-pointer" onClick={() => onAll(false)}>{noneLabel}</button>
-        </div>
-        <DropdownMenuSeparator />
-        {options.map((o) => (
-          <DropdownMenuCheckboxItem
-            key={o.key}
-            checked={!excluded.has(o.key)}
-            onCheckedChange={() => onToggle(o.key)}
-            onSelect={(e) => e.preventDefault()}
-            className="cursor-pointer"
-          >
-            {o.label}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
 
 export default function LiveTradePage() {
   const t = useTranslations("liveTrade")
@@ -166,58 +121,17 @@ export default function LiveTradePage() {
     [activeRuns],
   )
 
-  // Active-tab display filters — three multi-selects over the coin groups / coins
-  // / strategies that currently have running trades. We persist the UNCHECKED
-  // (excluded) keys, so options default to checked and new runs appear by default.
-  const [exclGroups, setExclGroups] = useState<Set<string>>(() => new Set(loadJson<string[]>("exclGroups", [])))
-  const [exclCoins, setExclCoins] = useState<Set<string>>(() => new Set(loadJson<string[]>("exclCoins", [])))
-  const [exclStrategies, setExclStrategies] = useState<Set<string>>(() => new Set(loadJson<string[]>("exclStrategies", [])))
-  useEffect(() => { saveJson("exclGroups", [...exclGroups]) }, [exclGroups])
-  useEffect(() => { saveJson("exclCoins", [...exclCoins]) }, [exclCoins])
-  useEffect(() => { saveJson("exclStrategies", [...exclStrategies]) }, [exclStrategies])
-
-  // Coin → its group (first group by name; used by the coin-groups grouping and
-  // the active-tab group filter so both agree on a coin's single group).
-  const coinToGroup = useMemo(() => {
-    const sorted = [...coinGroups].sort((a, b) => a.name.localeCompare(b.name))
-    const m = new Map<string, { id: string; name: string }>()
-    for (const g of sorted) for (const cid of g.member_coin_ids) if (!m.has(cid)) m.set(cid, { id: g.id, name: g.name })
-    return m
-  }, [coinGroups])
-  const groupKeyOfRun = (r: PaperTradeRun) => (r.scope?.coin_id ? coinToGroup.get(r.scope.coin_id)?.id : undefined) ?? "ungrouped"
-
-  // Filter options — only the coin groups / coins / strategies that currently
-  // have running trades, sorted by label.
-  const filterOptions = useMemo(() => {
-    const groups = new Map<string, string>()
-    const coinsM = new Map<string, string>()
-    const strategies = new Map<string, string>()
-    for (const r of activeRuns) {
-      const gk = groupKeyOfRun(r)
-      groups.set(gk, gk === "ungrouped" ? t("ungrouped") : coinToGroup.get(r.scope!.coin_id!)?.name ?? gk)
-      const cid = r.scope?.coin_id ?? "none"
-      coinsM.set(cid, (r.scope?.coin_id ? coinById.get(r.scope.coin_id)?.symbol : null) ?? "—")
-      strategies.set(r.strategy, strategyLabel(r.strategy))
-    }
-    const toSorted = (m: Map<string, string>) =>
-      [...m.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label))
-    return { groups: toSorted(groups), coins: toSorted(coinsM), strategies: toSorted(strategies) }
-  }, [activeRuns, coinById, coinToGroup, t]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Runs left after the three exclusion filters — fed to the Active view.
-  const visibleRuns = useMemo(
-    () => activeRuns.filter((r) =>
-      !exclGroups.has(groupKeyOfRun(r))
-      && !exclCoins.has(r.scope?.coin_id ?? "none")
-      && !exclStrategies.has(r.strategy),
-    ),
-    [activeRuns, coinToGroup, exclGroups, exclCoins, exclStrategies], // eslint-disable-line react-hooks/exhaustive-deps
-  )
-  // Toggle one key in an exclusion set; check/uncheck every option in a dimension.
-  const toggleExcl = (setter: Dispatch<SetStateAction<Set<string>>>) => (key: string) =>
-    setter((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
-  const setAllExcl = (setter: Dispatch<SetStateAction<Set<string>>>, options: { key: string }[]) => (check: boolean) =>
-    setter((prev) => { const n = new Set(prev); options.forEach((o) => (check ? n.delete(o.key) : n.add(o.key))); return n })
+  // Active-tab display filters — three multi-selects over the coin groups /
+  // coins / strategies that currently have running trades, shared with the
+  // paper page (see components/trading/run-filters.tsx).
+  const runFilters = useRunFilters({
+    runs: activeRuns,
+    coinGroups,
+    coinById,
+    storagePrefix: STORAGE_PREFIX,
+    ungroupedLabel: t("ungrouped"),
+  })
+  const visibleRuns = runFilters.filtered
 
   // ── Table state ──
   const [search, setSearch] = useState("")
@@ -255,6 +169,24 @@ export default function LiveTradePage() {
   useEffect(() => { saveJson("selected", selectedId) }, [selectedId])
 
   // ── Dialogs ──
+  // Tick guard: coins where one tick exceeds ~0.1% of the price. A live run
+  // there pays that tick crossing the spread on EVERY round trip — the start
+  // dialogs warn before real (testnet or production) orders go out.
+  const { data: tickLimited } = useQuery({
+    queryKey: ["paperTickLimited"],
+    queryFn: paperTradeApi.tickLimited,
+    staleTime: 10 * 60_000,
+  })
+  const tickSymbol = (tpl: StrategyTemplate | null | undefined) =>
+    (tickLimited?.coins ?? []).find((c) => c.id === tpl?.scope?.coin_id)?.symbol ?? null
+  const tickWarn = (symbols: string[]) => (
+    <p className="text-xs font-medium text-amber-600 dark:text-amber-400 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2">
+      {t("liveTickLimitedWarning", {
+        symbols: symbols.join(", "),
+        pct: tickLimited?.tick_pct_limit ?? 0.1,
+      })}
+    </p>
+  )
   // For "start" the run is created fresh; for "stop" we carry the specific run to
   // stop (a template can have several running at once).
   const [confirm, setConfirm] = useState<{ template: StrategyTemplate; action: "start" | "stop"; run?: PaperTradeRun } | null>(null)
@@ -473,7 +405,10 @@ export default function LiveTradePage() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    // `relative` anchors the maximized detail pane (absolute inset-0) to the
+    // page area — without it the pane resolves against the viewport and covers
+    // the dashboard footer.
+    <div className="relative flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto px-6 py-6">
         {/* ── Account status strip — the real exchange account behind this page ── */}
         {account && (
@@ -556,24 +491,19 @@ export default function LiveTradePage() {
         {topTab === "active" && (
           <div className="mt-6 space-y-2">
             {activeRuns.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                <span className="text-xs text-[var(--muted-foreground)] shrink-0">{t("filterBy")}</span>
-                <FilterDropdown
-                  label={t("groupByCoinGroups")} options={filterOptions.groups} excluded={exclGroups}
-                  onToggle={toggleExcl(setExclGroups)} onAll={setAllExcl(setExclGroups, filterOptions.groups)}
-                  allLabel={t("filterAll")} noneLabel={t("filterNone")}
-                />
-                <FilterDropdown
-                  label={t("groupByCoins")} options={filterOptions.coins} excluded={exclCoins}
-                  onToggle={toggleExcl(setExclCoins)} onAll={setAllExcl(setExclCoins, filterOptions.coins)}
-                  allLabel={t("filterAll")} noneLabel={t("filterNone")}
-                />
-                <FilterDropdown
-                  label={t("groupByStrategies")} options={filterOptions.strategies} excluded={exclStrategies}
-                  onToggle={toggleExcl(setExclStrategies)} onAll={setAllExcl(setExclStrategies, filterOptions.strategies)}
-                  allLabel={t("filterAll")} noneLabel={t("filterNone")}
-                />
-              </div>
+              <RunFilterBar
+                filters={runFilters}
+                labels={{
+                  hiddenByFilters: (n) => t("hiddenByFilters", { n }),
+                  showAll: t("showAll"),
+                  filterBy: t("filterBy"),
+                  groups: t("groupByCoinGroups"),
+                  coins: t("groupByCoins"),
+                  strategies: t("groupByStrategies"),
+                  all: t("filterAll"),
+                  none: t("filterNone"),
+                }}
+              />
             )}
             <ActiveStrategies
               runs={visibleRuns}
@@ -789,6 +719,7 @@ export default function LiveTradePage() {
                 </div>
               </div>
               <p className="text-xs text-amber-600 dark:text-amber-400">{t("startCaution")}</p>
+              {(() => { const s = tickSymbol(confirm?.template); return s ? tickWarn([s]) : null })()}
             </div>
           )}
           <DialogFooter>
@@ -848,6 +779,10 @@ export default function LiveTradePage() {
               </div>
             </div>
             <p className="text-xs text-amber-600 dark:text-amber-400">{t("startCaution")}</p>
+            {(() => {
+              const symbols = [...new Set((startGroup?.templates ?? []).map(tickSymbol).filter((s): s is string => s !== null))]
+              return symbols.length > 0 ? tickWarn(symbols) : null
+            })()}
           </div>
           <DialogFooter>
             <Button variant="secondary" size="sm" onClick={() => setStartGroup(null)}>{t("cancel")}</Button>

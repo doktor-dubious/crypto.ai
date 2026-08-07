@@ -160,11 +160,19 @@ export const STRATEGY_AXES: Record<string, StrategyAxes> = {
     choice: {
       key: "subset",
       label: "Composite members",
-      hint: "Which signals get a vote. All = every member; Spikes = the climax read (participation and violence plus confirming flags); Direction = exhaustion (who is pushing, how stretched, how tired).",
+      hint: "Which signals get a vote, and how loudly. The first three are fixed member lists: All = every member; Spikes = the climax read (participation and violence plus confirming flags); Direction = exhaustion (who is pushing, how stretched, how tired). The last two probe the members one at a time — cheap and readable, unlike searching all eleven weights at once (3^11 combos, 3.2× the cost each, and eleven continuous knobs fitted to one half of the data).",
       options: [
         { value: "all", label: "All signals" },
         { value: "spikes", label: "Spikes (climax)" },
         { value: "direction", label: "Direction (exhaustion)" },
+        // 11 and 44 combos respectively: one member disabled, or one member's
+        // weight moved to 0/50/200/300% (the 0% level IS a disable, so 11 of
+        // the 44 coincide with leave-one-out and are deduplicated when both
+        // modes are ticked). Counts are in the labels because these two
+        // multiply the grid far more than the fixed subsets do — and they must
+        // match the backend's _swing_variants, which is what actually expands.
+        { value: "leave_one_out", label: "Leave one out (11)" },
+        { value: "weight_oat", label: "Weight sweep, one at a time (44)" },
       ],
     },
     // The swings explorer has no volatility-regime control, and its fee default

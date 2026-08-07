@@ -25,6 +25,24 @@ class PaperTradePnl(BaseModel):
     month: float | None = None
 
 
+class TickLimitedCoin(BaseModel):
+    """One coin currently failing the tick guard."""
+
+    id: str
+    symbol: str
+
+
+class TickLimitedCoins(BaseModel):
+    """Coins (among those with paper-trade runs) whose price grid is too coarse
+    to trade: one tick exceeds ``tick_pct_limit`` percent of the price, so
+    close-fill paper P/L on them is quantization noise the spread would eat
+    live. One source of truth for every page that filters or flags such runs.
+    """
+
+    coins: list[TickLimitedCoin]
+    tick_pct_limit: float
+
+
 class PaperTradeRunResponse(BaseModel):
     """A run joined with its template's identity for the active-strategies view."""
 

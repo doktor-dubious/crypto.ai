@@ -34,13 +34,15 @@ import {
 } from "@/components/ui/pagination"
 import { Area, CartesianGrid, ComposedChart, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { cn } from "@/lib/utils"
+import {
+  DetailPaneMaximizedProvider, useDetailPageSize,
+} from "@/components/providers/detail-pane-provider"
 import { toast } from "sonner"
 import {
   klineSimulationsApi,
   type KlineSimulationResponse, type KlineSimulationPredictionResponse,
 } from "@/lib/api"
 
-const PRED_PER_PAGE = 10
 const SIMS_PER_PAGE = 10
 const STAR_KEY = "crypt:simPredStars"
 
@@ -520,6 +522,10 @@ function ModelFit({ sim }: { sim: KlineSimulationResponse }) {
 }
 
 function PredictionsTable({ simId, isKline }: { simId: string; isKline?: boolean }) {
+  // 10 rows normally, 15 with the detail pane maximized — the extra height is
+  // there, so spend it on rows. Rows are server-paged, so a size change has to
+  // send the reader back to page 1 or the offset can land past the end.
+  const predPerPage = useDetailPageSize()
   const [page, setPage] = useState(1)
   const [sortField, setSortField] = useState<PredSortField>("timestamp")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
@@ -539,13 +545,13 @@ function PredictionsTable({ simId, isKline }: { simId: string; isKline?: boolean
   }
 
   const { data } = useQuery({
-    queryKey: ["simPredictions", simId, model, sortField, sortDir, page, forecast],
+    queryKey: ["simPredictions", simId, model, sortField, sortDir, page, predPerPage, forecast],
     queryFn: () => klineSimulationsApi.predictions(simId, {
       model: model || undefined,
       sort_field: sortField,
       sort_dir: sortDir,
-      limit: PRED_PER_PAGE,
-      offset: (page - 1) * PRED_PER_PAGE,
+      limit: predPerPage,
+      offset: (page - 1) * predPerPage,
       forecast,
     }),
     enabled: !showOnlySelected, // when filtering to selected we render from the cache
@@ -557,6 +563,9 @@ function PredictionsTable({ simId, isKline }: { simId: string; isKline?: boolean
   useEffect(() => {
     if (data?.items) { const c = cacheRef.current; data.items.forEach((r) => c.set(r.id, r)) }
   }, [data])
+
+  // Maximizing the pane changes the page size, which renumbers every page.
+  useEffect(() => { setPage(1) }, [predPerPage])
 
   // Drop the filter automatically once nothing is selected.
   useEffect(() => {
@@ -610,10 +619,10 @@ function PredictionsTable({ simId, isKline }: { simId: string; isKline?: boolean
     : null
 
   const viewTotal = showOnlySelected ? (selectedRows?.length ?? 0) : total
-  const totalPages = Math.max(1, Math.ceil(viewTotal / PRED_PER_PAGE))
+  const totalPages = Math.max(1, Math.ceil(viewTotal / predPerPage))
   const safePage = Math.min(page, totalPages)
   const rows: KlineSimulationPredictionResponse[] = showOnlySelected
-    ? (selectedRows ?? []).slice((safePage - 1) * PRED_PER_PAGE, safePage * PRED_PER_PAGE)
+    ? (selectedRows ?? []).slice((safePage - 1) * predPerPage, safePage * predPerPage)
     : (data?.items ?? [])
 
   const allSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id))
@@ -794,7 +803,7 @@ function PredictionsTable({ simId, isKline }: { simId: string; isKline?: boolean
       {viewTotal > 0 && (
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">
-            Showing {(safePage - 1) * PRED_PER_PAGE + 1}–{Math.min(safePage * PRED_PER_PAGE, viewTotal)} of {viewTotal.toLocaleString()}
+            Showing {(safePage - 1) * predPerPage + 1}–{Math.min(safePage * predPerPage, viewTotal)} of {viewTotal.toLocaleString()}
           </span>
           {totalPages > 1 && (
             <Pagination className="w-auto mx-0">
@@ -1557,7 +1566,9 @@ export default function SimulationsPage() {
 
               <TabsContent value="predictions" className="mt-6 pl-[2px] pb-8 overflow-x-auto">
                 {selectedSim.status === "success" || selectedSim.status === "stopped" ? (
-                  <PredictionsTable key={selectedSim.id} simId={selectedSim.id} isKline={selectedSim.strategy === "kline"} />
+                  <DetailPaneMaximizedProvider maximized={detailMaximized}>
+                    <PredictionsTable key={selectedSim.id} simId={selectedSim.id} isKline={selectedSim.strategy === "kline"} />
+                  </DetailPaneMaximizedProvider>
                 ) : (
                   <p className="text-sm text-muted-foreground py-8">Predictions will be available once the simulation completes.</p>
                 )}

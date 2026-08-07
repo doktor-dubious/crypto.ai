@@ -17,7 +17,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from crypto_ai.database.models.coin import Coin
+from crypto_ai.config import get_settings
 from crypto_ai.database.models.paper_sweep import PaperSweep
 from crypto_ai.database.models.paper_trade_run import PaperTradeRun
 from crypto_ai.schemas.paper_sweep import (
@@ -30,6 +30,11 @@ from crypto_ai.schemas.paper_sweep import (
 )
 from crypto_ai.services.paper_trade import PaperTradeService
 from crypto_ai.services.swing_analysis import _t_stat
+from crypto_ai.services.tick_guard import (
+    coin_symbols,
+    partition_tick_limited,
+    tick_limited_coins,
+)
 
 log = structlog.get_logger()
 
@@ -195,9 +200,19 @@ class PaperSweepService:
             for r in runs
             if (r.scope or {}).get("coin_id")
         }
+        coin_ids = [str(c) for c in (sweep.coin_ids or [])]
+        limited = await tick_limited_coins(self.session, coin_ids)
+        if limited:
+            symbols = await self._symbols(limited)
+            log.info(
+                "paper_sweep.tick_limited_skipped",
+                sweep_id=sweep.id,
+                coins=sorted(symbols.get(c, c) for c in limited),
+            )
+            coin_ids = [c for c in coin_ids if c not in limited]
         combos = next_combos(
             list(sweep.template_ids or []),
-            list(sweep.coin_ids or []),
+            coin_ids,
             taken,
             int(sweep.max_concurrent) - running,
         )
@@ -326,6 +341,14 @@ class PaperSweepService:
         runs = [r for r in runs if r.equity is not None and r.initial_capital]
 
         symbols = await self._symbols({(r.scope or {}).get("coin_id") for r in runs})
+
+        # Runs on tick-limited coins are dropped from every stat: their P/L is
+        # price-grid quantization noise (one tick can be several percent), and
+        # pooled averages let a single such coin mint a phantom top template.
+        # The response reports what was hidden so the exclusion is never silent.
+        runs, excluded, excluded_symbols = await partition_tick_limited(
+            self.session, runs
+        )
         now = datetime.now(UTC)
 
         def pnl_pct(r: PaperTradeRun) -> float:
@@ -391,6 +414,9 @@ class PaperSweepService:
         ranked = sorted(runs, key=pnl_pct, reverse=True)
         return SweepLeaderboard(
             n_runs=len(runs),
+            n_tick_excluded=len(excluded),
+            tick_excluded_symbols=excluded_symbols,
+            tick_pct_limit=get_settings().sweep_max_tick_pct,
             templates=template_stats,
             pairs=_gate_pairs(by_template, pnl_pct),
             top_runs=[run_stat(r) for r in ranked[:top]],
@@ -398,10 +424,4 @@ class PaperSweepService:
         )
 
     async def _symbols(self, coin_ids: set[str | None]) -> dict[str, str]:
-        ids = [c for c in coin_ids if c]
-        if not ids:
-            return {}
-        rows = await self.session.execute(
-            select(Coin.id, Coin.symbol).where(Coin.id.in_(ids))
-        )
-        return dict(rows.all())
+        return await coin_symbols(self.session, coin_ids)

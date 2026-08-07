@@ -7,14 +7,18 @@ owns the statistics and the caveats. Returns are the fee-inclusive per-trade
 coins pools honestly; quote P/L is summed too but only comparable within a run.
 """
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from crypto_ai.database.models.coin import Coin
 from crypto_ai.database.models.paper_trade import PaperTrade
 from crypto_ai.database.models.paper_trade_run import PaperTradeRun
 from crypto_ai.database.models.strategy_template import StrategyTemplate
 from crypto_ai.schemas.paper_trade_analysis import BucketStat, PaperTradeAnalysis
+from crypto_ai.services.tick_guard import (
+    coin_symbols,
+    partition_tick_limited,
+    scope_coin_id,
+)
 from crypto_ai.services.trade_buckets import BucketInput, build_bucket_analysis
 
 
@@ -62,6 +66,38 @@ class PaperTradeAnalysisService:
         if scope == "run":
             runs = runs[:1]
 
+        # Tick-limited runs are dropped BEFORE pooling: their per-trade returns
+        # are price-grid quantization (one tick can be several percent), and
+        # bucketed over enough trades that noise turns into significant-looking
+        # edges. The count and coins of what was dropped travel in the response
+        # so the exclusion is visible, never silent.
+        runs, excluded_runs, tick_excluded_symbols = await partition_tick_limited(
+            self.session, runs
+        )
+        tick_limited = not runs and bool(excluded_runs)
+        if tick_limited:
+            # EVERY pooled run is on a tick-limited coin — for a template scoped
+            # to such a coin, dropping them would leave nothing but the exclusion
+            # note, with no way to see the buckets at all. Keep the runs and flag
+            # the analysis instead: warn, don't hide.
+            runs, excluded_runs = excluded_runs, []
+        n_tick_excluded = 0
+        if excluded_runs:
+            # Counted with the same definition the bucketing uses (closed AND
+            # a realised ret) so the excluded count reconciles with the totals.
+            n_tick_excluded = (
+                await self.session.execute(
+                    select(func.count())
+                    .select_from(PaperTrade)
+                    .where(
+                        PaperTrade.run_id.in_([r.id for r in excluded_runs]),
+                        PaperTrade.active == True,  # noqa: E712
+                        PaperTrade.status == "closed",
+                        PaperTrade.ret.is_not(None),
+                    )
+                )
+            ).scalar_one()
+
         def identify(
             analysis: PaperTradeAnalysis, n_open: int, coins: list[str]
         ) -> PaperTradeAnalysis:
@@ -70,6 +106,9 @@ class PaperTradeAnalysisService:
             analysis.n_runs = len(runs)
             analysis.n_open = n_open
             analysis.coins = coins
+            analysis.n_tick_excluded = n_tick_excluded
+            analysis.tick_excluded_symbols = tick_excluded_symbols
+            analysis.tick_limited = tick_limited
             return analysis
 
         empty = PaperTradeAnalysis(
@@ -94,9 +133,7 @@ class PaperTradeAnalysisService:
 
         closed = [tr for tr in trades if tr.status == "closed" and tr.ret is not None]
         n_open = len(trades) - len(closed)
-        coins = await self._symbols(
-            {str(r.scope["coin_id"]) for r in runs if r.scope and r.scope.get("coin_id")}
-        )
+        coins = await self._symbols({c for r in runs if (c := scope_coin_id(r))})
         if not closed:
             return identify(empty, n_open, coins)
 
@@ -118,11 +155,4 @@ class PaperTradeAnalysisService:
 
     async def _symbols(self, coin_ids: set[str]) -> list[str]:
         """Ticker symbols for the pooled runs' coins (ids are meaningless in a UI)."""
-        if not coin_ids:
-            return []
-        rows = (
-            await self.session.execute(
-                select(Coin.symbol).where(Coin.id.in_(coin_ids))
-            )
-        ).scalars().all()
-        return sorted(rows)
+        return sorted((await coin_symbols(self.session, coin_ids)).values())

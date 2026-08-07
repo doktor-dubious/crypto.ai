@@ -270,12 +270,209 @@ Stop loss trail_atr (2.5)
 Take profit None
 Fees 4 bps
 
+Signal threshold
+Hold max (bars)
+Stop loss
+Take profit
+Fees
+Side
+Higher timeframe
+
+Signal components
+
+
+Page trading/strategies/trend-swings/analytics:
+On the Optimization tab,
+New Optimization has:
+Composite members
+* All Members
+* Spikes
+* Direction
+
+1) Are Spikes and Directions groups of the 11 individuals signals?
+2) Is it not possible to include a percentage variation for each individual signal (0=off)
+
+
+parecord --device=alsa_output.pci-0000_00_1f.3.analog-stereo.monitor out.wav
+ffmpeg -f pulse -i alsa_output.pci-0000_00_1f.3.analog-stereo.monitor out.mp3
+
+
+pactl load-module module-null-sink sink_name=mix
+pactl load-module module-loopback source=<your-mic> sink=mix
+pactl load-module module-loopback source=<alsa_output.usb-24ae_Rapoo_Gaming_Headset-00.iec958-stereo.monitor> sink=mix
+parecord --device=mix.monitor call.wav
+
+
+pactl list short sources | grep monitor
+60  alsa_output.usb-24ae_Rapoo_Gaming_Headset-00.iec958-stereo.monitor  PipeWire  s24le 2ch 48000Hz IDLE
+64  alsa_output.pci-0000_00_1f.3.analog-stereo.monitor  PipeWire  s32le 2ch 48000Hz SUSPENDED
+2644  mix.monitor PipeWire  float32le 2ch 48000Hz SUSPENDED
+2659  mix.monitor PipeWire  float32le 2ch 48000Hz SUSPENDED
+2666  mix.monitor PipeWire  float32le 2ch 48000Hz SUSPENDED
+
+Is this correct?:
+pactl load-module module-null-sink sink_name=mix
+pactl load-module module-loopback source=<your-mic> sink=mix
+pactl load-module module-loopback source=<alsa_output.usb-24ae_Rapoo_Gaming_Headset-00.iec958-stereo.monitor> sink=mix
+parecord --device=mix.monitor call.wav
+
+
+
+
+
+2-03. Agent Tone of Voice for Chat Channels [A] / project_representative_agent_chat_speaking_style
+Friendly professional, super welcoming.
+
+2-03-A. Agent Chat Formatting Style [A] / project_representative_agent_chat_formatting_style
+- Do not use any lists (numbered or bulleted) when communicating information.
+- Summarize all details in a single sentence where appropriate.
+- Do not use markdown formatting.
+- Do not use hashtags.
+- Do not use emojis.
+
+2-07-A. Voice - Disclaimer Phrase [A] / project_representative_agent_voice_disclaimer_phrase
+Dette opkald kan blive optaget.
+
+Greeting Phrase
+Hej! Tak for at du ringer til Sporting Health Club, mit navn er Freja. Må jeg spørge, hvem jeg taler med?
+> Mit navn er Freja. Jeg er lavet med artificial intelligence og kan hjælpe dig med det meste. Må jeg spørge hvem jeg taler med?
+
+Hej! Tak for at du ringer til Sporting Health Club, mit navn er Freja. Må jeg spørge, hvem jeg taler med?
+
+Hej! Tak for at du ringer til Sporting Health Club, mit navn er Freja. Jeg er lavet med artificial intelligence og kan hjælpe dig med det meste. Må jeg spørge hvem jeg taler med?
+
+project_attributes_setting_voice_integration_service_voice_to_voice_provider_genai_voice
+project_attributes_setting_voice_integration_service_voice_to_voice_provider_openai_voice
+
+Friendly professional, super welcoming. Speak energetic and fast.
+Friendly professional, super welcoming. Speak with Australian accent.
+
+
+----------------------
+
+The skill takes free-text arguments — there's no rigid parameter schema. You'd invoke it like:
+
+/strategy-scan momentum
+/strategy-scan momentum on 15m and 1h, 6 templates, futures taker fees
+
+and I (in that future session) interpret the arguments against the playbook. The things worth specifying, with their defaults if you say nothing:
+
+┌───────────────────────────────┬────────────────────────────────────────────────┬──────────────────────────────────────────────┐
+│             What              │                    Default                     │               Example override               │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Strategy family               │ streak                                         │ momentum, range, sweep, takerflow, indicator │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Number of templates to create │ 4                                              │ "give me 6"                                  │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Timeframe(s)                  │ 5m (15m probed in stage B)                     │ "15m and 1h only"                            │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Side                          │ long-only (live spot constraint)               │ "both sides" — for futures use               │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Fee target                    │ 4 bps RT (maker), stressed at 10/20            │ "must survive 10 bps"                        │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Coin universe                 │ ~20 best by volatility × liquidity, tick-clean │ "top-50 by market cap", "exclude memes"      │
+├───────────────────────────────┼────────────────────────────────────────────────┼──────────────────────────────────────────────┤
+│ Validation window             │ 12+ months, both halves positive               │ "24 months"                                  │
+└───────────────────────────────┴────────────────────────────────────────────────┴──────────────────────────────────────────────┘
+
+For momentum specifically, the skill's cheat-sheet already covers the knob mapping, and the stage-B grid would adapt: threshold means required volume spike in σ on the breakout bar (researched sweet spot ~2σ, grid 1.5–3), the
+tunable knob is window (channel lookback, default 48), and the natural conditioner probe is vol_gate=expanding — the researched pairing, since breakouts continue in vol expansions while streak fades preferred no gate. One thing
+to expect: momentum is a with-trend strategy, so unlike streak it may genuinely prefer wider stops/TP modes and may hold up better on 15m/1h than 5m — stage B would probe SL/TP modes there where I skipped them for streak.
+
+One honest caveat: the current SKILL.md documents the knobs for all six families but the hard-won stage details (winner shapes, which conditioners helped) are streak-specific — a momentum run would rediscover its own shape in
+stage B. Want me to add an explicit "Arguments" section like the table above to the SKILL.md so the interpretation is pinned down rather than left to the future session's judgment?
+
+----------------------
+
+
+
+Can you use the analysis system to make investigations into locating strategies + parameters on coins + timeframes that could have potential? Say start with identifying 4 coins/parameter settings on Streak Reversion (http://localhost:3000/trading/strategies/scalping/streak-reversion/analytics) that you think have the highest potential to be profitable in live trading.
+
+Create the strategies and give them a name that is easily identifable. Write in notes, on what grounds you selected this particular coin + parameters.
+
+I'd like strategies for the last two strtegy types: Range and Trend Swings. 4 for range, and 6 for Trend Swings
+
+/strategy-scan Range (trading/strategies/scalping/range/analytics). Identify your 4 best candidates, Create the strategies and give them a name that is easily identifable. Write in notes, on what grounds you selected this particular coin + parameters.
+When they're created start them in paper trade with 100 investment.
+
+/strategy-scan Trend Swings (trading/strategies/trend-swings/analytics). Identify your 4 best candidates, Create the strategies and give them a name that is easily identifable. Write in notes, on what grounds you selected this particular coin + parameters.
+When they're created start them in paper trade with 100 investment.
+
+
+
+
+--
+
+Can we not have these recurring events where you have melt downs over something. 
+
+
+
+
+
+
+All but range
+All but voldiv
+All but decel
+
+All but volume
+All but avg_trade
+
+All but range
+All but trades
+All but wick
+
+
+
+
+
+
+
+
+
+
+
+pactl load-module module-null-sink sink_name=mix sink_properties=device.description=RecordingMix
+
+
+
+pactl load-module module-loopback \
+  source=alsa_input.usb-24ae_Rapoo_Gaming_Headset-00.mono-fallback \
+  sink=mix latency_msec=1
+
+pactl load-module module-loopback \
+  source=alsa_output.usb-24ae_Rapoo_Gaming_Headset-00.iec958-stereo.monitor \
+  sink=mix latency_msec=1
+
+parecord --device=mix.monitor call.wav
+
+
+
 
 HERE TO:
-1) Remove max on num of combinations (now max 9999)
-2) Do not close popup when click outside popup
-3) Select All
+1) Remove max on num of combinations (now max 9999), or set to 99999. Default to 2500
+2) Do not close popup when click outside popup. Close on pressing ESC or a cancel button.
+3) Default the name to be the selected coin + an iterator. E.g. "BTC #3" - if all coins have been selected, set name to ALL COINS (+ an iterate if necessary).
+4) Inputs with multiple checkboxes, should have a small "select all" button
+5) Above timeframe should be a button to "Select All" to select all possible variations.
+6) The date range selector should be moved to above coins.
+7) How is the time calculated, it seems to be too conservative. In any case, can you set the warnings higher. Perhaps at 1000 & 2500
+8) All the optimizations, on different coins and strategies, I have run seem to come out with 4h on top. On various metrics. This may be correct, but can you check if there is an issue with this somehow being weighted higher.
 
+
+1) page trading/paper:
+When clicking on the strategy it opens the page on the trading/strategies page.
+This is correct, but can you make it a link, such that I can right click on it and open the strategy page in a new browser tab.
+
+2) Page trading/paper:
+Can you remove the sweep tab (don't have to remove the page entirely just yet, not sure if it should be brought back later). The there is only the Active tab left, so can remove the tab selector.
+
+
+
+Page trading/strategies, has 17 running strategies on paper trade
+But only 13 is displayed on trading/paper
+
+This one for instance seems to be missing: 086e5c4d-4470-4890-9d47-155e15fec91a
+And this one: ce61467a-6404-4ac8-8c8a-a3840db66abd
 
 Uden at vide det, tror jeg mere på en bedre confirmation af udmattelse af en retning. Selv om vi taber lidt af profit på de gode trades ved at komme lidt senere ind i trade
 

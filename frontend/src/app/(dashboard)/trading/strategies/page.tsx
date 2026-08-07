@@ -49,8 +49,22 @@ import {
 const STORAGE_PREFIX = "gorm:strategies:"
 const PER_PAGE = 10
 
-type SortField = "name" | "strategy" | "kind" | "coin" | "timeframe" | "trades" | "pnl"
+type SortField = "name" | "strategy" | "kind" | "coin" | "timeframe" | "created" | "trades" | "pnl"
 type GroupByMode = "none" | "groups" | "coins" | "strategies" | "kind"
+
+// Sort defaults to newest-first: a strategy you just saved on a workbench sorts
+// to the top row rather than alphabetically into the middle of a paged table,
+// where it reads as a save that silently failed. The persisted keys carry a
+// version suffix so a browser holding the old name/asc default picks this up.
+const SORT_FIELD_KEY = "sortField.v2"
+const SORT_DIR_KEY = "sortDir.v2"
+
+// Compact enough to sit in a table column, precise enough to tell two saves of
+// the same strategy a minute apart apart.
+const createdAt = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  })
 
 // Ordered by consequence: simulated → real orders, fake money → real money.
 const ALL_VENUES: TradeSource[] = ["paper", "testnet", "live"]
@@ -172,8 +186,8 @@ function StrategiesList() {
 
   // ── Table state ──
   const [search, setSearch] = useState("")
-  const [sortField, setSortField] = useState<SortField>(() => loadJson<SortField>("sortField", "name"))
-  const [sortDir, setSortDir] = useState<"asc" | "desc">(() => loadJson<"asc" | "desc">("sortDir", "asc"))
+  const [sortField, setSortField] = useState<SortField>(() => loadJson<SortField>(SORT_FIELD_KEY, "created"))
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(() => loadJson<"asc" | "desc">(SORT_DIR_KEY, "desc"))
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [starredIds, setStarredIds] = useState<Set<string>>(() => new Set(loadJson<string[]>("starred", [])))
   const [showOnlySelected, setShowOnlySelected] = useState(false)
@@ -193,8 +207,8 @@ function StrategiesList() {
   useEffect(() => { saveJson("venues", [...venues]) }, [venues])
 
   useEffect(() => { saveJson("starred", [...starredIds]) }, [starredIds])
-  useEffect(() => { saveJson("sortField", sortField) }, [sortField])
-  useEffect(() => { saveJson("sortDir", sortDir) }, [sortDir])
+  useEffect(() => { saveJson(SORT_FIELD_KEY, sortField) }, [sortField])
+  useEffect(() => { saveJson(SORT_DIR_KEY, sortDir) }, [sortDir])
   useEffect(() => { saveJson("selected", selectedId) }, [selectedId])
   useEffect(() => { saveJson("groupBy", groupBy) }, [groupBy])
 
@@ -374,6 +388,13 @@ function StrategiesList() {
       )
     }
     return [...items].sort((a, b) => {
+      // Created compares as an instant, not as its rendered text — the column
+      // shows "Aug 6, 20:08", which would sort alphabetically by month name.
+      if (sortField === "created") {
+        const d = Date.parse(a.created_at) - Date.parse(b.created_at)
+        const cmpC = d === 0 ? a.name.localeCompare(b.name) : d
+        return sortDir === "asc" ? cmpC : -cmpC
+      }
       // Numeric columns compare as numbers; an untraded strategy sorts below
       // every traded one rather than tying with a genuine 0.00%.
       if (sortField === "trades" || sortField === "pnl") {
@@ -487,8 +508,10 @@ function StrategiesList() {
 
   // ── Actions ──
   function toggleSort(field: SortField) {
+    // First click on Created reads newest-first — ascending would open on the
+    // oldest strategies, which is never what the column is being clicked for.
     if (sortField === field) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
-    else { setSortField(field); setSortDir("asc") }
+    else { setSortField(field); setSortDir(field === "created" ? "desc" : "asc") }
   }
   function toggleStar(id: string) {
     setStarredIds((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -532,6 +555,9 @@ function StrategiesList() {
       </TableCell>
       <TableCell>{marketCell(tpl, symbolOf(tpl))}</TableCell>
       <TableCell className="font-mono text-xs">{marketCell(tpl, timeframeOf(tpl))}</TableCell>
+      <TableCell className="text-xs whitespace-nowrap tabular-nums text-[var(--muted-foreground)]">
+        {createdAt(tpl.created_at)}
+      </TableCell>
       <TableCell className="text-right tabular-nums">{tradesCell(tpl)}</TableCell>
       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
         <Button
@@ -564,7 +590,10 @@ function StrategiesList() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    // `relative` anchors the maximized detail pane (absolute inset-0) to the
+    // page area — without it the pane resolves against the viewport and covers
+    // the dashboard footer.
+    <div className="relative flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -638,6 +667,7 @@ function StrategiesList() {
                 <TableHead><SortHeader field="kind" label={t("colKind")} /></TableHead>
                 <TableHead><SortHeader field="coin" label={t("colCoin")} /></TableHead>
                 <TableHead><SortHeader field="timeframe" label={t("colTimeframe")} /></TableHead>
+                <TableHead><SortHeader field="created" label={t("colCreated")} /></TableHead>
                 <TableHead className="text-right">
                   <span className="flex justify-end" title={t("colTradesHint")}>
                     <SortHeader field="trades" label={t("colTrades")} />
@@ -650,7 +680,7 @@ function StrategiesList() {
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-24 text-center text-sm text-[var(--muted-foreground)]">
+                  <TableCell colSpan={10} className="h-24 text-center text-sm text-[var(--muted-foreground)]">
                     {templates.length === 0 ? t("emptyNoStrategies") : t("emptyNoMatch")}
                   </TableCell>
                 </TableRow>
@@ -662,7 +692,7 @@ function StrategiesList() {
                     <Fragment key={row.tpl.id}>
                       {showHeader && (
                         <TableRow className="bg-[var(--muted)]/40 hover:bg-[var(--muted)]/40">
-                          <TableCell colSpan={9} className="py-1.5">
+                          <TableCell colSpan={10} className="py-1.5">
                             <span className="flex items-center gap-2 text-xs font-semibold">
                               {row.title}
                               <span className="font-normal text-[var(--muted-foreground)] tabular-nums">{row.items.length}</span>

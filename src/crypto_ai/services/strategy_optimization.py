@@ -8,6 +8,7 @@ estimate the create dialog shows before anything is committed. Execution lives i
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import UTC, datetime
 
@@ -28,6 +29,7 @@ from crypto_ai.schemas.strategy_optimization import (
     OptimizationResultResponse,
     OptimizationUpdate,
 )
+from crypto_ai.services.kline_simulation_record import _interval_minutes
 from crypto_ai.services.strategy_optimization_grid import (
     cartesian_size,
     count_param_combos,
@@ -39,12 +41,29 @@ from crypto_ai.services.strategy_optimization_grid import (
 MIN_TRAIN_TRADES = 10
 MIN_VAL_TRADES = 3
 
-# Measured on this codebase: ~15 ms per combo once a market's context is built
-# (the score arrays are cached per gate combination, so only the trade loop
-# re-runs), and a couple of seconds to build that context. Both are estimates for
-# a warning, not promises — a year of 5m bars costs more than a month of 1d.
-_MS_PER_COMBO = 15
-_SECONDS_PER_MARKET = 2.5
+# Cost model, measured on this codebase (BTC, 2026-01-01..08-04, five intervals
+# from 1d to 5m). Both parts scale LINEARLY with bar count, which is why a single
+# per-combo constant was wrong by an order of magnitude in both directions: a
+# combo costs 0.25 ms on 1d and 59 ms on 5m over the same calendar range.
+#
+#   context build   7.5 µs × bars fetched   (0.03 s on 1d → 7.2 s on 5m)
+#   one combo       0.93 µs × bars in range (the trade loop, per bar)
+#
+# The fetch is bounded only at the top (everything up to end_date is loaded, so
+# the trailing windows have their warmup), so it reads more bars than the range
+# holds — how many more depends on the coin's listing date. _HISTORY_FACTOR is
+# the middle of that spread rather than a measurement of any one coin.
+_CTX_S_PER_BAR = 7.5e-6
+_COMBO_S_PER_BAR = 0.93e-6
+_HISTORY_FACTOR = 4.0
+# Overhead outside the maths, backed out of completed runs: per market, task
+# dispatch + session setup + the grid re-expansion; per combo, building and
+# inserting its result row.
+_MARKET_FIXED_S = 0.8
+_COMBO_FIXED_S = 0.004
+# Markets run as independent Celery children on a worker at concurrency 4, one
+# slot of which is usually busy with the paper/live trading beats.
+_PARALLEL_MARKETS = 3
 
 
 class UnsupportedCoinModeError(ValueError):
@@ -114,7 +133,14 @@ class StrategyOptimizationService:
         per = count_param_combos(spec)
         cartesian = cartesian_size(spec, len(coins), len(data.intervals))
         to_run = min(cartesian, data.max_combos)
-        est = int(n_markets * _SECONDS_PER_MARKET + to_run * _MS_PER_COMBO / 1000)
+        est = _estimate_seconds(
+            intervals=list(data.intervals),
+            n_coins=len(coins),
+            n_combos=to_run,
+            range_days=max(1, (data.end_date - data.start_date).days),
+            per_market=per,
+            cartesian=cartesian,
+        )
         return OptimizationEstimate(
             n_markets=n_markets,
             n_param_combos=per,
@@ -238,6 +264,65 @@ class StrategyOptimizationService:
                 rate = elapsed / o.n_done
                 resp.eta_seconds = int(rate * (o.n_total - o.n_done))
         return resp
+
+
+def _touched_markets(n_markets: int, per_market: int, cartesian: int, n_drawn: int) -> float:
+    """How many markets a sampled grid actually lands on.
+
+    Not ``n_markets``: drawing 900 combos across 1,700 markets leaves half of
+    them with nothing, and a market with no combos is never dispatched at all.
+    Since the draw is over distinct indices, a given market is missed only if all
+    ``per_market`` of its indices are, so the expected hit count is
+    ``M · (1 − (1 − k/cartesian)^per_market)`` — which collapses to ``k`` when
+    each market holds one combo and to ``M`` once the budget dwarfs the grid.
+    """
+    if cartesian <= 0 or n_drawn >= cartesian or per_market <= 0:
+        return float(n_markets)
+    miss = math.exp(per_market * math.log1p(-n_drawn / cartesian))
+    return n_markets * (1.0 - miss)
+
+
+def _estimate_seconds(
+    *, intervals: list[str], n_coins: int, n_combos: int, range_days: int,
+    per_market: int = 1, cartesian: int = 0,
+) -> int:
+    """Wall-clock for a grid, from the measured per-bar costs above.
+
+    Timeframe is the dominant term and it works the opposite way to intuition:
+    ticking 5m alongside 1d multiplies the cost of that share of the grid by
+    nearly 300, because a 5m market holds 288× the bars. So the estimate is built
+    per interval rather than from an average, and combos are assumed to spread
+    evenly over markets (which is what uniform sampling does).
+
+    Wall-clock is not total work: markets are independent Celery children. But it
+    can never beat the SLOWEST single market either — one 5m market's combos all
+    run in one child, in sequence — so the estimate is the larger of the two.
+
+    Accurate to roughly a factor of two on the runs it was fitted against. What
+    it cannot see is queueing: a grid dispatched while another is still running
+    waits for slots, and no static model predicts that.
+    """
+    intervals = intervals or ["15m"]
+    n_markets = max(1, n_coins * len(intervals))
+    touched = max(1.0, _touched_markets(n_markets, per_market, cartesian or n_combos, n_combos))
+    # Combos and markets both spread evenly over the intervals, so one interval's
+    # share is the whole grid divided by how many are ticked.
+    coins_per_interval = touched / len(intervals)
+    combos_per_market = n_combos / touched
+
+    work = 0.0
+    slowest = 0.0
+    for interval in intervals:
+        minutes = max(1, _interval_minutes(interval))
+        bars = range_days * 1440 / minutes
+        market = (
+            _MARKET_FIXED_S
+            + _CTX_S_PER_BAR * bars * _HISTORY_FACTOR
+            + combos_per_market * (_COMBO_S_PER_BAR * bars + _COMBO_FIXED_S)
+        )
+        work += market * coins_per_interval
+        slowest = max(slowest, market)
+    return int(max(work / _PARALLEL_MARKETS, slowest))
 
 
 def _spec_of(data: OptimizationCreate) -> dict:

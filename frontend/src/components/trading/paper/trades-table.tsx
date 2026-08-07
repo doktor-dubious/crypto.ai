@@ -40,6 +40,7 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
+import { useDetailPageSize } from "@/components/providers/detail-pane-provider"
 import { TradeAnalysisDialog } from "@/components/trading/paper/trade-analysis-dialog"
 import {
   paperTradeApi, liveTradeApi,
@@ -47,7 +48,6 @@ import {
   type TradeSource,
 } from "@/lib/api"
 
-const TRADES_PER_PAGE = 10
 // Server cap on one trades fetch. Reaching it means the list is a partial view,
 // which the unrealized-P/L reconciliation must not sum over.
 const TRADES_LIMIT = 2000
@@ -143,6 +143,10 @@ export function TradesTable({
   isRunning: boolean
 }) {
   const t = useTranslations("paperTrade")
+
+  // 10 rows normally, 15 when the detail pane is maximized — the extra height
+  // is there, so spend it on rows.
+  const tradesPerPage = useDetailPageSize()
 
   // ── Which venues to include ──
   const [sources, setSources] = useState<Set<TradeSource>>(loadSources)
@@ -378,9 +382,9 @@ export function TradesTable({
     return { nOpen, unrealized: pickedRun.pnl_total - realized, runTotal: pickedRun.pnl_total }
   }, [trades, pickedRun])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / TRADES_PER_PAGE))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / tradesPerPage))
   const safePage = Math.min(page, totalPages)
-  const pageTrades = filtered.slice((safePage - 1) * TRADES_PER_PAGE, safePage * TRADES_PER_PAGE)
+  const pageTrades = filtered.slice((safePage - 1) * tradesPerPage, safePage * tradesPerPage)
 
   // ── Actions ──
   function toggleSort(field: TradeSortField) {
@@ -700,8 +704,8 @@ export function TradesTable({
           <div className="flex items-center justify-between px-3 py-1.5 border-t">
             <span className="text-xs text-[var(--muted-foreground)]">
               {t("showingTrades", {
-                from: (safePage - 1) * TRADES_PER_PAGE + 1,
-                to: Math.min(safePage * TRADES_PER_PAGE, filtered.length),
+                from: (safePage - 1) * tradesPerPage + 1,
+                to: Math.min(safePage * tradesPerPage, filtered.length),
                 total: filtered.length,
               })}
             </span>

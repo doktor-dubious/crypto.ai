@@ -28,12 +28,28 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   },
 }
 
-/** Swings records what is switched OFF; the popup should say what voted. */
-function describeSubset(disabled: string[] | undefined): string {
+/** Swings records what is switched OFF and how the rest are weighted; the popup
+ *  should say what voted, and how loudly where that isn't the default.
+ *
+ *  Phrased as the DIFFERENCE from all-signals-equal, because that is what the
+ *  leave-one-out and weight sweeps produce: "without volume spike" reads as the
+ *  variation it is, where "10 of 11: streak, range, …" makes the reader diff two
+ *  lists by eye to find the one that changed. */
+function describeSubset(
+  disabled: string[] | undefined,
+  weights: Record<string, number> | undefined,
+): string {
   if (!disabled) return "—"
-  if (disabled.length === 0) return "All signals"
-  const enabled = SWING_ALL.filter((k) => !disabled.includes(k))
-  return `${enabled.length} of ${SWING_ALL.length}: ${enabled.join(", ")}`
+  const scaled = Object.entries(weights ?? {}).filter(([, v]) => Number(v) !== 100)
+  const parts: string[] = []
+  if (disabled.length === 0) parts.push("All signals")
+  else if (disabled.length === 1) parts.push(`All but ${disabled[0]}`)
+  else {
+    const enabled = SWING_ALL.filter((k) => !disabled.includes(k))
+    parts.push(`${enabled.length} of ${SWING_ALL.length}: ${enabled.join(", ")}`)
+  }
+  if (scaled.length) parts.push(scaled.map(([k, v]) => `${k} @ ${v}%`).join(", "))
+  return parts.join(" · ")
 }
 
 const SWING_ALL = [
@@ -92,7 +108,10 @@ export function VariationDialog({
           label: axes.choice.label,
           value: axes.choice.key === "indicator"
             ? String(p.indicator ?? "—")
-            : describeSubset(p.disabledSignals as string[] | undefined),
+            : describeSubset(
+                p.disabledSignals as string[] | undefined,
+                p.weightPct as Record<string, number> | undefined,
+              ),
         }]
       : []),
     { key: "htfGate", label: t("fHtf"), value: p.htfGate === "off" ? "Off" : `${p.htfGate} ${p.htfTf} (${p.htfLevel}σ)` },

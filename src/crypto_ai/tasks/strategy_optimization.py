@@ -57,7 +57,13 @@ async def _plan(optimization_id: str) -> dict:
         # coin toggled inactive, a group edited mid-run) would give them a
         # different expansion than the one n_total was computed from — leaving
         # the counters permanently short of (or past) the frozen total.
-        opt.spec = {**opt.spec, "resolved_coins": [list(c) for c in coins]}
+        #
+        # "draw" freezes the SAMPLING ALGORITHM the same way: expand() only
+        # index-samples huge cartesians when the spec says the plan was drawn
+        # that way, so children of an optimization planned by older code (no
+        # stamp) keep reproducing its shuffle draw — otherwise a deploy mid-run
+        # would strand the counters short of n_total forever.
+        opt.spec = {**opt.spec, "resolved_coins": [list(c) for c in coins], "draw": 2}
 
         intervals = list(opt.spec.get("intervals") or [])
         combos, cartesian, sampled = expand(
@@ -72,10 +78,15 @@ async def _plan(optimization_id: str) -> dict:
         opt.n_total = len(combos)
         opt.n_done = 0
         opt.n_skipped = 0
-        opt.status = "running" if combos else "success"
+        opt.status = "running" if combos else "error"
         opt.started_at = datetime.now(UTC)
         opt.error = None
         if not combos:
+            # Never "success". A grid that expands to nothing has a spec that
+            # can't be honoured — no coins resolved, or no timeframes — and
+            # reporting that as a completed search with no findings is the most
+            # misleading thing this task could do.
+            opt.error = "This grid expands to no combos — check the coins and timeframes."
             opt.finished_at = opt.started_at
         await session.commit()
 
@@ -116,18 +127,23 @@ async def _run_market(
         # given (spec, coins, seed), so this reproduces the parent's plan
         # exactly. Falling back to a live resolve covers optimizations planned
         # before the freeze existed.
+        #
+        # ``only_market`` matters more than it looks: every one of possibly
+        # thousands of children runs this expansion, and without the filter each
+        # would build a parameter blob for every combo in the grid just to throw
+        # all but its own away.
         frozen = opt.spec.get("resolved_coins")
         coins = (
             [tuple(c) for c in frozen]
             if frozen is not None
             else await service.resolve_coins(opt.spec.get("coins", {}), opt.seed)
         )
-        combos, _, _ = expand(
+        mine, _, _ = expand(
             opt.spec, coins, list(opt.spec.get("intervals") or []),
             max_combos=opt.max_combos, seed=opt.seed,
             baseline_params=opt.spec.get("baseline_params") or None,
+            only_market=(coin_id, quote_asset, interval),
         )
-        mine = group_by_market(combos).get((coin_id, quote_asset, interval), [])
         if not mine:
             return {"skipped": "no combos for this market"}
 

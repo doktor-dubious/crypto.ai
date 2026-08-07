@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { LineChart, Play, Trash2, Save } from "lucide-react"
+import { AlertTriangle, LineChart, Play, Trash2, Save } from "lucide-react"
 import { toast } from "sonner"
 import { CopyIcon } from "@/components/animate-ui/icons/copy"
 import { AnimateIcon } from "@/components/animate-ui/icons/icon"
@@ -23,10 +23,11 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+import { DetailPaneMaximizedProvider } from "@/components/providers/detail-pane-provider"
 import { strategyLabel, strategyDescription, strategyAnalyticsHref } from "@/components/trading/strategy-meta"
 import { AnalysisTab } from "@/components/trading/paper/analysis-tab"
 import { TradesTable } from "@/components/trading/paper/trades-table"
-import { strategyTemplatesApi, type StrategyTemplate, type CoinResponse } from "@/lib/api"
+import { paperTradeApi, strategyTemplatesApi, type StrategyTemplate, type CoinResponse } from "@/lib/api"
 
 const TAB_STORAGE_KEY = "gorm:paperTrade:activeTab"
 
@@ -129,6 +130,17 @@ export function TemplateDetailPane({
   const scope = template.scope ?? {}
   const symbol = scope.coin_id ? coinById.get(scope.coin_id)?.symbol ?? "—" : "—"
   const pair = scope.coin_id ? `${symbol}/${scope.quote_asset ?? "USDT"}` : "—"
+
+  // Tick guard: when this template's coin trades on a grid where one tick
+  // exceeds ~0.1% of the price, every P/L figure in the pane (Trades, Analyze)
+  // is quantization noise — warn across all tabs rather than filter to nothing.
+  const { data: tickLimited } = useQuery({
+    queryKey: ["paperTickLimited"],
+    queryFn: paperTradeApi.tickLimited,
+    staleTime: 10 * 60_000,
+  })
+  const tickLimitedCoin = scope.coin_id != null
+    && (tickLimited?.coins ?? []).some((c) => c.id === scope.coin_id)
   const params = flattenParams(template.params ?? {})
   // An ABSTRACT strategy has no market of its own — each run picks one. Say that
   // rather than showing em-dashes, which read as missing data.
@@ -138,162 +150,176 @@ export function TemplateDetailPane({
       : value
 
   return (
-    <div className={cn(
-      "flex-1 flex flex-col min-h-0 overflow-hidden border-t",
-      maximized && "absolute inset-0 z-20 bg-background",
-    )}>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
-        <div className="relative w-full">
-          <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabData")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabAi")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabTrades")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabAnalyze")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
-            <div
-              className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => setMaximized((v) => !v)}
-              aria-label={maximized ? "Minimize" : "Maximize"}
-            >
-              {maximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
-            </div>
-          </TabsList>
-          <div className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0" style={{ left: indicator.left, width: indicator.width }} />
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          {/* ── Details ── */}
-          <TabsContent value="tab1" className="space-y-4 max-w-2xl mt-6 px-4">
-            <Field label="ID">
-              <div className="relative">
-                <Input value={template.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
-                <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
-                  <CopyIcon size={16} className="text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => { navigator.clipboard.writeText(template.id); toast.success(t("copied")) }} />
-                </AnimateIcon>
+    <DetailPaneMaximizedProvider maximized={maximized}>
+      <div className={cn(
+        "flex-1 flex flex-col min-h-0 overflow-hidden border-t",
+        maximized && "absolute inset-0 z-20 bg-background",
+      )}>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
+          <div className="relative w-full">
+            <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabData")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabAi")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabTrades")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab6">{t("tabAnalyze")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
+              <div
+                className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setMaximized((v) => !v)}
+                aria-label={maximized ? "Minimize" : "Maximize"}
+              >
+                {maximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
               </div>
-            </Field>
-            <Field label={t("name")}>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label={t("description")}>
-              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("descriptionPlaceholder")} />
-            </Field>
-            <Field label={t("notes")}>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} className="resize-none" placeholder={t("notesPlaceholder")} />
-            </Field>
-          </TabsContent>
+            </TabsList>
+            <div className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0" style={{ left: indicator.left, width: indicator.width }} />
+          </div>
 
-          {/* ── Data (read-only) ── */}
-          <TabsContent value="tab2" className="space-y-1 max-w-2xl mt-6 px-4">
-            <InfoRow label={t("strategyName")}><span className="font-medium">{strategyLabel(template.strategy)}</span></InfoRow>
-            <InfoRow label={t("strategyDescription")}>
-              <span className="text-[var(--muted-foreground)]">{strategyDescription(template.strategy)}</span>
-            </InfoRow>
-            <InfoRow label={t("coin")}>{marketCell(symbol)}</InfoRow>
-            <InfoRow label={t("tradingPair")}>{marketCell(pair)}</InfoRow>
-            <InfoRow label={t("timeframe")}>{marketCell(scope.interval ?? "—")}</InfoRow>
-            <div className="pt-3">
-              <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("parameters")}</p>
-              {params.length === 0 ? (
-                <p className="text-xs text-[var(--muted-foreground)] italic">{t("noParameters")}</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {params.map(({ label, value }) => (
-                    <Badge key={label} variant="secondary" className="text-xs font-normal">
-                      <span className="text-[var(--muted-foreground)] mr-1">{label}</span>
-                      <span className="font-mono">{value}</span>
-                    </Badge>
-                  ))}
+          {tickLimitedCoin && (
+            <div className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                {t("tickLimitedWarning", {
+                  symbol,
+                  pct: tickLimited?.tick_pct_limit ?? 0.1,
+                })}
+              </span>
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto">
+            {/* ── Details ── */}
+            <TabsContent value="tab1" className="space-y-4 max-w-2xl mt-6 px-4">
+              <Field label="ID">
+                <div className="relative">
+                  <Input value={template.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
+                  <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                    <CopyIcon size={16} className="text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => { navigator.clipboard.writeText(template.id); toast.success(t("copied")) }} />
+                  </AnimateIcon>
                 </div>
-              )}
-            </div>
-          </TabsContent>
+              </Field>
+              <Field label={t("name")}>
+                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Field label={t("description")}>
+                <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("descriptionPlaceholder")} />
+              </Field>
+              <Field label={t("notes")}>
+                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} className="resize-none" placeholder={t("notesPlaceholder")} />
+              </Field>
+            </TabsContent>
 
-          {/* ── AI (external trade confirmation) ── */}
-          <TabsContent value="tab5" className="space-y-4 max-w-2xl mt-6 px-4">
-            <div className="rounded-md border p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold">{t("aiConfirmTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmDescription")}</p>
+            {/* ── Data (read-only) ── */}
+            <TabsContent value="tab2" className="space-y-1 max-w-2xl mt-6 px-4">
+              <InfoRow label={t("strategyName")}><span className="font-medium">{strategyLabel(template.strategy)}</span></InfoRow>
+              <InfoRow label={t("strategyDescription")}>
+                <span className="text-[var(--muted-foreground)]">{strategyDescription(template.strategy)}</span>
+              </InfoRow>
+              <InfoRow label={t("coin")}>{marketCell(symbol)}</InfoRow>
+              <InfoRow label={t("tradingPair")}>{marketCell(pair)}</InfoRow>
+              <InfoRow label={t("timeframe")}>{marketCell(scope.interval ?? "—")}</InfoRow>
+              <div className="pt-3">
+                <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("parameters")}</p>
+                {params.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)] italic">{t("noParameters")}</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {params.map(({ label, value }) => (
+                      <Badge key={label} variant="secondary" className="text-xs font-normal">
+                        <span className="text-[var(--muted-foreground)] mr-1">{label}</span>
+                        <span className="font-mono">{value}</span>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
-              <Switch
-                checked={template.ai_confirmation}
-                onCheckedChange={(v) => aiMutation.mutate(v)}
-                className={cn("shrink-0", aiMutation.isPending && "opacity-50 pointer-events-none")}
-              />
-            </div>
-            <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmHint")}</p>
-          </TabsContent>
+            </TabsContent>
 
-          {/* ── Trades (round-trip paper trades) ── */}
-          <TabsContent value="tab4" className="mt-4 px-4">
-            <TradesTable templateId={template.id} coinById={coinById} initialRunId={initialRunId} isRunning={isRunning} />
-          </TabsContent>
-
-          {/* ── Analyze (when does this strategy actually work?) ── */}
-          <TabsContent value="tab6" className="mt-2 px-4">
-            <AnalysisTab key={template.id} templateId={template.id} />
-          </TabsContent>
-
-          {/* ── Actions ── */}
-          <TabsContent value="tab3" className="space-y-4 max-w-2xl mt-6 px-4">
-            <div className="rounded-md border p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold">{t("runTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("runDescription")}</p>
-              </div>
-              <Button variant="default" size="sm" className="shrink-0 cursor-pointer" onClick={() => onStartStop(template, "start")}>
-                <Play className="h-3.5 w-3.5 mr-1.5" />{t("startNew")}
-              </Button>
-            </div>
-
-            {/* Back to the workbench this strategy came from, pre-loaded with
-                its own market and knobs — the way to re-examine or re-tune it.
-                Hidden for a strategy whose slug has no workbench to open. */}
-            {analyticsHref && (
+            {/* ── AI (external trade confirmation) ── */}
+            <TabsContent value="tab5" className="space-y-4 max-w-2xl mt-6 px-4">
               <div className="rounded-md border p-4 flex items-center justify-between gap-4">
                 <div className="space-y-0.5">
-                  <p className="text-sm font-semibold">{t("openAnalyticsTitle")}</p>
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    {template.is_abstract ? t("openAnalyticsAbstract") : t("openAnalyticsDescription")}
-                  </p>
+                  <p className="text-sm font-semibold">{t("aiConfirmTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmDescription")}</p>
                 </div>
-                <Button
-                  variant="outline" size="sm" className="shrink-0 cursor-pointer"
-                  onClick={() => router.push(analyticsHref)}
-                >
-                  <LineChart className="h-3.5 w-3.5 mr-1.5" />{t("openAnalytics")}
+                <Switch
+                  checked={template.ai_confirmation}
+                  onCheckedChange={(v) => aiMutation.mutate(v)}
+                  className={cn("shrink-0", aiMutation.isPending && "opacity-50 pointer-events-none")}
+                />
+              </div>
+              <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmHint")}</p>
+            </TabsContent>
+
+            {/* ── Trades (round-trip paper trades) ── */}
+            <TabsContent value="tab4" className="mt-4 px-4">
+              <TradesTable templateId={template.id} coinById={coinById} initialRunId={initialRunId} isRunning={isRunning} />
+            </TabsContent>
+
+            {/* ── Analyze (when does this strategy actually work?) ── */}
+            <TabsContent value="tab6" className="mt-2 px-4">
+              <AnalysisTab key={template.id} templateId={template.id} />
+            </TabsContent>
+
+            {/* ── Actions ── */}
+            <TabsContent value="tab3" className="space-y-4 max-w-2xl mt-6 px-4">
+              <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">{t("runTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("runDescription")}</p>
+                </div>
+                <Button variant="default" size="sm" className="shrink-0 cursor-pointer" onClick={() => onStartStop(template, "start")}>
+                  <Play className="h-3.5 w-3.5 mr-1.5" />{t("startNew")}
                 </Button>
               </div>
-            )}
 
-            <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold text-destructive">{t("deleteTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("deleteDescription")}</p>
+              {/* Back to the workbench this strategy came from, pre-loaded with
+                  its own market and knobs — the way to re-examine or re-tune it.
+                  Hidden for a strategy whose slug has no workbench to open. */}
+              {analyticsHref && (
+                <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-semibold">{t("openAnalyticsTitle")}</p>
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {template.is_abstract ? t("openAnalyticsAbstract") : t("openAnalyticsDescription")}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline" size="sm" className="shrink-0 cursor-pointer"
+                    onClick={() => router.push(analyticsHref)}
+                  >
+                    <LineChart className="h-3.5 w-3.5 mr-1.5" />{t("openAnalytics")}
+                  </Button>
+                </div>
+              )}
+
+              <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-destructive">{t("deleteTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("deleteDescription")}</p>
+                </div>
+                <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={() => onDelete(template)}>
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />{t("deleteTemplate")}
+                </Button>
               </div>
-              <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={() => onDelete(template)}>
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />{t("deleteTemplate")}
-              </Button>
-            </div>
-          </TabsContent>
-        </div>
-      </Tabs>
+            </TabsContent>
+          </div>
+        </Tabs>
 
-      {/* Shared save bar — pinned to the bottom of the screen while editing. */}
-      {dirty && (
-        <div className="sticky bottom-0 z-10 shrink-0 border-t bg-background flex items-center justify-end gap-2 px-4 py-2.5">
-          <Button variant="secondary" size="sm" className="cursor-pointer" onClick={handleCancel} disabled={saveMutation.isPending}>
-            {t("cancel")}
-          </Button>
-          <Button size="sm" className="cursor-pointer" disabled={!name.trim() || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
-            <Save className="h-3.5 w-3.5 mr-1.5" />{saveMutation.isPending ? t("saving") : t("saveChanges")}
-          </Button>
-        </div>
-      )}
-    </div>
+        {/* Shared save bar — pinned to the bottom of the screen while editing. */}
+        {dirty && (
+          <div className="sticky bottom-0 z-10 shrink-0 border-t bg-background flex items-center justify-end gap-2 px-4 py-2.5">
+            <Button variant="secondary" size="sm" className="cursor-pointer" onClick={handleCancel} disabled={saveMutation.isPending}>
+              {t("cancel")}
+            </Button>
+            <Button size="sm" className="cursor-pointer" disabled={!name.trim() || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+              <Save className="h-3.5 w-3.5 mr-1.5" />{saveMutation.isPending ? t("saving") : t("saveChanges")}
+            </Button>
+          </div>
+        )}
+      </div>
+    </DetailPaneMaximizedProvider>
   )
 }
 

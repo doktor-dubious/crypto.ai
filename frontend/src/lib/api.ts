@@ -4446,6 +4446,18 @@ export interface PaperTradePnl {
   h12: number | null; h24: number | null; week: number | null; month: number | null
 }
 
+export interface TickLimitedCoin {
+  id: string
+  symbol: string
+}
+
+// Coins failing the tick guard: one price tick exceeds tick_pct_limit% of the
+// price, so close-fill paper P/L there is quantization noise (spread ≥ 1 tick).
+export interface TickLimitedCoins {
+  coins: TickLimitedCoin[]
+  tick_pct_limit: number
+}
+
 export interface PaperTradeRun {
   id: string
   template_id: string
@@ -4544,6 +4556,14 @@ export interface PaperTradeAnalysis {
   first_entry: string | null
   last_entry: string | null
   coins: string[]
+  // Closed trades dropped before bucketing: their run's coin fails the tick
+  // guard, so their returns are price-grid quantization, not performance.
+  n_tick_excluded: number
+  tick_excluded_symbols: string[]
+  // True when EVERY pooled run is tick-limited: nothing was dropped (that
+  // would leave no analysis at all) but every figure is quantization noise —
+  // warn, don't hide. tick_excluded_symbols then names the coins.
+  tick_limited: boolean
   overall: AnalysisBucket
   by_hour: AnalysisBucket[]
   by_hour_block: AnalysisBucket[]
@@ -4592,6 +4612,10 @@ export interface TradeAnalysis {
 export const paperTradeApi = {
   listRuns: (active = false) =>
     apiFetch<PaperTradeRun[]>(`/paper-trade/runs${active ? "?active=true" : ""}`),
+  // Coins (among those with runs or template scopes) whose price grid is too
+  // coarse to trade: one tick > tick_pct_limit% of price, so paper P/L on them
+  // is quantization noise. One source of truth for filtering and warnings.
+  tickLimited: () => apiFetch<TickLimitedCoins>(`/paper-trade/tick-limited`),
   analyze: (templateId: string, scope: "template" | "run" = "template", tzOffsetMinutes = 0) =>
     apiFetch<PaperTradeAnalysis>(
       `/paper-trade/analysis?template_id=${encodeURIComponent(templateId)}&scope=${scope}&tz_offset_minutes=${tzOffsetMinutes}`,
@@ -4722,6 +4746,11 @@ export interface SweepPairStat {
 
 export interface SweepLeaderboard {
   n_runs: number
+  // Runs on tick-limited coins (price step > tick_pct_limit% of price) are
+  // dropped from every stat — their P/L is quantization noise, not edge.
+  n_tick_excluded: number
+  tick_excluded_symbols: string[]
+  tick_pct_limit: number
   templates: SweepTemplateStat[]
   pairs: SweepPairStat[]
   top_runs: SweepRunStat[]

@@ -33,22 +33,15 @@ from crypto_ai.services.swing_analysis import (
     COMPONENT_KEYS,
     FLAG_KEYS,
     _max_drawdown,
+    # One definition of t for the whole app: the analyze endpoint and the grid
+    # search must agree, and the degenerate-sample guard has to hold in both.
+    _t_stat,
     apply_trend_gate,
     htf_lookback_bars,
     htf_min_bars,
 )
 
 ALL_SWING_SIGNALS = set(COMPONENT_KEYS) | set(FLAG_KEYS)
-
-
-def _t_stat(rets: list[float]) -> float:
-    n = len(rets)
-    if n < 2:
-        return 0.0
-    mu = sum(rets) / n
-    var = sum((x - mu) ** 2 for x in rets) / (n - 1)
-    sd = math.sqrt(var)
-    return mu / (sd / math.sqrt(n)) if sd > 0 else 0.0
 
 
 def _segment_stats(trades: list[dict], strat_ret: np.ndarray, lo: int, hi: int) -> dict:

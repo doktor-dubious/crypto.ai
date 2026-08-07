@@ -73,6 +73,17 @@ class PaperTradeAnalysis(BaseModel):
     first_entry: datetime | None = None
     last_entry: datetime | None = None
     coins: list[str] = []  # ticker symbols the pooled runs traded
+    # Closed trades dropped before bucketing because their run's coin fails the
+    # tick guard (one price tick > ~0.1% of price): such returns are grid
+    # quantization, and pooling them would let one coin mint phantom edges.
+    n_tick_excluded: int = 0
+    tick_excluded_symbols: list[str] = []
+    # True when EVERY pooled run is on a tick-limited coin. Nothing is dropped
+    # then — that would leave no analysis at all — but every figure is grid
+    # quantization, so the UI must warn rather than hide.
+    # ``tick_excluded_symbols`` names the affected coins even though
+    # ``n_tick_excluded`` stays 0.
+    tick_limited: bool = False
 
     overall: BucketStat
     by_hour: list[BucketStat] = []  # 24 entries, hour of entry

@@ -17,6 +17,7 @@ from crypto_ai.schemas.paper_trade import (
     PaperTradeAnalysisResponse,
     PaperTradeResponse,
     PaperTradeRunResponse,
+    TickLimitedCoins,
     TradeDateRange,
 )
 from crypto_ai.schemas.paper_trade_analysis import PaperTradeAnalysis
@@ -30,6 +31,14 @@ async def list_runs(
     active: Annotated[bool, Query(description="Only running runs")] = False,
 ) -> list[PaperTradeRunResponse]:
     return await service.list_runs(active_only=active)
+
+
+@router.get("/tick-limited", response_model=TickLimitedCoins)
+async def tick_limited(service: PaperTradeServiceDep) -> TickLimitedCoins:
+    """Coins (with runs or template scopes) failing the tick guard: one price
+    tick exceeds the configured share of the price, so paper P/L on them is
+    quantization noise. Drives run filtering and detail-pane warnings."""
+    return await service.tick_limited()
 
 
 @router.get("/trades", response_model=list[PaperTradeResponse])

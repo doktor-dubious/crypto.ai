@@ -91,6 +91,12 @@ class SweepPairStat(BaseModel):
 
 class SweepLeaderboard(BaseModel):
     n_runs: int
+    # Runs on tick-limited coins (observed price step > tick_pct_limit% of
+    # price) are dropped from every stat in this payload — their P/L is grid
+    # quantization noise, not edge. Reported here so the exclusion is visible.
+    n_tick_excluded: int = 0
+    tick_excluded_symbols: list[str] = []
+    tick_pct_limit: float = 0.1
     templates: list[SweepTemplateStat]
     # Ranked by delta_t: the gate's measured effect, not its average.
     pairs: list[SweepPairStat] = []

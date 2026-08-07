@@ -96,13 +96,27 @@ def _signed_streak(r: np.ndarray) -> np.ndarray:
 
 
 def _t_stat(rets: list[float]) -> float:
+    """Per-trade t: mean / (sd / √n) — how much of the average is not noise.
+
+    A sample with no dispersion has an undefined t, and it happens for real: a
+    tight percentage stop or target that every trade reaches exits every trade at
+    exactly the same return (a 0.25% stop with 4 bps of fees is −29 bps, every
+    time). In exact arithmetic sd would be 0 and the old ``sd > 0`` guard would
+    catch it, but the returns differ in the last bits of the float, leaving an sd
+    near 1e-16 and a t near 1e16 — which sorts straight to the top of every
+    ranking. The dispersion those combos lack is precisely the execution reality
+    a barrier fill cannot model, so there is nothing to be confident about:
+    report no measurable edge rather than infinite confidence.
+    """
     n = len(rets)
     if n < 2:
         return 0.0
     mu = sum(rets) / n
     var = sum((x - mu) ** 2 for x in rets) / (n - 1)
     sd = math.sqrt(var)
-    return mu / (sd / math.sqrt(n)) if sd > 0 else 0.0
+    if sd < 1e-12 or sd <= abs(mu) * 1e-9:
+        return 0.0
+    return mu / (sd / math.sqrt(n))
 
 
 def _max_drawdown(equity: np.ndarray) -> float:

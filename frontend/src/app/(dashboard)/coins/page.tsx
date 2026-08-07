@@ -174,7 +174,9 @@ export default function CoinsPage() {
   const [klinesDeleteDialogOpen, setKlinesDeleteDialogOpen] = useState(false)
   const [klinesDeleteUnderstood, setKlinesDeleteUnderstood] = useState(false)
   const [klinesDeleteConfirmText, setKlinesDeleteConfirmText] = useState("")
-  const KLINES_PER_PAGE = 10
+  // 10 rows normally, 15 with the detail pane maximized — the extra height is
+  // there, so spend it on rows.
+  const KLINES_PER_PAGE = detailMaximized ? 15 : 10
   type KlineSortField = "open_time" | "open" | "high" | "low" | "close" | "volume" | "number_of_trades"
 
   // ── Data fetching ─────────────────────────────────────────────────────────

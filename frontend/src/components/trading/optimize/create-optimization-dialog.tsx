@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery, useMutation } from "@tanstack/react-query"
 import { useTranslations } from "next-intl"
-import { AlertTriangle, Loader2, Play } from "lucide-react"
+import { AlertTriangle, CheckCheck, Loader2, Play } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,9 +32,16 @@ import {
 
 // Above this many combos the user is warned; above the second they must confirm
 // a second time. Both are about attention, not capacity — the projected RUNTIME
-// beside them is the number that actually matters.
-const WARN_AT = 100
-const DANGER_AT = 250
+// beside them is the number that actually matters, and a few thousand combos on
+// a slow timeframe cost less than a few hundred on 5m.
+const WARN_AT = 1000
+const DANGER_AT = 2500
+
+// The default budget. Anything larger than this is SAMPLED down to it, so it
+// caps the run rather than the grid — ticking every box is a legitimate thing to
+// do, and the sample still covers every axis.
+const DEFAULT_BUDGET = 2500
+const MAX_BUDGET = 99999
 
 const INTERVALS = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const
 const SIDES = ["long", "short", "both"] as const
@@ -74,12 +81,40 @@ function toggle<T>(set: T[], v: T): T[] {
   return set.includes(v) ? set.filter((x) => x !== v) : [...set, v]
 }
 
-function Group({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+/** One multi-select axis. ``all``/``value``/``onSet`` opt it into the little
+ *  All/None toggle — ticking eight boxes one at a time is the most common thing
+ *  anyone does in this dialog. Groups that leave them off (the coin MODE radios)
+ *  render exactly as before. */
+function Group<T>({
+  title, hint, children, all, value, onSet, allLabel, noneLabel,
+}: {
+  title: string
+  hint?: string
+  children: React.ReactNode
+  all?: readonly T[]
+  value?: T[]
+  onSet?: (next: T[]) => void
+  allLabel?: string
+  noneLabel?: string
+}) {
+  const selectable = all && value && onSet
+  const isAll = selectable && all.every((v) => value.includes(v))
   return (
     <div className="space-y-1.5">
-      <div>
-        <p className="text-xs font-semibold">{title}</p>
-        {hint && <p className="text-[10px] text-[var(--muted-foreground)]">{hint}</p>}
+      <div className="flex items-baseline gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold">{title}</p>
+          {hint && <p className="text-[10px] text-[var(--muted-foreground)]">{hint}</p>}
+        </div>
+        {selectable && all.length > 1 && (
+          <button
+            type="button"
+            onClick={() => onSet(isAll ? [] : [...all])}
+            className="ml-auto shrink-0 text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2"
+          >
+            {isAll ? noneLabel : allLabel}
+          </button>
+        )}
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5">{children}</div>
     </div>
@@ -135,6 +170,9 @@ export function CreateOptimizationDialog({
   const pv = (p.paramValues ?? {}) as Record<string, any>
 
   const [name, setName] = useState("")
+  // Once the name has been typed into, it stops tracking the coin selection —
+  // silently overwriting something you wrote is worse than a stale default.
+  const [nameEdited, setNameEdited] = useState(false)
   const [description, setDescription] = useState("")
   const [notes, setNotes] = useState("")
 
@@ -165,19 +203,48 @@ export function CreateOptimizationDialog({
   const [slTrail, setSlTrail] = useState<number[]>([])
   const [tpModes, setTpModes] = useState<string[]>([])
   const [tpPct, setTpPct] = useState<number[]>([])
-  const [maxCombos, setMaxCombos] = useState(500)
+  const [maxCombos, setMaxCombos] = useState(DEFAULT_BUDGET)
   const [confirmed, setConfirmed] = useState(false)
 
   const { data: coins = [] } = useQuery({ queryKey: ["coins"], queryFn: () => coinsApi.list({ limit: 1000 }), enabled: open })
   const { data: groups = [] } = useQuery({ queryKey: ["coin-groups"], queryFn: () => coinGroupsApi.list(), enabled: open })
   const { data: favGroup } = useQuery({ queryKey: ["coinGroups", "favorites"], queryFn: () => coinGroupsApi.favorites(), enabled: open })
   const favoriteIds = useMemo(() => new Set(favGroup?.member_coin_ids ?? []), [favGroup])
+  // Existing names, purely to number the new one.
+  const { data: existing = [] } = useQuery({
+    queryKey: ["strategyOptimizations", strategy],
+    queryFn: () => strategyOptimizationsApi.list(strategy),
+    enabled: open,
+  })
+
+  /** What this search is OVER, as a name: the coin, or the whole universe. */
+  const subject = useMemo(() => {
+    if (coinMode === "all") return t("subjectAll")
+    if (coinMode === "random") return t("subjectRandom", { n: coinCount })
+    if (coinMode === "group") return groups.find((g) => g.id === groupId)?.name ?? t("subjectGroup")
+    return coins.find((c) => c.id === coinId)?.symbol ?? t("subjectCoin")
+  }, [coinMode, coinCount, groupId, coinId, groups, coins, t])
+
+  // "BTC #3" — the next free number for this subject, so repeated searches on
+  // one coin read as a series rather than as a wall of identical dates.
+  const suggestedName = useMemo(() => {
+    const re = new RegExp(`^${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+#(\\d+)$`, "i")
+    const used = existing
+      .map((o) => re.exec(o.name.trim())?.[1])
+      .filter((m): m is string => !!m)
+      .map(Number)
+    return `${subject} #${used.length ? Math.max(...used) + 1 : 1}`
+  }, [subject, existing])
+
+  useEffect(() => {
+    if (open && !nameEdited) setName(suggestedName)
+  }, [open, nameEdited, suggestedName])
 
   // Seed everything from the page's current setup: an untouched dialog is one
   // combo — the strategy as it stands — not an empty grid.
   useEffect(() => {
     if (!open || !scope) return
-    setName(t("defaultName", { date: new Date().toISOString().slice(0, 10) }))
+    setNameEdited(false)
     setDescription(""); setNotes(""); setConfirmed(false)
     setCoinMode("single"); setCoinId(scope.coin_id); setGroupId(null); setCoinCount(10)
     setIntervals([scope.interval])
@@ -212,10 +279,33 @@ export function CreateOptimizationDialog({
     setSlModes([String(p.slMode ?? "none")])
     setTpModes([String(p.tpMode ?? "none")])
     setSlPct([]); setSlAtr([]); setSlTrail([]); setTpPct([])
-    setMaxCombos(500)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setMaxCombos(DEFAULT_BUDGET)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, strategy, scope?.coin_id, scope?.interval])
+
+  /** Tick everything, on every axis. The grid this produces is enormous — that
+   *  is the point: the budget below samples it, and a uniform sample of the
+   *  whole space is a better first pass than a hand-picked corner of it. Coins
+   *  are left alone; which markets to search is a separate decision from which
+   *  settings, and "all coins × all settings" should be asked for explicitly. */
+  const selectAllVariations = () => {
+    setIntervals([...INTERVALS])
+    setThresholds(axes.thresholdOptions.map((o) => o.value))
+    setSignalAxes(Object.fromEntries(axes.signal.map((a) => [a.key, a.options.map((o) => o.value)])))
+    if (axes.choice) {
+      const kinds = axes.choice.options.map((o) => o.value)
+      setChoices(kinds)
+      setChoiceParams(Object.fromEntries(
+        Object.entries(axes.choice.params ?? {}).map(([kind, ax]) => [kind, ax.options.map((o) => o.value)]),
+      ))
+    }
+    setHolds([...HOLDS])
+    setSides([...SIDES])
+    setVolGate(axes.supportsVolGate === false ? ["off"] : [...VOL_GATES])
+    setHtfGate([...HTF_GATES])
+    setSlModes([...SL_MODES]); setSlPct([...PCT_LADDER]); setSlAtr([...ATR_LADDER]); setSlTrail([...ATR_LADDER])
+    setTpModes([...TP_MODES]); setTpPct([...PCT_LADDER])
+  }
 
   const body = useMemo(() => ({
     name: name.trim() || "Optimization",
@@ -269,6 +359,11 @@ export function CreateOptimizationDialog({
       feeBps: p.feeBps ?? axes.defaultFeeBps ?? 4, volLevel: p.volLevel ?? 1,
       htfTf: p.htfTf ?? "4h", htfLevel: p.htfLevel ?? 0.5,
       slValue: p.slValue ?? 2, tpValue: p.tpValue ?? 3,
+      // Swings only: the page's current per-signal weights are what the
+      // unswept members hold at, and what the one-at-a-time sweep moves ONE
+      // member away from. Without this every variation silently reverted to
+      // equal weights.
+      ...(axes.choice?.key === "subset" ? { weightPct: p.weightPct ?? {} } : {}),
     },
     baseline: scope ? { coin_id: scope.coin_id, quote_asset: scope.quote_asset, interval: scope.interval } : undefined,
     baseline_params: params ?? undefined,
@@ -313,7 +408,12 @@ export function CreateOptimizationDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
+      <DialogContent
+        className="max-w-4xl max-h-[92vh] overflow-y-auto"
+        // A stray click on the backdrop must not discard a grid that took real
+        // thought to set up. Escape and Cancel still close it.
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t("newTitle")}</DialogTitle>
           <DialogDescription>{t("newDescription")}</DialogDescription>
@@ -323,7 +423,10 @@ export function CreateOptimizationDialog({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fName")}</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Input
+                value={name}
+                onChange={(e) => { setNameEdited(true); setName(e.target.value) }}
+              />
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fDescription")}</label>
@@ -333,6 +436,20 @@ export function CreateOptimizationDialog({
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fNotes")}</label>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="resize-none" placeholder={t("fNotesPlaceholder")} />
+          </div>
+
+          {/* ── Date range ── first, because it bounds everything below it:
+              which slice of history is being searched decides how many bars each
+              timeframe holds, and so what the whole grid costs. */}
+          <div className="grid grid-cols-2 gap-3 max-w-md">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fFrom")}</label>
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-9" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fTo")}</label>
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="h-9" />
+            </div>
           </div>
 
           {/* ── Coins ── */}
@@ -366,25 +483,31 @@ export function CreateOptimizationDialog({
             {coinMode === "all" && <p className="text-xs text-amber-600 dark:text-amber-400 self-center">{t("allCoinsHint")}</p>}
           </div>
 
-          {/* ── Timeframes + range ── */}
-          <Group title={t("gTimeframes")}>
+          {/* ── Everything that varies, from here down ── */}
+          <div className="flex items-center gap-2 border-t pt-3">
+            <p className="text-xs font-semibold">{t("gVariations")}</p>
+            <Button variant="outline" size="sm" className="h-7 text-xs ml-auto" onClick={selectAllVariations}>
+              <CheckCheck className="h-3.5 w-3.5 mr-1.5" />
+              {t("selectAllVariations")}
+            </Button>
+          </div>
+
+          <Group
+            title={t("gTimeframes")}
+            all={INTERVALS} value={intervals} onSet={setIntervals}
+            allLabel={t("selectAll")} noneLabel={t("selectNone")}
+          >
             {INTERVALS.map((iv) => (
               <Tick key={iv} checked={intervals.includes(iv)} onChange={() => setIntervals((s) => toggle(s, iv))} label={iv} />
             ))}
           </Group>
-          <div className="grid grid-cols-2 gap-3 max-w-md">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fFrom")}</label>
-              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-9" />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-[var(--muted-foreground)]">{t("fTo")}</label>
-              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="h-9" />
-            </div>
-          </div>
 
           {/* ── Signal knobs, per strategy ── */}
-          <Group title={axes.thresholdLabel} hint={axes.thresholdHint}>
+          <Group
+            title={axes.thresholdLabel} hint={axes.thresholdHint}
+            all={axes.thresholdOptions.map((o) => o.value)} value={thresholds} onSet={setThresholds}
+            allLabel={t("selectAll")} noneLabel={t("selectNone")}
+          >
             {axes.thresholdOptions.map((o) => (
               <Tick
                 key={o.value}
@@ -395,7 +518,11 @@ export function CreateOptimizationDialog({
             ))}
           </Group>
           {axes.choice && (
-            <Group title={axes.choice.label} hint={axes.choice.hint}>
+            <Group
+              title={axes.choice.label} hint={axes.choice.hint}
+              all={axes.choice.options.map((o) => o.value)} value={choices} onSet={setChoices}
+              allLabel={t("selectAll")} noneLabel={t("selectNone")}
+            >
               {axes.choice.options.map((o) => (
                 <Tick
                   key={o.value}
@@ -411,7 +538,13 @@ export function CreateOptimizationDialog({
             const ax = axes.choice!.params![kind]
             if (!ax) return null
             return (
-              <Group key={kind} title={`${kind.toUpperCase()} · ${ax.label}`} hint={ax.hint}>
+              <Group
+                key={kind} title={`${kind.toUpperCase()} · ${ax.label}`} hint={ax.hint}
+                all={ax.options.map((o) => o.value)}
+                value={choiceParams[kind] ?? []}
+                onSet={(next) => setChoiceParams((prev) => ({ ...prev, [kind]: next }))}
+                allLabel={t("selectAll")} noneLabel={t("selectNone")}
+              >
                 {ax.options.map((o) => (
                   <Tick
                     key={o.value}
@@ -426,7 +559,13 @@ export function CreateOptimizationDialog({
             )
           })}
           {axes.signal.map((a) => (
-            <Group key={a.key} title={a.label} hint={a.hint}>
+            <Group
+              key={a.key} title={a.label} hint={a.hint}
+              all={a.options.map((o) => o.value)}
+              value={signalAxes[a.key] ?? []}
+              onSet={(next) => setSignalAxes((prev) => ({ ...prev, [a.key]: next }))}
+              allLabel={t("selectAll")} noneLabel={t("selectNone")}
+            >
               {a.options.map((o) => (
                 <Tick
                   key={o.value}
@@ -439,43 +578,43 @@ export function CreateOptimizationDialog({
               ))}
             </Group>
           ))}
-          <Group title={t("gHold")}>
+          <Group title={t("gHold")} all={HOLDS} value={holds} onSet={setHolds} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {HOLDS.map((v) => <Tick key={v} checked={holds.includes(v)} onChange={() => setHolds((s) => toggle(s, v))} label={String(v)} />)}
           </Group>
-          <Group title={t("gSide")}>
+          <Group title={t("gSide")} all={SIDES} value={sides} onSet={setSides} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {SIDES.map((v) => <Tick key={v} checked={sides.includes(v)} onChange={() => setSides((s) => toggle(s, v))} label={t(`side_${v}`)} />)}
           </Group>
-          {axes.supportsVolGate !== false && <Group title={t("gVolGate")}>
+          {axes.supportsVolGate !== false && <Group title={t("gVolGate")} all={VOL_GATES} value={volGate} onSet={setVolGate} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {VOL_GATES.map((v) => <Tick key={v} checked={volGate.includes(v)} onChange={() => setVolGate((s) => toggle(s, v))} label={t(`volGate_${v}`)} />)}
           </Group>}
-          <Group title={t("gHtf")}>
+          <Group title={t("gHtf")} all={HTF_GATES} value={htfGate} onSet={setHtfGate} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {HTF_GATES.map((v) => <Tick key={v} checked={htfGate.includes(v)} onChange={() => setHtfGate((s) => toggle(s, v))} label={t(`htfGate_${v}`)} />)}
           </Group>
 
           {/* ── Exits ── */}
-          <Group title={t("gStop")} hint={t("gStopHint")}>
+          <Group title={t("gStop")} hint={t("gStopHint")} all={SL_MODES} value={slModes} onSet={setSlModes} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {SL_MODES.map((v) => <Tick key={v} checked={slModes.includes(v)} onChange={() => setSlModes((s) => toggle(s, v))} label={t(`sl_${v}`)} />)}
           </Group>
           {slModes.includes("pct") && (
-            <Group title={t("gStopPct")}>
+            <Group title={t("gStopPct")} all={PCT_LADDER} value={slPct} onSet={setSlPct} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
               {PCT_LADDER.map((v) => <Tick key={v} checked={slPct.includes(v)} onChange={() => setSlPct((s) => toggle(s, v))} label={`${v}%`} />)}
             </Group>
           )}
           {slModes.includes("atr") && (
-            <Group title={t("gStopAtr")}>
+            <Group title={t("gStopAtr")} all={ATR_LADDER} value={slAtr} onSet={setSlAtr} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
               {ATR_LADDER.map((v) => <Tick key={v} checked={slAtr.includes(v)} onChange={() => setSlAtr((s) => toggle(s, v))} label={`${v}×`} />)}
             </Group>
           )}
           {slModes.includes("trail_atr") && (
-            <Group title={t("gStopTrail")}>
+            <Group title={t("gStopTrail")} all={ATR_LADDER} value={slTrail} onSet={setSlTrail} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
               {ATR_LADDER.map((v) => <Tick key={v} checked={slTrail.includes(v)} onChange={() => setSlTrail((s) => toggle(s, v))} label={`${v}×`} />)}
             </Group>
           )}
-          <Group title={t("gTarget")}>
+          <Group title={t("gTarget")} all={TP_MODES} value={tpModes} onSet={setTpModes} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
             {TP_MODES.map((v) => <Tick key={v} checked={tpModes.includes(v)} onChange={() => setTpModes((s) => toggle(s, v))} label={t(`tp_${v}`)} />)}
           </Group>
           {tpModes.includes("pct") && (
-            <Group title={t("gTargetPct")}>
+            <Group title={t("gTargetPct")} all={PCT_LADDER} value={tpPct} onSet={setTpPct} allLabel={t("selectAll")} noneLabel={t("selectNone")}>
               {PCT_LADDER.map((v) => <Tick key={v} checked={tpPct.includes(v)} onChange={() => setTpPct((s) => toggle(s, v))} label={`${v}%`} />)}
             </Group>
           )}
@@ -485,7 +624,7 @@ export function CreateOptimizationDialog({
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-[var(--muted-foreground)]">{t("fBudget")}</span>
-                <Input type="number" min={1} max={20000} value={maxCombos} onChange={(e) => setMaxCombos(Math.max(1, Math.min(20000, e.target.valueAsNumber || 1)))} className="h-8 w-28" />
+                <Input type="number" min={1} max={MAX_BUDGET} value={maxCombos} onChange={(e) => setMaxCombos(Math.max(1, Math.min(MAX_BUDGET, e.target.valueAsNumber || 1)))} className="h-8 w-28" />
               </div>
               <div className="text-xs tabular-nums flex items-center gap-2">
                 {estimating && <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--muted-foreground)]" />}

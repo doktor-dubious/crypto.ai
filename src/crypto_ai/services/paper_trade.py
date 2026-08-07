@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from crypto_ai.config import get_settings
 from crypto_ai.database.models.coin import Coin
 from crypto_ai.database.models.kline import Kline
 from crypto_ai.database.models.live_trade import LiveTrade
@@ -27,12 +28,15 @@ from crypto_ai.schemas.paper_trade import (
     PaperTradePnl,
     PaperTradeResponse,
     PaperTradeRunResponse,
+    TickLimitedCoin,
+    TickLimitedCoins,
     TradeDateRange,
     TradeSignalInfo,
 )
 from crypto_ai.services.kline_simulation_record import _interval_minutes
 from crypto_ai.services.paper_trade_engine import _parse_knobs, _parse_scope_dict
 from crypto_ai.services.scalp_analysis import DEFAULTS as SCALP_DEFAULTS
+from crypto_ai.services.tick_guard import coin_symbols, tick_limited_coins
 
 # Trailing windows for the P/L buckets (response field name → duration).
 _PNL_WINDOWS: dict[str, timedelta] = {
@@ -176,6 +180,40 @@ class PaperTradeService:
         if run is None:
             return None
         return await self.stop_run(run.id)
+
+    async def tick_limited(self) -> TickLimitedCoins:
+        """Tick-guard verdict for every coin the paper pages can show.
+
+        Evaluates the coins referenced by paper-trade runs and by template
+        scopes (a template that never ran still renders a detail pane), not the
+        whole coin table — the guard query reads a week of 5m bars per coin, so
+        the candidate set is kept to what the pages can actually display.
+        """
+        run_coins = (
+            await self.session.execute(
+                select(PaperTradeRun.scope["coin_id"].as_string().distinct()).where(
+                    PaperTradeRun.active == True  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        template_coins = (
+            await self.session.execute(
+                select(StrategyTemplate.scope["coin_id"].as_string().distinct()).where(
+                    StrategyTemplate.active == True  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        limited = await tick_limited_coins(
+            self.session, {*run_coins, *template_coins}
+        )
+        symbols = await coin_symbols(self.session, limited)
+        return TickLimitedCoins(
+            coins=[
+                TickLimitedCoin(id=c, symbol=symbols.get(c, "?"))
+                for c in sorted(limited, key=lambda c: symbols.get(c, "?"))
+            ],
+            tick_pct_limit=get_settings().sweep_max_tick_pct,
+        )
 
     async def list_runs(self, active_only: bool = False) -> list[PaperTradeRunResponse]:
         """Runs joined with template identity, newest first (with P/L)."""

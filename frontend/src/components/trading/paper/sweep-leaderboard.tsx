@@ -533,6 +533,17 @@ export function SweepLeaderboard({ onOpenTemplate }: { onOpenTemplate?: (templat
         <p className="text-sm text-[var(--muted-foreground)]">{t("sweepEmpty")}</p>
       )}
 
+      {/* ── Tick-guard notice: runs hidden from every stat below ── */}
+      {board && board.n_tick_excluded > 0 && (
+        <p className="text-xs text-[var(--muted-foreground)]">
+          {t("sweepTickExcluded", {
+            count: board.n_tick_excluded,
+            pct: board.tick_pct_limit,
+            symbols: board.tick_excluded_symbols.join(", "),
+          })}
+        </p>
+      )}
+
       {/* ── A/B pairs: the gate's measured effect ── */}
       {board && board.pairs.length > 0 && (
         <PairsTable pairs={board.pairs} t={t} onOpenTemplate={onOpenTemplate} />

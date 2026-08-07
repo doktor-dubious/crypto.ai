@@ -229,8 +229,12 @@ export function TradeAnalysisDialog({
     return m
   }, [chartData])
 
+  // Significant digits, not fraction digits: sub-micro prices (BTTC trades at
+  // 0.00000027) round to a flat "0" under any fixed fraction cap.
   const priceFmt = (v: number) =>
-    v.toLocaleString(undefined, { maximumFractionDigits: v < 1 ? 6 : 2 })
+    v.toLocaleString(undefined, v !== 0 && Math.abs(v) < 1
+      ? { maximumSignificantDigits: 8 }
+      : { maximumFractionDigits: 2 })
 
   // ── Explanation texts (composed from the signal's structured data) ─────────
   const sideWord = (s: string) => (s === "long" ? t("analysisSideLong") : t("analysisSideShort"))

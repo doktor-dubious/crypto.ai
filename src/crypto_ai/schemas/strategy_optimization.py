@@ -72,7 +72,11 @@ class OptimizationCreate(BaseModel):
     baseline_params: dict[str, Any] | None = None
 
     seed: int = 42
-    max_combos: int = Field(default=500, ge=1, le=20000)
+    # The budget, not a limit on the grid — anything larger is SAMPLED down to
+    # this many combos. The ceiling is a guard against a typo turning into a
+    # multi-day run, not a capacity limit: above 250k the expansion stops
+    # materialising the cartesian, so the grid itself can be arbitrarily large.
+    max_combos: int = Field(default=2500, ge=1, le=99999)
 
 
 class OptimizationUpdate(BaseModel):

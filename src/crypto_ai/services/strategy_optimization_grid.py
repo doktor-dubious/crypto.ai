@@ -19,6 +19,7 @@ Two rules do real work here:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable, Sequence
 from itertools import product
 from typing import Any
 
@@ -57,6 +58,75 @@ SWING_SUBSETS: dict[str, tuple[str, ...]] = {
     # Directional exhaustion: who is pushing, how stretched, how tired.
     "direction": ("streak", "wick", "taker", "stretch", "sweep", "decel"),
 }
+
+# Two composite modes that answer "is each member earning its place?" without
+# searching the full 11-dimensional weight space — which is 3^11 combos at even a
+# coarse three levels, costs 3.2x per combo (varying weights defeats the score
+# cache, so every combo recomputes the composite instead of only the trade loop),
+# and fits eleven continuous knobs to one half of the data.
+#
+#   leave_one_out  disable exactly one member, eleven ways. Anything whose
+#                  REMOVAL improves the result is dead weight.
+#   weight_oat     scale one member's contribution, the other ten unchanged.
+#
+# Both are read against all eleven members, exactly as the named subsets are —
+# they describe the composite outright rather than adjusting whatever the page
+# currently has switched off.
+SWING_MODES = ("leave_one_out", "weight_oat")
+
+# Weight levels for the one-at-a-time sweep, as a percentage of the equal-weight
+# baseline. 100 is absent deliberately: it IS the baseline, so including it would
+# produce eleven bit-identical copies of it. 0 is present and means off — but see
+# _swing_variants for why that has to become a disable rather than a 0 weight.
+SWING_OAT_LEVELS: tuple[float, ...] = (0.0, 50.0, 200.0, 300.0)
+
+# One composite configuration: (disabled members, weight overrides).
+SwingVariant = tuple[tuple[str, ...], tuple[tuple[str, float], ...]]
+
+
+def _swing_variants(spec: dict[str, Any], fixed: dict) -> list[SwingVariant]:
+    """Every composite configuration to try, fully resolved and deduplicated.
+
+    Resolved here rather than in ``_params_from`` so that duplicates can be seen
+    and dropped. Two of them are guaranteed otherwise:
+
+      * A 0% weight and a leave-one-out describe the SAME composite. 0% is not
+        merely a small weight — a 0-weight member still counts toward the
+        average's divisor and still has to have data at the bar, so "off" is a
+        disable, not a weight. Ticking both modes would run eleven identical
+        backtests.
+      * The 100% level would repeat the baseline eleven times, which is why it
+        isn't on the ladder.
+    """
+    base_w = {k: float(v) for k, v in (fixed.get("weightPct") or {}).items()}
+    out: list[SwingVariant] = []
+    seen: set[SwingVariant] = set()
+
+    def add(disabled: set[str], weights: dict[str, float]) -> None:
+        key: SwingVariant = (
+            tuple(sorted(disabled)),
+            tuple(sorted(weights.items())),
+        )
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+
+    for name in spec.get("signalSubsets") or ["all"]:
+        if name in SWING_SUBSETS:
+            add(set(_SWING_ALL) - set(SWING_SUBSETS[name]), dict(base_w))
+        elif name == "leave_one_out":
+            for sig in _SWING_ALL:
+                add({sig}, dict(base_w))
+        elif name == "weight_oat":
+            for sig in _SWING_ALL:
+                for pct in SWING_OAT_LEVELS:
+                    if pct == 0.0:
+                        add({sig}, dict(base_w))
+                    else:
+                        add(set(), {**base_w, sig: pct})
+    if not out:
+        add(set(), dict(base_w))
+    return out
 
 # Modes that take no value — one combo each, whatever ladder is ticked.
 _VALUELESS_SL = ("none", "structure")
@@ -101,6 +171,17 @@ def _indicator_variants(spec: dict[str, Any], fixed: dict) -> list[tuple[str, di
     return out or [("ema", {})]
 
 
+def _held(spec: dict[str, Any], key: str, default: Any) -> Any:
+    """The strategy's CURRENT value for a knob — what an unvaried axis holds at."""
+    return (spec.get("baseline_params") or {}).get(key, default)
+
+
+def _held_pv(spec: dict[str, Any], key: str, default: Any) -> Any:
+    """Same, for knobs that live inside the explorer's ``paramValues`` blob."""
+    pv = (spec.get("baseline_params") or {}).get("paramValues") or {}
+    return pv.get(key, default)
+
+
 def param_axes(spec: dict[str, Any]) -> dict[str, list]:
     """The per-combo knob axes (everything except coin and timeframe).
 
@@ -109,32 +190,42 @@ def param_axes(spec: dict[str, Any]) -> dict[str, list]:
     be told apart when a combo is turned back into a parameter blob. Streak's own
     knobs predate that mechanism and keep their original spec keys, so the
     optimizations already recorded still expand identically.
+
+    **No axis is ever empty.** An axis with nothing ticked means "hold this knob
+    at the strategy's current setting", not "try none of its values" — the second
+    reading makes the whole cartesian collapse to nothing, because a product with
+    one empty factor is empty. That used to happen silently: the counter reports
+    ``max(1, len(axis))`` per axis and so still promised thousands of combos while
+    the expansion produced zero. Defaulting here is what keeps the count and the
+    expansion two views of the same thing.
     """
     fixed = spec.get("fixed", {})
     axes: dict[str, list] = {
-        "threshold": [float(v) for v in spec.get("threshold", [3])],
-        "holdBars": [int(v) for v in spec.get("holdBars", [6])],
-        "side": list(spec.get("sides", ["both"])),
-        "volGate": list(spec.get("volGate", ["off"])),
-        "htfGate": list(spec.get("htfGate", ["off"])),
+        "threshold": [float(v) for v in spec.get("threshold") or [_held(spec, "threshold", 3)]],
+        "holdBars": [int(v) for v in spec.get("holdBars") or [_held(spec, "holdBars", 6)]],
+        "side": list(spec.get("sides") or [_held(spec, "side", "both")]),
+        "volGate": list(spec.get("volGate") or [_held(spec, "volGate", "off")]),
+        "htfGate": list(spec.get("htfGate") or [_held(spec, "htfGate", "off")]),
         "sl": _exit_variants(
-            list(spec.get("slModes", ["none"])), spec.get("slValues", {}),
+            list(spec.get("slModes") or [_held(spec, "slMode", "none")]), spec.get("slValues", {}),
             _VALUELESS_SL, float(fixed.get("slValue", 2.0)),
         ),
         "tp": _exit_variants(
-            list(spec.get("tpModes", ["none"])), spec.get("tpValues", {}),
+            list(spec.get("tpModes") or [_held(spec, "tpMode", "none")]), spec.get("tpValues", {}),
             _VALUELESS_TP, float(fixed.get("tpValue", 3.0)),
         ),
     }
     if _is_streak(spec):
-        axes["require_voldiv"] = [int(v) for v in spec.get("voldiv", [0])]
-        axes["btc_filter"] = [int(v) for v in spec.get("btcFilter", [0])]
+        axes["require_voldiv"] = [
+            int(v) for v in spec.get("voldiv") or [_held_pv(spec, "require_voldiv", 0)]
+        ]
+        axes["btc_filter"] = [
+            int(v) for v in spec.get("btcFilter") or [_held_pv(spec, "btc_filter", 0)]
+        ]
     if spec.get("strategy") == "indicator":
         axes["ind"] = _indicator_variants(spec, fixed)
     if spec.get("strategy") == "swings":
-        axes["subset"] = [
-            name for name in (spec.get("signalSubsets") or ["all"]) if name in SWING_SUBSETS
-        ] or ["all"]
+        axes["subset"] = _swing_variants(spec, fixed)
     for key, values in (spec.get("paramAxes") or {}).items():
         if values:
             axes[f"pv:{key}"] = [float(v) for v in values]
@@ -183,8 +274,9 @@ def _params_from(axes_pick: dict, spec: dict[str, Any]) -> dict:
 
     if spec.get("strategy") == "swings":
         # The swings explorer's own parameter shape — no vol gate, no indicator,
-        # no paramValues; the composite is described by what is switched OFF.
-        enabled = set(SWING_SUBSETS[axes_pick["subset"]])
+        # no paramValues; the composite is described by what is switched OFF and
+        # how the rest are weighted, both resolved by _swing_variants.
+        disabled, weights = axes_pick["subset"]
         return {
             "threshold": axes_pick["threshold"],
             "holdBars": axes_pick["holdBars"],
@@ -195,8 +287,8 @@ def _params_from(axes_pick: dict, spec: dict[str, Any]) -> dict:
             "htfGate": axes_pick["htfGate"],
             "htfTf": str(fixed.get("htfTf", "4h")),
             "htfLevel": float(fixed.get("htfLevel", 0.5)),
-            "disabledSignals": sorted(set(_SWING_ALL) - enabled),
-            "weightPct": dict(fixed.get("weightPct") or {}),
+            "disabledSignals": list(disabled),
+            "weightPct": dict(weights),
         }
     return {
         "threshold": axes_pick["threshold"],
@@ -219,6 +311,28 @@ def _params_from(axes_pick: dict, spec: dict[str, Any]) -> dict:
     }
 
 
+# Above this a NEW grid's sample is drawn with ``random.sample`` over the index
+# range — uniform, and the range is never materialised, so a cartesian of
+# billions costs the same as one of thousands. At or below it (and for every
+# grid planned before the "draw" stamp existed, whatever its size) the sample
+# is an index SHUFFLE instead, which reproduces the original
+# materialise-shuffle-truncate draw exactly — see ``expand``. The largest
+# cartesian on record is ~7k.
+_MATERIALISE_LIMIT = 250_000
+
+
+def _decode(index: int, radices: list[int]) -> list[int]:
+    """Mixed-radix digits of ``index``, last radix varying fastest.
+
+    This is the position ``itertools.product`` would have produced at that index,
+    which is what lets a combo be drawn without building the ones before it.
+    """
+    out = [0] * len(radices)
+    for i in range(len(radices) - 1, -1, -1):
+        index, out[i] = divmod(index, radices[i])
+    return out
+
+
 def expand(
     spec: dict[str, Any],
     coins: list[tuple[str, str]],
@@ -227,6 +341,7 @@ def expand(
     max_combos: int,
     seed: int,
     baseline_params: dict | None = None,
+    only_market: tuple[str, str, str] | None = None,
 ) -> tuple[list[dict], int, bool]:
     """Every backtest to run: ``[{coin_id, quote_asset, interval, params, is_baseline}]``.
 
@@ -234,38 +349,95 @@ def expand(
     cartesian size, and whether sampling kicked in. The BASELINE — the strategy's
     settings as they stand — is always included and never sampled away, so the
     search can always answer "did any of this beat what I already have".
+
+    ``only_market`` keeps just one (coin, quote, interval)'s combos. The result is
+    identical to expanding everything and filtering, but the discarded combos
+    never have their parameter blob built — which is the whole cost. Every market
+    child re-expands the grid to find its own share, so with a large budget that
+    filter is the difference between seconds and minutes per child.
     """
     axes = param_axes(spec)
     keys = list(axes)
-    combos: list[dict] = []
-    for (coin_id, quote), interval, values in product(
-        coins, intervals, product(*(axes[k] for k in keys))
-    ):
-        pick = dict(zip(keys, values))
-        combos.append({
+    per_combo = 1
+    for k in keys:
+        per_combo *= max(1, len(axes[k]))
+    cartesian = max(0, len(coins)) * max(0, len(intervals)) * per_combo
+    sampled = cartesian > max_combos
+
+    def build(coin_i: int, iv_i: int, digits: Sequence[int]) -> dict | None:
+        coin_id, quote = coins[coin_i]
+        interval = intervals[iv_i]
+        if only_market is not None and (coin_id, quote, interval) != only_market:
+            return None
+        pick = {k: axes[k][d] for k, d in zip(keys, digits)}
+        return {
             "coin_id": coin_id,
             "quote_asset": quote,
             "interval": interval,
             "params": _params_from(pick, spec),
             "is_baseline": False,
-        })
+        }
 
-    cartesian = len(combos)
-    sampled = cartesian > max_combos
-    if sampled:
-        random.Random(seed).shuffle(combos)
-        combos = combos[:max_combos]
+    combos: list[dict] = []
+    if not sampled:
+        # Full enumeration, streamed in product order — nothing to draw.
+        picked: Iterable[tuple[int, int, Sequence[int]]] = (
+            (ci, ii, digits)
+            for ci, ii, digits in product(
+                range(len(coins)), range(len(intervals)),
+                product(*(range(len(axes[k])) for k in keys)),
+            )
+        )
+    else:
+        # Sampling draws INDICES into the cartesian and decodes only the
+        # survivors — no combo tuple is ever built for a draw that lost, which
+        # is what keeps a market child's re-expansion cheap.
+        #
+        # The draw must stay REPRODUCIBLE across code changes: children re-run
+        # expand() to find their market's share (see tasks/strategy_optimization),
+        # so a parent planned under one draw whose children run under another
+        # would wait forever on combos nobody dispatched. The shuffle path
+        # reproduces the original materialise-shuffle-truncate draw exactly —
+        # Fisher-Yates depends only on the list length and the seed, so
+        # shuffling the index range keeps the same positions the old code kept,
+        # and decoding them yields the same combos in the same order.
+        # ``random.sample`` (uniform, never materialises the range) is used only
+        # for grids stamped ``draw`` >= 2 at plan time, i.e. grids that were
+        # PLANNED by code that already drew that way.
+        rng = random.Random(seed)
+        if cartesian <= _MATERIALISE_LIMIT or int(spec.get("draw") or 1) < 2:
+            idxs = list(range(cartesian))
+            rng.shuffle(idxs)
+            idxs = idxs[:max_combos]
+        else:
+            idxs = rng.sample(range(cartesian), max_combos)
+        radices = [len(coins), len(intervals)] + [len(axes[k]) for k in keys]
+        picked = (
+            (digits[0], digits[1], digits[2:])
+            for digits in (_decode(idx, radices) for idx in idxs)
+        )
+
+    for coin_i, iv_i, digits in picked:
+        combo = build(coin_i, iv_i, digits)
+        if combo is not None:
+            combos.append(combo)
 
     if baseline_params:
         base_coin = spec.get("baseline", {})
         if base_coin.get("coin_id") and base_coin.get("interval"):
-            combos.insert(0, {
-                "coin_id": base_coin["coin_id"],
-                "quote_asset": base_coin.get("quote_asset", "USDT"),
-                "interval": base_coin["interval"],
-                "params": baseline_params,
-                "is_baseline": True,
-            })
+            base_market = (
+                base_coin["coin_id"],
+                base_coin.get("quote_asset", "USDT"),
+                base_coin["interval"],
+            )
+            if only_market is None or base_market == only_market:
+                combos.insert(0, {
+                    "coin_id": base_market[0],
+                    "quote_asset": base_market[1],
+                    "interval": base_market[2],
+                    "params": baseline_params,
+                    "is_baseline": True,
+                })
     return combos, cartesian, sampled
 
 

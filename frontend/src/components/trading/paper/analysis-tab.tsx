@@ -122,6 +122,26 @@ export function AnalysisTab({ templateId }: { templateId: string }) {
         </Button>
       </div>
 
+      {/* Tick-guard notices. When only SOME pooled runs are tick-limited they
+          are dropped and the shrunken totals say so; when ALL of them are, the
+          backend keeps them (dropping would leave nothing to analyze at all)
+          and flags the analysis instead — warn, don't hide. */}
+      {data && data.tick_limited && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          {t("analyzeTickLimitedAll", {
+            symbols: data.tick_excluded_symbols.join(", "),
+          })}
+        </p>
+      )}
+      {data && !data.tick_limited && data.n_tick_excluded > 0 && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          {t("analyzeTickExcluded", {
+            count: data.n_tick_excluded,
+            symbols: data.tick_excluded_symbols.join(", "),
+          })}
+        </p>
+      )}
+
       {isError ? (
         <p className="py-8 text-center text-sm text-red-500">{t("analyzeError")}</p>
       ) : !data ? (

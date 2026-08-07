@@ -8,6 +8,7 @@
 // (coin groups / coins / strategies) collapses many runs into one aggregate card.
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { Square, ChevronDown, Radio } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
@@ -229,7 +230,7 @@ export function ActiveStrategies({
   onStopRun,
   onStopMany,
   onGoLive,
-  onOpenTemplate,
+  href,
   stopping,
   emptyLabel,
   labels,
@@ -242,7 +243,7 @@ export function ActiveStrategies({
   onStopRun: (run: PaperTradeRun) => void
   onStopMany: (runs: PaperTradeRun[], label: string) => void
   onGoLive?: (run: PaperTradeRun) => void
-  onOpenTemplate?: (run: PaperTradeRun) => void
+  href?: (run: PaperTradeRun) => string
   stopping: boolean
   emptyLabel: string
   labels: Labels
@@ -319,7 +320,7 @@ export function ActiveStrategies({
           onStopRun={onStopRun}
           onStopMany={onStopMany}
           onGoLive={onGoLive}
-          onOpenTemplate={onOpenTemplate}
+          href={href}
           stopping={stopping}
           labels={labels}
           onMinimize={() => minimize(item.key)}
@@ -355,7 +356,7 @@ function FullCard({
   onStopRun,
   onStopMany,
   onGoLive,
-  onOpenTemplate,
+  href,
   stopping,
   labels,
   onMinimize,
@@ -364,7 +365,7 @@ function FullCard({
   onStopRun: (run: PaperTradeRun) => void
   onStopMany: (runs: PaperTradeRun[], label: string) => void
   onGoLive?: (run: PaperTradeRun) => void
-  onOpenTemplate?: (run: PaperTradeRun) => void
+  href?: (run: PaperTradeRun) => string
   stopping: boolean
   labels: Labels
   onMinimize: () => void
@@ -380,15 +381,20 @@ function FullCard({
       {/* Header bar */}
       <div className="flex items-center justify-between gap-3 border-b bg-[var(--muted)]/30 px-4 py-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span
-            className={cn(
-              "font-semibold truncate",
-              onOpenTemplate && item.single && "cursor-pointer hover:underline underline-offset-2",
-            )}
-            onClick={() => onOpenTemplate && item.single && onOpenTemplate(item.single)}
-          >
-            {item.title}
-          </span>
+          {/* A real anchor, not a click handler: the strategy page is somewhere
+              you routinely want in a second tab while this one keeps polling.
+              next/link still navigates client-side on a plain click, but
+              middle-click, ctrl/cmd-click and "Open in new tab" now work. */}
+          {href && item.single ? (
+            <Link
+              href={href(item.single)}
+              className="font-semibold truncate hover:underline underline-offset-2"
+            >
+              {item.title}
+            </Link>
+          ) : (
+            <span className="font-semibold truncate">{item.title}</span>
+          )}
           <span className="text-sm text-[var(--muted-foreground)]">
             {item.aggregate ? `${item.runCount} ${labels.runsSuffix}` : item.symbol ?? "—"}
           </span>

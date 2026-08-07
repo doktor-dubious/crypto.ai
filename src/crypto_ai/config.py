@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     binance_trade_api_secret: str | None = None
     binance_trade_recv_window_ms: int = 5000
 
+    # Paper sweeps: skip coins whose observable price step (exchange tick) is
+    # larger than this percentage of the price. On such coins a single tick
+    # dwarfs any real edge — close-fill paper P/L is quantization noise, not
+    # signal (e.g. BTTC at 0.00000026/0.00000027: one tick ≈ 3.8%).
+    sweep_max_tick_pct: float = 0.1
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 

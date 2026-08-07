@@ -29,6 +29,9 @@ import {
   PaginationLink, PaginationNext, PaginationPrevious,
 } from "@/components/ui/pagination"
 import { cn } from "@/lib/utils"
+import {
+  DetailPaneMaximizedProvider, useDetailPageSize,
+} from "@/components/providers/detail-pane-provider"
 import { strategyLabel, strategyDescription } from "@/components/trading/strategy-meta"
 import { strategyTemplatesApi, liveTradeApi, type LiveTradeRun, type StrategyTemplate, type CoinResponse } from "@/lib/api"
 
@@ -132,135 +135,137 @@ export function TemplateDetailPane({
   const params = flattenParams(template.params ?? {})
 
   return (
-    <div className={cn(
-      "flex-1 flex flex-col min-h-0 overflow-hidden border-t",
-      maximized && "absolute inset-0 z-20 bg-background",
-    )}>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
-        <div className="relative w-full">
-          <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabData")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabAi")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabTrades")}</TabsTrigger>
-            <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
-            <div
-              className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => setMaximized((v) => !v)}
-              aria-label={maximized ? "Minimize" : "Maximize"}
-            >
-              {maximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
-            </div>
-          </TabsList>
-          <div className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0" style={{ left: indicator.left, width: indicator.width }} />
-        </div>
-
-        <div className="flex-1 overflow-y-auto">
-          {/* ── Details ── */}
-          <TabsContent value="tab1" className="space-y-4 max-w-2xl mt-6 px-4">
-            <Field label="ID">
-              <div className="relative">
-                <Input value={template.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
-                <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
-                  <CopyIcon size={16} className="text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => { navigator.clipboard.writeText(template.id); toast.success(t("copied")) }} />
-                </AnimateIcon>
+    <DetailPaneMaximizedProvider maximized={maximized}>
+      <div className={cn(
+        "flex-1 flex flex-col min-h-0 overflow-hidden border-t",
+        maximized && "absolute inset-0 z-20 bg-background",
+      )}>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden gap-0">
+          <div className="relative w-full">
+            <TabsList ref={tabsListRef} className="w-full bg-transparent border-b border-neutral-700 rounded-none p-0 h-auto flex">
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab1">{t("tabDetails")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab2">{t("tabData")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab5">{t("tabAi")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab4">{t("tabTrades")}</TabsTrigger>
+              <TabsTrigger className="bg-transparent! rounded-none border-b-2 border-r-0 border-l-0 border-t-0 border-transparent data-[state=active]:bg-transparent relative z-10 cursor-pointer" value="tab3">{t("tabActions")}</TabsTrigger>
+              <div
+                className="ml-auto flex items-center pr-2 pl-3 mb-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setMaximized((v) => !v)}
+                aria-label={maximized ? "Minimize" : "Maximize"}
+              >
+                {maximized ? <Minimize size={16} animateOnHover /> : <Maximize size={16} animateOnHover />}
               </div>
-            </Field>
-            <Field label={t("name")}>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label={t("description")}>
-              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("descriptionPlaceholder")} />
-            </Field>
-            <Field label={t("notes")}>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} className="resize-none" placeholder={t("notesPlaceholder")} />
-            </Field>
-          </TabsContent>
+            </TabsList>
+            <div className="absolute bottom-0 h-0.5 bg-white transition-all duration-300 ease-in-out z-0" style={{ left: indicator.left, width: indicator.width }} />
+          </div>
 
-          {/* ── Data (read-only) ── */}
-          <TabsContent value="tab2" className="space-y-1 max-w-2xl mt-6 px-4">
-            <InfoRow label={t("strategyName")}><span className="font-medium">{strategyLabel(template.strategy)}</span></InfoRow>
-            <InfoRow label={t("strategyDescription")}>
-              <span className="text-[var(--muted-foreground)]">{strategyDescription(template.strategy)}</span>
-            </InfoRow>
-            <InfoRow label={t("coin")}>{symbol}</InfoRow>
-            <InfoRow label={t("tradingPair")}>{pair}</InfoRow>
-            <InfoRow label={t("timeframe")}>{scope.interval ?? "—"}</InfoRow>
-            <div className="pt-3">
-              <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("parameters")}</p>
-              {params.length === 0 ? (
-                <p className="text-xs text-[var(--muted-foreground)] italic">{t("noParameters")}</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {params.map(({ label, value }) => (
-                    <Badge key={label} variant="secondary" className="text-xs font-normal">
-                      <span className="text-[var(--muted-foreground)] mr-1">{label}</span>
-                      <span className="font-mono">{value}</span>
-                    </Badge>
-                  ))}
+          <div className="flex-1 overflow-y-auto">
+            {/* ── Details ── */}
+            <TabsContent value="tab1" className="space-y-4 max-w-2xl mt-6 px-4">
+              <Field label="ID">
+                <div className="relative">
+                  <Input value={template.id} readOnly className="pr-9 opacity-50 cursor-default select-all font-mono text-xs" />
+                  <AnimateIcon animateOnHover className="absolute right-2.5 top-1/2 -translate-y-1/2 z-10 cursor-pointer">
+                    <CopyIcon size={16} className="text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => { navigator.clipboard.writeText(template.id); toast.success(t("copied")) }} />
+                  </AnimateIcon>
                 </div>
-              )}
-            </div>
-          </TabsContent>
+              </Field>
+              <Field label={t("name")}>
+                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Field label={t("description")}>
+                <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("descriptionPlaceholder")} />
+              </Field>
+              <Field label={t("notes")}>
+                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} className="resize-none" placeholder={t("notesPlaceholder")} />
+              </Field>
+            </TabsContent>
 
-          {/* ── AI (external trade confirmation) ── */}
-          <TabsContent value="tab5" className="space-y-4 max-w-2xl mt-6 px-4">
-            <div className="rounded-md border p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold">{t("aiConfirmTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmDescription")}</p>
+            {/* ── Data (read-only) ── */}
+            <TabsContent value="tab2" className="space-y-1 max-w-2xl mt-6 px-4">
+              <InfoRow label={t("strategyName")}><span className="font-medium">{strategyLabel(template.strategy)}</span></InfoRow>
+              <InfoRow label={t("strategyDescription")}>
+                <span className="text-[var(--muted-foreground)]">{strategyDescription(template.strategy)}</span>
+              </InfoRow>
+              <InfoRow label={t("coin")}>{symbol}</InfoRow>
+              <InfoRow label={t("tradingPair")}>{pair}</InfoRow>
+              <InfoRow label={t("timeframe")}>{scope.interval ?? "—"}</InfoRow>
+              <div className="pt-3">
+                <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1.5">{t("parameters")}</p>
+                {params.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)] italic">{t("noParameters")}</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {params.map(({ label, value }) => (
+                      <Badge key={label} variant="secondary" className="text-xs font-normal">
+                        <span className="text-[var(--muted-foreground)] mr-1">{label}</span>
+                        <span className="font-mono">{value}</span>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
-              <Switch
-                checked={template.ai_confirmation}
-                onCheckedChange={(v) => aiMutation.mutate(v)}
-                className={cn("shrink-0", aiMutation.isPending && "opacity-50 pointer-events-none")}
-              />
-            </div>
-            <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmHint")}</p>
-          </TabsContent>
+            </TabsContent>
 
-          {/* ── Trades (round-trip live trades) ── */}
-          <TabsContent value="tab4" className="mt-4 px-4">
-            <TradesTable templateId={template.id} coinById={coinById} isRunning={isRunning} />
-          </TabsContent>
-
-          {/* ── Actions ── */}
-          <TabsContent value="tab3" className="space-y-4 max-w-2xl mt-6 px-4">
-            <div className="rounded-md border p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold">{t("runTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("runDescription")}</p>
+            {/* ── AI (external trade confirmation) ── */}
+            <TabsContent value="tab5" className="space-y-4 max-w-2xl mt-6 px-4">
+              <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">{t("aiConfirmTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmDescription")}</p>
+                </div>
+                <Switch
+                  checked={template.ai_confirmation}
+                  onCheckedChange={(v) => aiMutation.mutate(v)}
+                  className={cn("shrink-0", aiMutation.isPending && "opacity-50 pointer-events-none")}
+                />
               </div>
-              <Button variant="default" size="sm" className="shrink-0 cursor-pointer" disabled={startDisabled} onClick={() => onStartStop(template, "start")}>
-                <Play className="h-3.5 w-3.5 mr-1.5" />{t("startNew")}
-              </Button>
-            </div>
-            <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold text-destructive">{t("deleteTitle")}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{t("deleteDescription")}</p>
-              </div>
-              <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={() => onDelete(template)}>
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />{t("deleteTemplate")}
-              </Button>
-            </div>
-          </TabsContent>
-        </div>
-      </Tabs>
+              <p className="text-xs text-[var(--muted-foreground)]">{t("aiConfirmHint")}</p>
+            </TabsContent>
 
-      {/* Shared save bar — pinned to the bottom of the screen while editing. */}
-      {dirty && (
-        <div className="sticky bottom-0 z-10 shrink-0 border-t bg-background flex items-center justify-end gap-2 px-4 py-2.5">
-          <Button variant="secondary" size="sm" className="cursor-pointer" onClick={handleCancel} disabled={saveMutation.isPending}>
-            {t("cancel")}
-          </Button>
-          <Button size="sm" className="cursor-pointer" disabled={!name.trim() || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
-            <Save className="h-3.5 w-3.5 mr-1.5" />{saveMutation.isPending ? t("saving") : t("saveChanges")}
-          </Button>
-        </div>
-      )}
-    </div>
+            {/* ── Trades (round-trip live trades) ── */}
+            <TabsContent value="tab4" className="mt-4 px-4">
+              <TradesTable templateId={template.id} coinById={coinById} isRunning={isRunning} />
+            </TabsContent>
+
+            {/* ── Actions ── */}
+            <TabsContent value="tab3" className="space-y-4 max-w-2xl mt-6 px-4">
+              <div className="rounded-md border p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">{t("runTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("runDescription")}</p>
+                </div>
+                <Button variant="default" size="sm" className="shrink-0 cursor-pointer" disabled={startDisabled} onClick={() => onStartStop(template, "start")}>
+                  <Play className="h-3.5 w-3.5 mr-1.5" />{t("startNew")}
+                </Button>
+              </div>
+              <div className="rounded-md border border-destructive/30 p-4 flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-destructive">{t("deleteTitle")}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{t("deleteDescription")}</p>
+                </div>
+                <Button variant="destructive" size="sm" className="shrink-0 cursor-pointer" onClick={() => onDelete(template)}>
+                  <Trash2 className="h-3.5 w-3.5 mr-1.5" />{t("deleteTemplate")}
+                </Button>
+              </div>
+            </TabsContent>
+          </div>
+        </Tabs>
+
+        {/* Shared save bar — pinned to the bottom of the screen while editing. */}
+        {dirty && (
+          <div className="sticky bottom-0 z-10 shrink-0 border-t bg-background flex items-center justify-end gap-2 px-4 py-2.5">
+            <Button variant="secondary" size="sm" className="cursor-pointer" onClick={handleCancel} disabled={saveMutation.isPending}>
+              {t("cancel")}
+            </Button>
+            <Button size="sm" className="cursor-pointer" disabled={!name.trim() || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+              <Save className="h-3.5 w-3.5 mr-1.5" />{saveMutation.isPending ? t("saving") : t("saveChanges")}
+            </Button>
+          </div>
+        )}
+      </div>
+    </DetailPaneMaximizedProvider>
   )
 }
 
@@ -275,7 +280,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 // The run's live trades — one row per round-trip (buy + sell), newest first.
 // Polls while the strategy is running so new trades stream in.
-const TRADES_PER_PAGE = 10
 // Server cap on one trades fetch. Reaching it means the list is a partial view,
 // which the unrealized-P/L reconciliation below must not sum over.
 const TRADES_LIMIT = 2000
@@ -295,6 +299,10 @@ function TradesTable({
   templateId, coinById, isRunning,
 }: { templateId: string; coinById: Map<string, CoinResponse>; isRunning: boolean }) {
   const t = useTranslations("liveTrade")
+
+  // 10 rows normally, 15 when the pane is maximized — the extra height is
+  // there, so spend it on rows.
+  const tradesPerPage = useDetailPageSize()
 
   // A template can hold more than one live run, each with its own coin, stake
   // and trade log. Read them all so the table can say WHICH run it is showing —
@@ -345,9 +353,9 @@ function TradesTable({
     if (pickedRunId == null && runs.length > 0) setPickedRunId(runs[0].run.id)
   }, [runs, pickedRunId])
   useEffect(() => { setPage(1) }, [runId])
-  const totalPages = Math.max(1, Math.ceil(trades.length / TRADES_PER_PAGE))
+  const totalPages = Math.max(1, Math.ceil(trades.length / tradesPerPage))
   const safePage = Math.min(page, totalPages)
-  const pageTrades = trades.slice((safePage - 1) * TRADES_PER_PAGE, safePage * TRADES_PER_PAGE)
+  const pageTrades = trades.slice((safePage - 1) * tradesPerPage, safePage * tradesPerPage)
 
   const px = (v: number | null) => (v == null ? "—" : v.toLocaleString(undefined, { maximumSignificantDigits: 8 }))
   const dt = (v: string | null) => (v == null ? "—" : new Date(v).toLocaleString())
@@ -528,8 +536,8 @@ function TradesTable({
     <div className="flex items-center justify-between px-3 py-1.5 border-t">
       <span className="text-xs text-[var(--muted-foreground)]">
         {t("showingTrades", {
-          from: (safePage - 1) * TRADES_PER_PAGE + 1,
-          to: Math.min(safePage * TRADES_PER_PAGE, trades.length),
+          from: (safePage - 1) * tradesPerPage + 1,
+          to: Math.min(safePage * tradesPerPage, trades.length),
           total: trades.length,
         })}
       </span>
